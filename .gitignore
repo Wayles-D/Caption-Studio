@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+**/node_modules/
+package-lock.json
+/backend/package-lock.json
+
+# Environment Variables & Secrets
+.env
+.env*.local
+backend/.env
+backend/.env*.local
+
+# System/IDE Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Caption Studio Runtime Temporary Audio/Video uploads & exports
+/backend/uploads/*
+!/backend/uploads/.gitkeep
+
+/backend/output/*
+!/backend/output/.gitkeep
+
+/backend/transcripts/*
+!/backend/transcripts/.gitkeep
+
+/backend/subtitles/*
+!/backend/subtitles/.gitkeep
+
+# Testing Intermediates
+/backend/test-source.mp4
+/backend/test-invalid.txt
+/backend/test-source.wav
+/backend/test-invalid.wav
