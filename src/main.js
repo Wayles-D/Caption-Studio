@@ -196,6 +196,8 @@ function startProcessingTimeline() {
   if (appState.isProcessing) return;
   appState.isProcessing = true;
   appState.isLoaded = false;
+  appState.subtitles = [];
+  appState.subtitlePath = null;
   
   // Disable reset / control actions during processing
   actionsPanel.classList.add("disabled");
@@ -206,63 +208,119 @@ function startProcessingTimeline() {
   stateProcessing.classList.add("active");
   
   resetTimelineComponents();
-  
-  // Sequenced timeline simulation steps
-  runTaskTimelineStep(1, "Upload Complete", "Video uploaded successfully", 200, 1000);
-}
 
-function runTaskTimelineStep(stepNum, statusHeader, prevMsg, progressVal, delay) {
-  appState.currentStep = stepNum;
+  // Retrieve Render API address from Vite environment, defaulting to standard dev port
+  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
   
-  // Set global status bar attributes
-  globalStatusText.textContent = statusHeader;
-  globalStatusText.className = "status-indicator-text processing";
-  globalProgressBar.style.width = `${(stepNum / 6) * 100}%`;
-  
-  // Activate step classes
-  const targetStep = document.getElementById(getStepIdByNumber(stepNum));
-  if (targetStep) {
-    targetStep.className = "timeline-step active";
-  }
-
-  // Auto-complete previous timeline step
-  if (stepNum > 1) {
-    const prevStep = document.getElementById(getStepIdByNumber(stepNum - 1));
-    if (prevStep) {
-      prevStep.className = "timeline-step completed";
+  // Helper to progress timeline steps
+  function advanceTimelineUI(stepNum, statusHeader) {
+    appState.currentStep = stepNum;
+    globalStatusText.textContent = statusHeader;
+    globalStatusText.className = "status-indicator-text processing";
+    globalProgressBar.style.width = `${(stepNum / 6) * 100}%`;
+    
+    const targetStep = document.getElementById(getStepIdByNumber(stepNum));
+    if (targetStep) {
+      targetStep.className = "timeline-step active";
     }
+
+    if (stepNum > 1) {
+      const prevStep = document.getElementById(getStepIdByNumber(stepNum - 1));
+      if (prevStep) {
+        prevStep.className = "timeline-step completed";
+      }
+    }
+    previewProcessingTitle.textContent = statusHeader + "...";
   }
 
-  // Update preview notch loaders
-  previewProcessingTitle.textContent = statusHeader + "...";
+  // Handle Demo Video simulation locally (retains original behavior for demo)
+  if (appState.uploadedFile.demo) {
+    console.log("Demo mode chosen. Simulating timeline processing...");
+    advanceTimelineUI(1, "Preparing Upload");
+    setTimeout(() => advanceTimelineUI(2, "Extracting audio"), 1000);
+    setTimeout(() => advanceTimelineUI(3, "Generating transcript"), 2500);
+    setTimeout(() => advanceTimelineUI(4, "Creating subtitles"), 4000);
+    setTimeout(() => advanceTimelineUI(5, "Rendering final video"), 5500);
+    setTimeout(() => advanceTimelineUI(6, "Ready"), 7000);
+    setTimeout(() => {
+      appState.subtitles = MOCK_SUBTITLES;
+      completeProcessingTimeline();
+    }, 7800);
+    return;
+  }
 
-  setTimeout(() => {
-    switch(stepNum) {
-      case 1:
-        runTaskTimelineStep(2, "Extracting audio", "Audio data stream processing", 33, 1600);
-        break;
-      case 2:
-        runTaskTimelineStep(3, "Generating transcript", "Transcribing speech elements", 50, 1800);
-        break;
-      case 3:
-        runTaskTimelineStep(4, "Creating subtitles", "Creating timed caption frames", 66, 1500);
-        break;
-      case 4:
-        runTaskTimelineStep(5, "Rendering final video", "Rendering subtitles into core video codec", 83, 1700);
-        break;
-      case 5:
-        // Set prior step complete
-        const finalBurnStep = document.getElementById(getStepIdByNumber(5));
-        if (finalBurnStep) finalBurnStep.className = "timeline-step completed";
+  // Execute a real POST upload to our Express backend
+  const uploadUrl = `${apiBaseUrl}/api/upload`;
+  console.log(`Starting production upload for ${appState.uploadedFile.name} to ${uploadUrl}`);
+
+  advanceTimelineUI(1, "Uploading video");
+
+  // Keep a background UI ticking progress indicators
+  let simulatedTicks = 1;
+  const timer = setInterval(() => {
+    if (simulatedTicks === 1) {
+      advanceTimelineUI(2, "Extracting audio");
+    } else if (simulatedTicks === 2) {
+      advanceTimelineUI(3, "Transcribing speech");
+    } else if (simulatedTicks === 3) {
+      advanceTimelineUI(4, "Compiling subtitles");
+    } else if (simulatedTicks === 4) {
+      advanceTimelineUI(5, "Formatting styling presets");
+    }
+    simulatedTicks++;
+  }, 2500);
+
+  const formData = new FormData();
+  formData.append('video', appState.uploadedFile);
+
+  fetch(uploadUrl, {
+    method: 'POST',
+    body: formData
+  })
+    .then(async (res) => {
+      clearInterval(timer);
+      if (!res.ok) {
+        let errorDetail = 'Upload failed';
+        try {
+          const jsonErr = await res.json();
+          errorDetail = jsonErr.message || errorDetail;
+        } catch {
+          errorDetail = await res.text() || errorDetail;
+        }
+        throw new Error(errorDetail);
+      }
+      return res.json();
+    })
+    .then((result) => {
+      console.log('Backend pipeline response:', result);
+      
+      // Auto-complete progress
+      advanceTimelineUI(5, "Finalizing package");
+      setTimeout(() => {
+        advanceTimelineUI(6, "Ready");
         
-        // Load Ready
-        runTaskTimelineStep(6, "Ready", "Ready for download", 100, 800);
-        break;
-      case 6:
+        // Parse and populate real Whisper transcripts in the player
+        if (result.transcription && Array.isArray(result.transcription.segments)) {
+          appState.subtitles = result.transcription.segments.map(seg => ({
+            start: seg.start,
+            end: seg.end,
+            text: (seg.text || '').trim().toUpperCase()
+          }));
+        } else {
+          appState.subtitles = MOCK_SUBTITLES;
+        }
+
+        // Keep backend subtitle output URL
+        appState.subtitlePath = result.subtitlePath;
         completeProcessingTimeline();
-        break;
-    }
-  }, delay);
+      }, 500);
+    })
+    .catch((err) => {
+      clearInterval(timer);
+      console.error('Pipeline processing error occurred:', err);
+      showToast(`Audit Failure: ${err.message}`);
+      resetToLaunchApp();
+    });
 }
 
 function getStepIdByNumber(num) {
@@ -315,7 +373,7 @@ function completeProcessingTimeline() {
 
   // Enable controls
   actionsPanel.classList.remove("disabled");
-  showToast("Burn-in captions generated!");
+  showToast("Subtitles created successfully!");
 }
 
 // ==========================================================================
@@ -324,9 +382,14 @@ function completeProcessingTimeline() {
 function syncVideoSubtitles() {
   const currentTime = previewVideo.currentTime;
   let activeCaption = "";
+  
+  // Render real dynamic subtitles if present, otherwise fall back to MOCK
+  const currentSubtitles = (appState.subtitles && appState.subtitles.length > 0)
+    ? appState.subtitles
+    : MOCK_SUBTITLES;
 
-  for (let i = 0; i < MOCK_SUBTITLES.length; i++) {
-    const sub = MOCK_SUBTITLES[i];
+  for (let i = 0; i < currentSubtitles.length; i++) {
+    const sub = currentSubtitles[i];
     if (currentTime >= sub.start && currentTime <= sub.end) {
       activeCaption = sub.text;
       break;
@@ -416,6 +479,21 @@ function copyTranscriptToClipboard() {
 
 function triggerMockVideoFormatExport() {
   if (!appState.isLoaded) return;
+  
+  // If we have a compiled subtitle file from Render backend, download the .ass file!
+  if (appState.subtitlePath) {
+    showToast("Downloading ASS subtitles file...");
+    const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    const assUrl = `${apiBaseUrl}/${appState.subtitlePath}`;
+    
+    const dlLink = document.createElement("a");
+    dlLink.href = assUrl;
+    dlLink.download = appState.subtitlePath.split('/').pop();
+    document.body.appendChild(dlLink);
+    dlLink.click();
+    document.body.removeChild(dlLink);
+    return;
+  }
   
   showToast("Rendering final build with captions burned-in...");
   

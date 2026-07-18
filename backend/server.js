@@ -13,9 +13,22 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS with support for local development environments
+// Enable CORS with support for local development environments and deployed production URL
+const allowedOrigins = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
+  : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5001'];
+
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, or standard server-to-server calls)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
+      return callback(null, true);
+    } else {
+      const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
+      return callback(new Error(msg), false);
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -25,10 +38,11 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Create necessary folders programmatically on startup
+// Create necessary folders programmatically on startup (Render Linux directories)
 const uploadsDir = path.join(__dirname, 'uploads');
 const outputDir = path.join(__dirname, 'output');
 const transcriptsDir = path.join(__dirname, 'transcripts');
+const subtitlesDir = path.join(__dirname, 'subtitles');
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -39,9 +53,15 @@ if (!fs.existsSync(outputDir)) {
 if (!fs.existsSync(transcriptsDir)) {
   fs.mkdirSync(transcriptsDir, { recursive: true });
 }
+if (!fs.existsSync(subtitlesDir)) {
+  fs.mkdirSync(subtitlesDir, { recursive: true });
+}
 
 // Serve output directory static files (allows playing/downloading extracted audio)
 app.use('/output', express.static(outputDir));
+
+// Serve subtitles directory static files (allows clients to download compiled ASS overlays)
+app.use('/subtitles', express.static(subtitlesDir));
 
 // Route Mounting
 app.use('/api/upload', uploadRouter);
