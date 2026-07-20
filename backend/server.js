@@ -59,36 +59,6 @@ if (!fs.existsSync(subtitlesDir)) {
   fs.mkdirSync(subtitlesDir, { recursive: true });
 }
 
-// Custom intercept handler for rendered video downloads to trigger cleanup on completion
-app.get('/output/:filename', (req, res, next) => {
-  const filename = req.params.filename;
-  // Prevent directory traversal path injection by sanitizing basename
-  const safeFilename = path.basename(filename);
-  const filePath = path.join(outputDir, safeFilename);
-
-  if (safeFilename.endsWith('_captioned.mp4')) {
-    console.log(`[Server] Captioned video download requested: ${safeFilename}`);
-    
-    return res.sendFile(filePath, (err) => {
-      if (err) {
-        if (!res.headersSent) {
-          console.error(`[Server] Error serving file ${safeFilename}: ${err.message}`);
-          return next(err);
-        }
-        console.warn(`[Server] Download of ${safeFilename} was interrupted/aborted: ${err.message}`);
-        return;
-      }
-      
-      console.log(`[Server] Capture download SUCCESS: Completed serving ${safeFilename}. Running direct automatic cleanup.`);
-      const baseName = safeFilename.replace('_captioned.mp4', '');
-      cleanupJobAssets(baseName);
-    });
-  }
-
-  // Pass-through to original express.static serving logic (e.g. WAV audio files)
-  next();
-});
-
 // Serve output directory static files (allows playing/downloading extracted audio)
 app.use('/output', express.static(outputDir));
 

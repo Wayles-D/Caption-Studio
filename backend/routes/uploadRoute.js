@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'path';
 import { uploadVideo } from '../utils/multerConfig.js';
-import { uploadAndExtractAudio } from '../controllers/uploadController.js';
+import { uploadAndExtractAudio, workspaceCleanup } from '../controllers/uploadController.js';
 
 const router = Router();
 
@@ -31,5 +31,12 @@ router.post(
   // Controller handles the FFmpeg audio extraction and cleanup
   uploadAndExtractAudio
 );
+
+/**
+ * @route   POST /api/upload/cleanup
+ * @desc    Explicitly purge the active workspace job files
+ * @access  Public
+ */
+router.post('/cleanup', workspaceCleanup);
 
 export default router;

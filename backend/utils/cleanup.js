@@ -56,7 +56,7 @@ export function cleanupJobAssets(baseName) {
  * that exceed the target expiration age threshold and unlinks them.
  */
 export function runPeriodicCleanup() {
-  const timeoutMs = parseInt(process.env.CLEANUP_TIMEOUT_MS || '600000', 10); // Standard 10 minutes (600,000 ms) default
+  const timeoutMs = parseInt(process.env.CLEANUP_TIMEOUT_MS || '1800000', 10); // Standard 30 minutes (1,800,000 ms) default
   const now = Date.now();
   const dirs = [uploadsDir, outputDir, transcriptsDir, subtitlesDir];
 

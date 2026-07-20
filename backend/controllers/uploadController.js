@@ -9,6 +9,10 @@ import { cleanupJobAssets } from '../utils/cleanup.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Single active workspace track across requests
+let activeJobId = null;
+
+
 // Ensure output, transcripts and subtitles directories exist
 const outputDir = path.join(__dirname, '../output');
 const transcriptsDir = path.join(__dirname, '../transcripts');
@@ -54,6 +58,15 @@ export async function uploadAndExtractAudio(req, res, next) {
   const renderedVideoPath = path.join(outputDir, renderedVideoFilename);
 
   console.log(`[Pipeline] [${baseName}] Processing media pipeline:\n  Video: ${videoPath}\n  Audio: ${audioPath}\n  Transcript: ${transcriptPath}\n  Subtitles: ${subtitlePath}\n  Rendered: ${renderedVideoPath}`);
+
+  // Purge any temporary assets from a previous job before starting
+  if (activeJobId && activeJobId !== baseName) {
+    console.log(`[Pipeline] Pre-upload Cleanup: Purging resources of previous job: ${activeJobId}`);
+    cleanupJobAssets(activeJobId);
+  }
+  
+  // Set current baseName as the active job workspace
+  activeJobId = baseName;
 
   let activeProc = null;
   let isRequestFinished = false;
@@ -126,18 +139,6 @@ export async function uploadAndExtractAudio(req, res, next) {
       }
     }
 
-    // Schedule automatic timeout-based cleanup if the user never downloads.
-    if (process.env.KEEP_TEMP_FILES !== 'true') {
-      const timeoutMs = parseInt(process.env.CLEANUP_TIMEOUT_MS || '600000', 10);
-      console.log(`[Pipeline] [${baseName}] Scheduling automatic cleanup to run in ${timeoutMs / 1000}s if file is not downloaded.`);
-      setTimeout(() => {
-        console.log(`[Pipeline] [${baseName}] Backup timeout cleanup triggered.`);
-        cleanupJobAssets(baseName);
-      }, timeoutMs);
-    } else {
-      console.log(`[Pipeline] [${baseName}] KEEP_TEMP_FILES is true. Preserved all pipeline assets.`);
-    }
-
     // Mark completion to prevent client connection close handler from wiping files
     isRequestFinished = true;
 
@@ -165,10 +166,35 @@ export async function uploadAndExtractAudio(req, res, next) {
     isRequestFinished = true;
     console.error(`[Pipeline] [${baseName}] Step Failure: Execution error in pipeline: ${error.message}`);
     
+    // Clear active job if current job failed
+    if (activeJobId === baseName) {
+      activeJobId = null;
+    }
+
     // Immediate cleanup on error path
     cleanupJobAssets(baseName);
     next(error);
   }
 }
+
+/**
+ * Endpoint to explicitly trigger cleanup of the active workspace job.
+ */
+export async function workspaceCleanup(req, res) {
+  console.log(`[Workspace Cleanup] Explicit request to cleanup active job: ${activeJobId}`);
+  if (activeJobId) {
+    cleanupJobAssets(activeJobId);
+    activeJobId = null;
+    return res.status(200).json({
+      success: true,
+      message: 'Workspace cleaned up successfully.'
+    });
+  }
+  return res.status(200).json({
+    success: true,
+    message: 'Workspace already clean.'
+  });
+}
+
 
 
