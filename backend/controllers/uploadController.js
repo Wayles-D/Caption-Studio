@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { extractAudio } from '../utils/ffmpeg.js';
+import { extractAudio, burnSubtitles } from '../utils/ffmpeg.js';
 import { transcribeAudio } from '../services/whisperService.js';
 import { generateSubtitleFromTranscript } from '../services/subtitleService.js';
 
@@ -26,7 +26,8 @@ if (!fs.existsSync(subtitlesDir)) {
 /**
  * Handles the video upload, triggers FFmpeg audio extraction,
  * sends audio WAV to Whisper API, records output json,
- * compiles ASS karaoke subtitles, and cleans up temporary files.
+ * compiles ASS karaoke subtitles, burns subtitles into video,
+ * and cleans up temporary files.
  */
 export async function uploadAndExtractAudio(req, res, next) {
   const videoFile = req.file;
@@ -48,28 +49,16 @@ export async function uploadAndExtractAudio(req, res, next) {
   const transcriptPath = path.join(transcriptsDir, transcriptFilename);
   const subtitleFilename = `${baseName}.ass`;
   const subtitlePath = path.join(subtitlesDir, subtitleFilename);
+  const renderedVideoFilename = `${baseName}_captioned.mp4`;
+  const renderedVideoPath = path.join(outputDir, renderedVideoFilename);
 
   console.log(`Received video file upload: ${videoFilename}`);
-  console.log(`Processing media pipeline:\n  Video: ${videoPath}\n  Audio: ${audioPath}\n  Transcript: ${transcriptPath}\n  Subtitles: ${subtitlePath}`);
+  console.log(`Processing media pipeline:\n  Video: ${videoPath}\n  Audio: ${audioPath}\n  Transcript: ${transcriptPath}\n  Subtitles: ${subtitlePath}\n  Rendered: ${renderedVideoPath}`);
 
   try {
     // 1. Extract audio from video file using local FFmpeg
     await extractAudio(videoPath, audioPath);
     console.log(`Successfully extracted WAV audio: ${audioFilename}`);
-
-    // Clean up temporary video file immediately after audio extraction
-    // (unless KEEP_TEMP_FILES is set to true for debugging)
-    if (process.env.KEEP_TEMP_FILES !== 'true') {
-      fs.unlink(videoPath, (err) => {
-        if (err) {
-          console.error(`Failed to delete temporary video file at ${videoPath}:`, err);
-        } else {
-          console.log(`Cleaned up temporary video file: ${videoFilename}`);
-        }
-      });
-    } else {
-      console.log(`KEEP_TEMP_FILES is true. Preserved video file: ${videoFilename}`);
-    }
 
     // 2. Send audio file to Whisper-compatible transcription service
     console.log(`Starting transcription for ${audioFilename}...`);
@@ -84,7 +73,25 @@ export async function uploadAndExtractAudio(req, res, next) {
     await generateSubtitleFromTranscript(transcriptPath, subtitlePath);
     console.log(`Successfully output subtitle file: ${subtitleFilename}`);
 
-    // Clean up audio file after successful transcription & subtitle compiles
+    // 5. Burn subtitles into original uploaded video to create the final captioned video
+    console.log(`Burning subtitles into video for ${baseName}...`);
+    await burnSubtitles(videoPath, subtitlePath, renderedVideoPath);
+    console.log(`Successfully generated captioned video: ${renderedVideoFilename}`);
+
+    // Clean up temporary video file after subtitles are burned
+    if (process.env.KEEP_TEMP_FILES !== 'true') {
+      fs.unlink(videoPath, (err) => {
+        if (err) {
+          console.error(`Failed to delete temporary video file at ${videoPath}:`, err);
+        } else {
+          console.log(`Cleaned up temporary video file: ${videoFilename}`);
+        }
+      });
+    } else {
+      console.log(`KEEP_TEMP_FILES is true. Preserved video file: ${videoFilename}`);
+    }
+
+    // Clean up audio file after successful transcription, subtitle compile & video render
     if (process.env.KEEP_TEMP_FILES !== 'true') {
       fs.unlink(audioPath, (err) => {
         if (err) {
@@ -101,15 +108,17 @@ export async function uploadAndExtractAudio(req, res, next) {
     const relativeAudioPath = path.relative(backendRoot, audioPath);
     const relativeTranscriptPath = path.relative(backendRoot, transcriptPath);
     const relativeSubtitlePath = path.relative(backendRoot, subtitlePath);
+    const relativeRenderedVideoPath = path.relative(backendRoot, renderedVideoPath);
 
     // Return the required success payload
     return res.status(200).json({
       success: true,
-      message: 'Video processed, transcribed and subtitles compiled successfully.',
+      message: 'Video processed, transcribing completed, subtitles compiled and burned successfully.',
       videoPath: relativeVideoPath.replace(/\\/g, '/'),
       audioPath: relativeAudioPath.replace(/\\/g, '/'),
       transcriptPath: relativeTranscriptPath.replace(/\\/g, '/'),
       subtitlePath: relativeSubtitlePath.replace(/\\/g, '/'),
+      renderedVideoPath: relativeRenderedVideoPath.replace(/\\/g, '/'),
       transcription: transcriptionJSON
     });
 

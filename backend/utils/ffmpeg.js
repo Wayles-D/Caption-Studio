@@ -71,3 +71,60 @@ export function extractAudio(inputPath, outputPath) {
     });
   });
 }
+
+/**
+ * Burns an ASS subtitle file into a video file using FFmpeg and libass.
+ * 
+ * @param {string} inputVideoPath - Absolute path to the input video file.
+ * @param {string} assPath - Absolute path to the ASS subtitles file.
+ * @param {string} outputPath - Absolute path where the rendered video will be saved.
+ * @returns {Promise<string>} Resolves with the outputPath if successful.
+ */
+export function burnSubtitles(inputVideoPath, assPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) {
+      return reject(new Error('FFmpeg static binary path could not be resolved.'));
+    }
+
+    // Use relative paths to avoid Windows colons (drive letters) and spaces in parent paths
+    const relativeAssPath = path.relative(process.cwd(), assPath).replace(/\\/g, '/');
+    
+    // Set up filter argument
+    // Use the ass filter. Wrap path in single quotes.
+    const assFilter = `ass='${relativeAssPath}'`;
+
+    const args = [
+      '-y',
+      '-i', inputVideoPath,
+      '-vf', assFilter,
+      outputPath
+    ];
+
+    console.log(`Executing FFmpeg Subtitle Burn command: ${ffmpegPath} ${args.join(' ')}`);
+
+    const ffmpegProc = spawn(ffmpegPath, args);
+    let stderrData = '';
+
+    ffmpegProc.stdout.on('data', (data) => {
+      console.log(`FFmpeg burn stdout: ${data.toString()}`);
+    });
+
+    ffmpegProc.stderr.on('data', (data) => {
+      stderrData += data.toString();
+    });
+
+    ffmpegProc.on('error', (err) => {
+      reject(err);
+    });
+
+    ffmpegProc.on('close', (code) => {
+      if (code === 0) {
+        resolve(outputPath);
+      } else {
+        console.error(`FFmpeg subtitle burn process exited with code ${code}`);
+        console.error(`FFmpeg burn error details:\n${stderrData}`);
+        reject(new Error(`FFmpeg subtitle burning failed. Details: ${stderrData.slice(-500)}`));
+      }
+    });
+  });
+}

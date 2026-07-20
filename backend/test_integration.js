@@ -1,3 +1,4 @@
+import './test_env.js';
 import express from 'express';
 import fs from 'fs';
 import url from 'url';
@@ -13,17 +14,8 @@ import app from './server.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = nodePath.dirname(__filename);
 
-const PORT = 5001; // Test port
+const PORT = 5045; // Test port
 const testVideoPath = nodePath.join(__dirname, 'test-source.mp4');
-
-// Setup mock environment variables for the test process
-process.env.PORT = PORT;
-process.env.WHISPER_API_URL = `http://localhost:${PORT}/mock/whisper`;
-process.env.WHISPER_API_KEY = 'mock_api_key_for_testing';
-process.env.WHISPER_MODEL = 'mock-whisper-model';
-process.env.WHISPER_TIMEOUT = '5000';
-process.env.WHISPER_MAX_RETRIES = '1';
-process.env.KEEP_TEMP_FILES = 'false';
 
 // Define Mock Whisper Route
 app.post('/mock/whisper', (req, res) => {
@@ -83,6 +75,7 @@ function generateTestVideo(outputPath) {
     const proc = spawn(ffmpegPath, args);
     let stderr = '';
 
+    proc.stdout.on('data', (d) => {});
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
     proc.on('close', (code) => {
       if (code === 0) {
@@ -213,11 +206,23 @@ async function runTests() {
         }
 
         // Assert Karaoke tags exist
-        if (!assContent.includes('\\k')) {
-          throw new Error('Format Failed: Dialogue track is missing karaoke timing (\\k) events.');
+        if (!assContent.includes('\\kf')) {
+          throw new Error('Format Failed: Dialogue track is missing karaoke timing (\\kf) events.');
         }
         
         console.log('ASS Subtitle structure verification: SUCCESS.');
+
+        // Verify rendered video path returned
+        if (!body.renderedVideoPath) {
+          throw new Error('Verify Failed: Response body does not contain a renderedVideoPath field.');
+        }
+
+        const absoluteRenderedVideoPath = nodePath.join(__dirname, body.renderedVideoPath);
+        console.log(`Verifying rendered captioned video exists at: ${absoluteRenderedVideoPath}`);
+
+        if (!fs.existsSync(absoluteRenderedVideoPath)) {
+          throw new Error(`Write Failed: The local rendered video file was not found at: ${absoluteRenderedVideoPath}`);
+        }
 
         // Verify that temporary files were deleted (since KEEP_TEMP_FILES=false)
         const absoluteVideoPath = nodePath.join(__dirname, body.videoPath);
@@ -235,7 +240,8 @@ async function runTests() {
         const absoluteTranscriptPath = nodePath.join(__dirname, body.transcriptPath);
         fs.unlinkSync(absoluteTranscriptPath);
         fs.unlinkSync(absoluteSubtitlePath);
-        console.log('Cleaned up integration test generated transcript and subtitle files.');
+        fs.unlinkSync(absoluteRenderedVideoPath);
+        console.log('Cleaned up integration test generated transcript, subtitle, and rendered video files.');
 
         // --- Test 2: Uploading an invalid extension file (should fail validation) ---
         console.log('\n--- Test 2: Uploading Invalid extension ---');

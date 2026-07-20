@@ -1,0 +1,10 @@
+const PORT = 5045;
+process.env.PORT = PORT.toString();
+process.env.WHISPER_API_URL = `http://localhost:${PORT}/mock/whisper`;
+process.env.WHISPER_API_KEY = 'mock_api_key_for_testing';
+process.env.WHISPER_MODEL = 'mock-whisper-model';
+process.env.WHISPER_TIMEOUT = '5000';
+process.env.WHISPER_MAX_RETRIES = '1';
+process.env.KEEP_TEMP_FILES = 'false';
+process.env.NODE_ENV = 'test';
+export {};

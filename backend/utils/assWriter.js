@@ -42,10 +42,11 @@ export function generateASSHeader() {
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    // Default Style parameters:
-    // Montserrat SemiBold, Size 72, Primary: White (&H00FFFFFF), Secondary: Yellow (&H0000FFFF), Outline: Black (&H00000000)
-    // ScaleX/Y = 100%, Bold, Outline=5, Shadow=0, Alignment=2 (Bottom Center), MarginV=300 (Mobile safe vertical margin)
-    'Style: Default,Montserrat SemiBold,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,0,2,100,100,300,1',
+    // Default Style parameters reversed for Karaoke:
+    // PrimaryColour: Yellow (&H0000FFFF) [Active highlighted color]
+    // SecondaryColour: White (&H00FFFFFF) [Inactive base color before spoken]
+    // Montserrat SemiBold, Size 72, ScaleX/Y = 100%, Bold, Outline=5, Shadow=0, Alignment=2 (Bottom Center), MarginV=300 (Mobile safe)
+    'Style: Default,Montserrat SemiBold,72,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,0,2,100,100,300,1',
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
@@ -53,7 +54,7 @@ export function generateASSHeader() {
 }
 
 /**
- * Converts a phrase object containing word units into a dialogue entry with karaoke (\k) tags.
+ * Converts a phrase object containing word units into a dialogue entry with karaoke (\kf) tags.
  * Handles spacing and centisecond durations properly.
  * 
  * @param {object} phrase - Unified phrase containing start, end, text, and words array.
@@ -67,61 +68,27 @@ export function generateASSDialogueLine(phrase) {
   let lastTime = phrase.start;
 
   phrase.words.forEach((w, idx) => {
-    // Determine pause before the word
+    // Determine pause before the word (in centiseconds)
     const delay = Math.max(0, Math.round((w.start - lastTime) * 100));
     // Determine word duration in centiseconds
     const duration = Math.max(1, Math.round((w.end - w.start) * 100));
 
     // Append pause tag if there is a gap between word events
     if (delay > 0) {
-      textPayload += `{\\k${delay}}`;
+      textPayload += `{\\kf${delay}}`;
     }
 
-    // Capture spacing format returned by Whisper. Convert spaces or append space.
-    // If it contains trailing or leading spaces, incorporate them.
-    const wordText = w.text;
-    textPayload += `{\\k${duration}}${wordText}`;
+    const wordText = w.text.trim();
+    
+    // Add space before this word if it is not the first word
+    if (idx > 0) {
+      textPayload += ` {\\kf${duration}}${wordText}`;
+    } else {
+      textPayload += `{\\kf${duration}}${wordText}`;
+    }
     
     lastTime = w.end;
   });
-
-  // Balanced line breaking algorithm if character count is high (>25)
-  // Max 2 lines. Words are never split.
-  const rawTextContent = phrase.words.map(w => w.text.trim()).join(' ');
-  
-  if (rawTextContent.length > 25) {
-    // If we have a line break inside, we have to preserve the karaoke tags or insert a \N newline.
-    // Let's identify the middle-most word index to split the lines balanced.
-    const midIndex = Math.floor(phrase.words.length / 2);
-    if (midIndex > 0 && midIndex < phrase.words.length) {
-      let segmentText = '';
-      let breakTime = phrase.start;
-      
-      const firstHalf = phrase.words.slice(0, midIndex);
-      const secondHalf = phrase.words.slice(midIndex);
-
-      let text1 = '';
-      firstHalf.forEach(w => {
-        const delay = Math.max(0, Math.round((w.start - breakTime) * 100));
-        const duration = Math.max(1, Math.round((w.end - w.start) * 100));
-        if (delay > 0) text1 += `{\\k${delay}}`;
-        text1 += `{\\k${duration}}${w.text}`;
-        breakTime = w.end;
-      });
-
-      let text2 = '';
-      secondHalf.forEach(w => {
-        const delay = Math.max(0, Math.round((w.start - breakTime) * 100));
-        const duration = Math.max(1, Math.round((w.end - w.start) * 100));
-        if (delay > 0) text2 += `{\\k${delay}}`;
-        text2 += `{\\k${duration}}${w.text}`;
-        breakTime = w.end;
-      });
-
-      // Combine with \N override character for line breaking
-      textPayload = `${text1.trim()}\\N${text2.trim()}`;
-    }
-  }
 
   return `Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${textPayload}`;
 }

@@ -75,12 +75,14 @@ app.get('/api/health', (req, res) => {
 });
 
 // Generic 404 Route handler
-app.use((req, res, next) => {
-  res.status(404).json({
-    success: false,
-    message: `Resource not found: ${req.originalUrl}`
+if (process.env.NODE_ENV !== 'test') {
+  app.use((req, res, next) => {
+    res.status(404).json({
+      success: false,
+      message: `Resource not found: ${req.originalUrl}`
+    });
   });
-});
+}
 
 // Global Error Handler Middleware
 app.use((err, req, res, next) => {
@@ -118,13 +120,15 @@ app.use((err, req, res, next) => {
 });
 
 // Bind server
-app.listen(PORT, () => {
-  console.log(`===============================================`);
-  console.log(`Caption Studio Backend running on port ${PORT}`);
-  console.log(`Endpoints available:`);
-  console.log(`  - Health Check:   GET  http://localhost:${PORT}/api/health`);
-  console.log(`  - Video Upload:   POST http://localhost:${PORT}/api/upload`);
-  console.log(`===============================================`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    console.log(`===============================================`);
+    console.log(`Caption Studio Backend running on port ${PORT}`);
+    console.log(`Endpoints available:`);
+    console.log(`  - Health Check:   GET  http://localhost:${PORT}/api/health`);
+    console.log(`  - Video Upload:   POST http://localhost:${PORT}/api/upload`);
+    console.log(`===============================================`);
+  });
+}
 
 export default app;

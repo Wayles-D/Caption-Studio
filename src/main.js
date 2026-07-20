@@ -310,8 +310,9 @@ function startProcessingTimeline() {
           appState.subtitles = MOCK_SUBTITLES;
         }
 
-        // Keep backend subtitle output URL
+        // Keep backend subtitle output URL and rendered video path
         appState.subtitlePath = result.subtitlePath;
+        appState.renderedVideoPath = result.renderedVideoPath;
         completeProcessingTimeline();
       }, 500);
     })
@@ -480,15 +481,15 @@ function copyTranscriptToClipboard() {
 function triggerMockVideoFormatExport() {
   if (!appState.isLoaded) return;
   
-  // If we have a compiled subtitle file from Render backend, download the .ass file!
-  if (appState.subtitlePath) {
-    showToast("Downloading ASS subtitles file...");
+  // If we have a rendered video file from Render backend, download the MP4 file!
+  if (appState.renderedVideoPath) {
+    showToast("Downloading captioned video...");
     const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-    const assUrl = `${apiBaseUrl}/${appState.subtitlePath}`;
+    const videoUrl = `${apiBaseUrl}/${appState.renderedVideoPath}`;
     
     const dlLink = document.createElement("a");
-    dlLink.href = assUrl;
-    dlLink.download = appState.subtitlePath.split('/').pop();
+    dlLink.href = videoUrl;
+    dlLink.download = appState.renderedVideoPath.split('/').pop();
     document.body.appendChild(dlLink);
     dlLink.click();
     document.body.removeChild(dlLink);
