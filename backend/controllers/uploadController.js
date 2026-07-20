@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { extractAudio, burnSubtitles } from '../utils/ffmpeg.js';
 import { transcribeAudio } from '../services/whisperService.js';
 import { generateSubtitleFromTranscript } from '../services/subtitleService.js';
+import { cleanupJobAssets } from '../utils/cleanup.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,55 +53,93 @@ export async function uploadAndExtractAudio(req, res, next) {
   const renderedVideoFilename = `${baseName}_captioned.mp4`;
   const renderedVideoPath = path.join(outputDir, renderedVideoFilename);
 
-  console.log(`Received video file upload: ${videoFilename}`);
-  console.log(`Processing media pipeline:\n  Video: ${videoPath}\n  Audio: ${audioPath}\n  Transcript: ${transcriptPath}\n  Subtitles: ${subtitlePath}\n  Rendered: ${renderedVideoPath}`);
+  console.log(`[Pipeline] [${baseName}] Processing media pipeline:\n  Video: ${videoPath}\n  Audio: ${audioPath}\n  Transcript: ${transcriptPath}\n  Subtitles: ${subtitlePath}\n  Rendered: ${renderedVideoPath}`);
+
+  let activeProc = null;
+  let isRequestFinished = false;
+
+  // Handle client request cancellation/abort during upload/processing
+  req.on('close', () => {
+    if (!isRequestFinished) {
+      console.log(`[Pipeline] [${baseName}] Warning: Client request aborted before completion. Initiating cleanup...`);
+      if (activeProc) {
+        try {
+          activeProc.kill('SIGKILL');
+          console.log(`[Pipeline] [${baseName}] Signal sent: Killed active FFmpeg child process.`);
+        } catch (killErr) {
+          console.error(`[Pipeline] [${baseName}] Error killing FFmpeg process:`, killErr.message);
+        }
+      }
+      cleanupJobAssets(baseName);
+    }
+  });
 
   try {
     // 1. Extract audio from video file using local FFmpeg
-    await extractAudio(videoPath, audioPath);
-    console.log(`Successfully extracted WAV audio: ${audioFilename}`);
+    console.log(`[Pipeline] [${baseName}] Stage: Audio Extraction Started`);
+    const audioExtractStart = Date.now();
+    await extractAudio(videoPath, audioPath, {
+      onSpawn: (proc) => { activeProc = proc; }
+    });
+    console.log(`[Pipeline] [${baseName}] Stage: Audio Extraction Completed (Duration: ${Date.now() - audioExtractStart}ms)`);
+    activeProc = null;
 
     // 2. Send audio file to Whisper-compatible transcription service
-    console.log(`Starting transcription for ${audioFilename}...`);
+    console.log(`[Pipeline] [${baseName}] Stage: Whisper Request Started`);
+    const whisperStart = Date.now();
     const transcriptionJSON = await transcribeAudio(audioPath);
+    console.log(`[Pipeline] [${baseName}] Stage: Whisper Request Completed (Duration: ${Date.now() - whisperStart}ms)`);
 
     // 3. Save raw transcription JSON output
+    console.log(`[Pipeline] [${baseName}] Stage: Saving Transcript JSON...`);
     fs.writeFileSync(transcriptPath, JSON.stringify(transcriptionJSON, null, 2));
-    console.log(`Saved transcription output: ${transcriptFilename}`);
+    console.log(`[Pipeline] [${baseName}] Stage: Transcripts saved`);
 
     // 4. Generate Advanced SubStation Alpha (.ass) style subtitles
-    console.log(`Compiling Advanced SubStation Alpha subtitles for ${baseName}...`);
+    console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Started`);
+    const subtitleStart = Date.now();
     await generateSubtitleFromTranscript(transcriptPath, subtitlePath);
-    console.log(`Successfully output subtitle file: ${subtitleFilename}`);
+    console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Completed (Duration: ${Date.now() - subtitleStart}ms)`);
 
     // 5. Burn subtitles into original uploaded video to create the final captioned video
-    console.log(`Burning subtitles into video for ${baseName}...`);
-    await burnSubtitles(videoPath, subtitlePath, renderedVideoPath);
-    console.log(`Successfully generated captioned video: ${renderedVideoFilename}`);
+    console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Started`);
+    const renderStart = Date.now();
+    await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
+      onSpawn: (proc) => { activeProc = proc; }
+    });
+    console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Completed (Duration: ${Date.now() - renderStart}ms)`);
+    activeProc = null;
 
-    // Clean up temporary video file after subtitles are burned
+    // Clean up large intermediate temporary files (video and WAV) immediately to save space
     if (process.env.KEEP_TEMP_FILES !== 'true') {
-      fs.unlink(videoPath, (err) => {
-        if (err) {
-          console.error(`Failed to delete temporary video file at ${videoPath}:`, err);
-        } else {
-          console.log(`Cleaned up temporary video file: ${videoFilename}`);
-        }
-      });
+      try {
+        if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+        console.log(`[Pipeline] [${baseName}] Cleaned up temporary video file: ${videoFilename}`);
+      } catch (err) {
+        console.error(`[Pipeline] [${baseName}] Failed to delete video file:`, err.message);
+      }
+      try {
+        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+        console.log(`[Pipeline] [${baseName}] Cleaned up temporary audio file: ${audioFilename}`);
+      } catch (err) {
+        console.error(`[Pipeline] [${baseName}] Failed to delete audio file:`, err.message);
+      }
+    }
+
+    // Schedule automatic timeout-based cleanup if the user never downloads.
+    if (process.env.KEEP_TEMP_FILES !== 'true') {
+      const timeoutMs = parseInt(process.env.CLEANUP_TIMEOUT_MS || '600000', 10);
+      console.log(`[Pipeline] [${baseName}] Scheduling automatic cleanup to run in ${timeoutMs / 1000}s if file is not downloaded.`);
+      setTimeout(() => {
+        console.log(`[Pipeline] [${baseName}] Backup timeout cleanup triggered.`);
+        cleanupJobAssets(baseName);
+      }, timeoutMs);
     } else {
-      console.log(`KEEP_TEMP_FILES is true. Preserved video file: ${videoFilename}`);
+      console.log(`[Pipeline] [${baseName}] KEEP_TEMP_FILES is true. Preserved all pipeline assets.`);
     }
 
-    // Clean up audio file after successful transcription, subtitle compile & video render
-    if (process.env.KEEP_TEMP_FILES !== 'true') {
-      fs.unlink(audioPath, (err) => {
-        if (err) {
-          console.error(`Failed to delete temporary audio file at ${audioPath}:`, err);
-        } else {
-          console.log(`Cleaned up temporary audio file: ${audioFilename}`);
-        }
-      });
-    }
+    // Mark completion to prevent client connection close handler from wiping files
+    isRequestFinished = true;
 
     // Return localized relative paths for convenience
     const backendRoot = path.join(__dirname, '..');
@@ -123,28 +162,11 @@ export async function uploadAndExtractAudio(req, res, next) {
     });
 
   } catch (error) {
-    console.error(`Execution error in pipeline: ${error.message}`);
-
-    // CLEANUP: Unlink any temporary video or audio file on failure
-    if (process.env.KEEP_TEMP_FILES !== 'true') {
-      if (fs.existsSync(videoPath)) {
-        try {
-          fs.unlinkSync(videoPath);
-          console.log(`Cleaned up temporary video file due to failure: ${videoFilename}`);
-        } catch (unlinkErr) {
-          console.error(`Failed to delete video file on failure:`, unlinkErr);
-        }
-      }
-      if (fs.existsSync(audioPath)) {
-        try {
-          fs.unlinkSync(audioPath);
-          console.log(`Cleaned up temporary audio file due to failure: ${audioFilename}`);
-        } catch (unlinkErr) {
-          console.error(`Failed to delete audio file on failure:`, unlinkErr);
-        }
-      }
-    }
-
+    isRequestFinished = true;
+    console.error(`[Pipeline] [${baseName}] Step Failure: Execution error in pipeline: ${error.message}`);
+    
+    // Immediate cleanup on error path
+    cleanupJobAssets(baseName);
     next(error);
   }
 }

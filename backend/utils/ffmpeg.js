@@ -3,6 +3,20 @@ import path from 'path';
 import ffmpegPath from 'ffmpeg-static';
 
 /**
+ * Format bytes into MB.
+ */
+function formatBytes(bytes) {
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+/**
+ * Format memory usage output.
+ */
+function formatMemory(mem) {
+  return `RSS: ${formatBytes(mem.rss)} | Heap: ${formatBytes(mem.heapUsed)} / ${formatBytes(mem.heapTotal)}`;
+}
+
+/**
  * Extracts audio from a video file and converts it to a standard WAV format:
  * - WAV container (pcm_s16le)
  * - Mono (1 channel)
@@ -11,9 +25,10 @@ import ffmpegPath from 'ffmpeg-static';
  * 
  * @param {string} inputPath - Absolute path to the uploaded video file.
  * @param {string} outputPath - Absolute path where the extracted wav file will be saved.
+ * @param {object} options - Options containing callbacks like onSpawn.
  * @returns {Promise<string>} Resolves with the outputPath if successful.
  */
-export function extractAudio(inputPath, outputPath) {
+export function extractAudio(inputPath, outputPath, options = {}) {
   return new Promise((resolve, reject) => {
     // Check if ffmpeg-static resolved the path
     if (!ffmpegPath) {
@@ -40,16 +55,24 @@ export function extractAudio(inputPath, outputPath) {
     console.log(`Executing FFmpeg command: ${ffmpegPath} ${args.join(' ')}`);
 
     const ffmpegProc = spawn(ffmpegPath, args);
+    if (options.onSpawn) {
+      options.onSpawn(ffmpegProc);
+    }
 
-    let stderrData = '';
+    const stderrLines = [];
 
     ffmpegProc.stdout.on('data', (data) => {
-      // ffmpeg writes most logs to stderr, but we capture stdout just in case
       console.log(`FFmpeg stdout: ${data}`);
     });
 
     ffmpegProc.stderr.on('data', (data) => {
-      stderrData += data.toString();
+      const text = data.toString();
+      // Keep output rolling in memory to avoid unbounded memory growth
+      const newLines = text.split('\n');
+      stderrLines.push(...newLines);
+      if (stderrLines.length > 50) {
+        stderrLines.splice(0, stderrLines.length - 50);
+      }
     });
 
     ffmpegProc.on('error', (err) => {
@@ -64,9 +87,10 @@ export function extractAudio(inputPath, outputPath) {
       if (code === 0) {
         resolve(outputPath);
       } else {
+        const errorSummary = stderrLines.join('\n');
         console.error(`FFmpeg process exited with code ${code}`);
-        console.error(`FFmpeg error details:\n${stderrData}`);
-        reject(new Error(`FFmpeg processing failed with exit code ${code}. Details: ${stderrData.slice(-500)}`));
+        console.error(`FFmpeg error details:\n${errorSummary}`);
+        reject(new Error(`FFmpeg processing failed with exit code ${code}. Details: ${errorSummary.slice(-500)}`));
       }
     });
   });
@@ -78,9 +102,10 @@ export function extractAudio(inputPath, outputPath) {
  * @param {string} inputVideoPath - Absolute path to the input video file.
  * @param {string} assPath - Absolute path to the ASS subtitles file.
  * @param {string} outputPath - Absolute path where the rendered video will be saved.
+ * @param {object} options - Options containing callbacks like onSpawn.
  * @returns {Promise<string>} Resolves with the outputPath if successful.
  */
-export function burnSubtitles(inputVideoPath, assPath, outputPath) {
+export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {}) {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) {
       return reject(new Error('FFmpeg static binary path could not be resolved.'));
@@ -93,24 +118,46 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath) {
     // Use the ass filter. Wrap path in single quotes.
     const assFilter = `ass='${relativeAssPath}'`;
 
+    // OPTIMIZED FFmpeg parameters:
+    // -c:v libx264: Explicitly specify libx264 video encoder
+    // -preset ultrafast: Use fastest encoding speed preset to minimize RAM/CPU footprints on Render
+    // -crf 23: Balance visual quality compression ratio
+    // -c:a copy: Directly copy audio streams without re-encoding to save RAM/CPU
     const args = [
       '-y',
       '-i', inputVideoPath,
       '-vf', assFilter,
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '23',
+      '-c:a', 'copy',
       outputPath
     ];
 
     console.log(`Executing FFmpeg Subtitle Burn command: ${ffmpegPath} ${args.join(' ')}`);
 
+    const memBefore = process.memoryUsage();
+    const startTime = Date.now();
+
     const ffmpegProc = spawn(ffmpegPath, args);
-    let stderrData = '';
+    if (options.onSpawn) {
+      options.onSpawn(ffmpegProc);
+    }
+
+    const stderrLines = [];
 
     ffmpegProc.stdout.on('data', (data) => {
       console.log(`FFmpeg burn stdout: ${data.toString()}`);
     });
 
     ffmpegProc.stderr.on('data', (data) => {
-      stderrData += data.toString();
+      const text = data.toString();
+      // Keep output rolling in memory to avoid unbounded memory growth
+      const newLines = text.split('\n');
+      stderrLines.push(...newLines);
+      if (stderrLines.length > 50) {
+        stderrLines.splice(0, stderrLines.length - 50);
+      }
     });
 
     ffmpegProc.on('error', (err) => {
@@ -118,12 +165,25 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath) {
     });
 
     ffmpegProc.on('close', (code) => {
+      const duration = Date.now() - startTime;
+      const memAfter = process.memoryUsage();
+      const rssDelta = memAfter.rss - memBefore.rss;
+
+      console.log(`[FFmpeg Burn Metrics]
+  Duration: ${duration}ms
+  Exit Code: ${code}
+  Memory Before: ${formatMemory(memBefore)}
+  Memory After: ${formatMemory(memAfter)}
+  Delta RSS: ${formatBytes(rssDelta)}
+      `);
+
       if (code === 0) {
         resolve(outputPath);
       } else {
+        const errorSummary = stderrLines.join('\n');
         console.error(`FFmpeg subtitle burn process exited with code ${code}`);
-        console.error(`FFmpeg burn error details:\n${stderrData}`);
-        reject(new Error(`FFmpeg subtitle burning failed. Details: ${stderrData.slice(-500)}`));
+        console.error(`FFmpeg burn error details:\n${errorSummary}`);
+        reject(new Error(`FFmpeg subtitle burning failed. Details: ${errorSummary.slice(-500)}`));
       }
     });
   });
