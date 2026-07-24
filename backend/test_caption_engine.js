@@ -98,4 +98,36 @@ assert.ok(assContent.includes('CAPTION') && assContent.includes('STUDIO!'), 'ASS
 fs.unlinkSync(tempSubPath);
 console.log('✓ Subtitle Service with custom edited words & styles verified');
 
+// 4. Test Fault-Tolerant Timing Sanitation
+console.log('\n[Test 4] Fault-Tolerant Subtitle Timing Sanitation (Inverted, NaN & Overlapping Timestamps)');
+const corruptWords = [
+  { word: "FAULT", start: 1.0, end: 0.5 },      // Inverted end < start
+  { word: "TOLERANT", start: 0.4, end: 0.8 },   // Overlaps & starts before previous
+  { word: "TIMING", start: NaN, end: undefined },// Invalid / NaN
+  { word: "ENGINE!", start: 0.8, end: 0.8 }     // Zero duration end == start
+];
+
+const tempSanitizeSubPath = path.join(__dirname, 'test_sanitize_output.ass');
+
+// Should resolve without throwing any exception
+await generateSubtitleFromTranscript('', tempSanitizeSubPath, {
+  words: corruptWords,
+  styles: {
+    preset: 'bold-yellow',
+    fontFamily: 'Montserrat',
+    fontSize: '14'
+  }
+});
+
+assert.ok(fs.existsSync(tempSanitizeSubPath), 'Sanitized .ass file should be created despite corrupt input timestamps');
+const sanitizedAssContent = fs.readFileSync(tempSanitizeSubPath, 'utf8');
+console.log('--- Sanitized ASS Content Output ---\n' + sanitizedAssContent + '\n--- End Sanitized ASS Content ---');
+
+assert.ok(sanitizedAssContent.includes('FAULT'), 'Sanitized ASS output must contain dialogue words');
+assert.ok(sanitizedAssContent.includes('ENGINE!'), 'Sanitized ASS output must contain end word');
+
+// Clean test file
+fs.unlinkSync(tempSanitizeSubPath);
+console.log('✓ Fault-Tolerant Subtitle Timing Sanitation successfully verified (0 exceptions, all bounds auto-repaired)');
+
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');

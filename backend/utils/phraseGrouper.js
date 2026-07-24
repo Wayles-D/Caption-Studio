@@ -95,32 +95,135 @@ export function groupWordsToPhrases(whisperData) {
       i === words.length - 1
     ) {
       const phraseText = currentPhraseWords.map(item => item.text.trim()).join(' ');
+
+      // Compute phrase start as minimum word start and end as maximum word end
+      const wordStarts = currentPhraseWords.map(w => w.start).filter(s => typeof s === 'number' && !isNaN(s));
+      const wordEnds = currentPhraseWords.map(w => w.end).filter(e => typeof e === 'number' && !isNaN(e));
+
+      const calcStart = wordStarts.length > 0 ? Math.min(...wordStarts) : currentPhraseWords[0].start;
+      const calcEnd = wordEnds.length > 0 ? Math.max(...wordEnds) : currentPhraseWords[currentPhraseWords.length - 1].end;
+
       phrases.push({
         text: phraseText,
-        start: currentPhraseWords[0].start,
-        end: currentPhraseWords[currentPhraseWords.length - 1].end,
+        start: calcStart,
+        end: calcEnd,
         words: [...currentPhraseWords]
       });
       currentPhraseWords = [];
     }
   }
 
-  // Validate phrase list: Enforce sequential timestamps and eliminate any overlaps
-  for (let i = 0; i < phrases.length; i++) {
-    const current = phrases[i];
+  // Sanitize all phrases to guarantee strictly chronological, non-overlapping, and positive-duration events
+  return sanitizePhraseTimings(phrases);
+}
 
-    if (current.end <= current.start) {
-      current.end = current.start + 0.30; // Enforce minimum duration
+/**
+ * Sanitizes phrase and word timestamps to ensure fault tolerance.
+ * Automatically repairs inverted, NaN, overlapping, or zero-duration phrase bounds without throwing errors.
+ * 
+ * @param {Array<object>} phrases - Array of phrase objects.
+ * @param {number} minDuration - Minimum phrase duration in seconds (default: 0.15s = 150ms).
+ * @returns {Array<object>} Sanitized phrase objects.
+ */
+export function sanitizePhraseTimings(phrases, minDuration = 0.15) {
+  if (!Array.isArray(phrases) || phrases.length === 0) {
+    return [];
+  }
+
+  let prevEnd = 0;
+
+  phrases.forEach((phrase, idx) => {
+    const origStart = phrase.start;
+    const origEnd = phrase.end;
+    let repaired = false;
+    const reasons = [];
+
+    // 1. Sanitize base start / end numerical validity
+    let start = typeof phrase.start === 'number' && !isNaN(phrase.start) && phrase.start >= 0 ? phrase.start : prevEnd;
+    let end = typeof phrase.end === 'number' && !isNaN(phrase.end) ? phrase.end : start + minDuration;
+
+    if (start !== origStart || end !== origEnd) {
+      repaired = true;
+      reasons.push(`Non-numerical or negative bounds (${origStart}, ${origEnd})`);
     }
 
-    // Force strict sequential ordering: preceding caption must end before or at the start of next caption
-    if (i < phrases.length - 1) {
-      const next = phrases[i + 1];
-      if (current.end > next.start) {
-        current.end = next.start;
+    // 2. Compute minimum start and maximum end from inner words array
+    if (Array.isArray(phrase.words) && phrase.words.length > 0) {
+      const validWordStarts = phrase.words.map(w => w.start).filter(s => typeof s === 'number' && !isNaN(s));
+      const validWordEnds = phrase.words.map(w => w.end).filter(e => typeof e === 'number' && !isNaN(e));
+
+      if (validWordStarts.length > 0) {
+        const minWordStart = Math.min(...validWordStarts);
+        if (minWordStart < start) {
+          repaired = true;
+          reasons.push(`Adjusted start to minimum word start (${minWordStart.toFixed(3)}s)`);
+          start = minWordStart;
+        }
+      }
+      if (validWordEnds.length > 0) {
+        const maxWordEnd = Math.max(...validWordEnds);
+        if (maxWordEnd > end) {
+          repaired = true;
+          reasons.push(`Adjusted end to maximum word end (${maxWordEnd.toFixed(3)}s)`);
+          end = maxWordEnd;
+        }
       }
     }
-  }
+
+    // 3. Prevent overlapping with preceding phrase
+    if (idx > 0 && start < prevEnd) {
+      repaired = true;
+      reasons.push(`Overlapped with previous phrase end (${prevEnd.toFixed(3)}s); start shifted forward`);
+      start = prevEnd;
+    }
+
+    // 4. Auto-extend end if end <= start
+    if (end <= start) {
+      repaired = true;
+      const calcNewEnd = start + minDuration;
+      reasons.push(`End time (${end.toFixed(3)}s) <= start time (${start.toFixed(3)}s); auto-extended to ${calcNewEnd.toFixed(3)}s`);
+      end = calcNewEnd;
+    }
+
+    // Assign sanitized bounds
+    phrase.start = start;
+    phrase.end = end;
+    prevEnd = end;
+
+    // 5. Sanitize internal word timestamps to stay within phrase bounds and prevent negative karaoke durations
+    if (Array.isArray(phrase.words) && phrase.words.length > 0) {
+      let wordCursor = start;
+      const totalWords = phrase.words.length;
+      const totalDur = Math.max(minDuration, end - start);
+      const defaultWordDur = totalDur / totalWords;
+
+      phrase.words.forEach((w) => {
+        let wStart = typeof w.start === 'number' && !isNaN(w.start) ? w.start : wordCursor;
+        let wEnd = typeof w.end === 'number' && !isNaN(w.end) ? w.end : wStart + defaultWordDur;
+
+        // Clamp word to phrase bounds
+        if (wStart < wordCursor) wStart = wordCursor;
+        if (wStart >= end) wStart = Math.max(start, end - 0.05);
+
+        if (wEnd <= wStart) wEnd = wStart + 0.05;
+        if (wEnd > end) wEnd = end;
+
+        w.start = wStart;
+        w.end = wEnd;
+        wordCursor = wEnd;
+      });
+    }
+
+    // Log detailed warning whenever a timing repair is performed
+    if (repaired) {
+      console.warn(
+        `[SubtitleSanitizer] WARNING: Repaired timeline bounds for phrase "${phrase.text}" (Index ${idx}): ` +
+        `original [${typeof origStart === 'number' ? origStart.toFixed(3) : origStart}s, ${typeof origEnd === 'number' ? origEnd.toFixed(3) : origEnd}s] -> ` +
+        `corrected [${start.toFixed(3)}s, ${end.toFixed(3)}s]. Repair Reasons: ${reasons.join('; ')}`
+      );
+    }
+  });
 
   return phrases;
 }
+

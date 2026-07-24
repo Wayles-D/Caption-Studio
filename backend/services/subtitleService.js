@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
+import { groupWordsToPhrases, sanitizePhraseTimings } from '../utils/phraseGrouper.js';
 import { generateASSHeader, generateASSDialogueLine, resolveASSStyle } from '../utils/assWriter.js';
 
 /**
@@ -34,11 +34,14 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
   }
 
   // 1. Group individual word timings to cohesive, balanced phrases
-  const phrases = groupWordsToPhrases(whisperData);
+  const rawPhrases = groupWordsToPhrases(whisperData);
 
-  if (phrases.length === 0) {
+  if (rawPhrases.length === 0) {
     throw new Error('Incomplete transcription: The transcript contains no words or segments to subtitle.');
   }
+
+  // Sanitize phrases for fault-tolerant timeline safety
+  const phrases = sanitizePhraseTimings(rawPhrases);
 
   // 2. Resolve the ASS style settings and generate header
   const resolvedStyle = resolveASSStyle(options.styles || {});
@@ -48,16 +51,7 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
   const dialogueLines = [];
   const textCase = options.styles?.textCase || 'uppercase';
   
-  phrases.forEach((phrase, idx) => {
-    // Structural validations: sequential validation
-    if (typeof phrase.start !== 'number' || typeof phrase.end !== 'number') {
-      throw new Error(`Malformed timestamps in phrased item index ${idx}.`);
-    }
-
-    if (phrase.end <= phrase.start) {
-      throw new Error(`Invalid timeline bounds: Event ends before starting (Start: ${phrase.start}s, End: ${phrase.end}s) at phrase: "${phrase.text}"`);
-    }
-
+  phrases.forEach((phrase) => {
     // Generate standard dialogue string with textCase
     const dialogueLine = generateASSDialogueLine(phrase, textCase);
     dialogueLines.push(dialogueLine);
