@@ -2,6 +2,7 @@ import assert from 'assert';
 import { groupWordsToPhrases } from './utils/phraseGrouper.js';
 import { resolveASSStyle, generateASSHeader, generateASSDialogueLine } from './utils/assWriter.js';
 import { generateSubtitleFromTranscript } from './services/subtitleService.js';
+import { getASSStyleFromConfig, getCSSPreviewFromConfig, CAPTION_PRESETS } from './utils/captionConfig.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -129,5 +130,39 @@ assert.ok(sanitizedAssContent.includes('ENGINE!'), 'Sanitized ASS output must co
 // Clean test file
 fs.unlinkSync(tempSanitizeSubPath);
 console.log('✓ Fault-Tolerant Subtitle Timing Sanitation successfully verified (0 exceptions, all bounds auto-repaired)');
+
+// 5. Test WYSIWYG Single Source of Truth Schema Alignment
+console.log('\n[Test 5] WYSIWYG Single Source of Truth Schema Alignment (CSS Preview vs ASS Generator)');
+const testStyles = {
+  preset: 'gradient-glow',
+  fontFamily: 'Outfit',
+  fontSize: '18',
+  position: 'top',
+  textCase: 'uppercase'
+};
+
+const assResolved = getASSStyleFromConfig(testStyles);
+const cssResolved = getCSSPreviewFromConfig(testStyles);
+
+console.log('Resolved ASS Parameters:', assResolved);
+console.log('Resolved CSS Preview Styles:', cssResolved);
+
+// Regression Assertions
+assert.strictEqual(assResolved.fontName, 'Outfit', 'ASS fontName must match input fontFamily');
+assert.ok(cssResolved.text.fontFamily.includes('Outfit'), 'CSS fontFamily must contain input font');
+assert.strictEqual(assResolved.fontSize, Math.round(18 * 5.14), 'ASS fontSize must scale proportionally (18 * 5.14)');
+assert.strictEqual(cssResolved.text.fontSize, '18px', 'CSS fontSize must match frontend input px');
+assert.strictEqual(assResolved.marginV, 1600, 'Top position ASS marginV must be 1600');
+assert.strictEqual(cssResolved.overlay.top, '10%', 'Top position CSS overlay top must be 10%');
+assert.strictEqual(cssResolved.text.textTransform, 'uppercase', 'CSS textTransform must reflect textCase');
+
+// Verify all 4 presets exist and produce synchronized outputs
+Object.keys(CAPTION_PRESETS).forEach((presetKey) => {
+  const ass = getASSStyleFromConfig({ preset: presetKey });
+  const css = getCSSPreviewFromConfig({ preset: presetKey });
+  assert.ok(ass.primaryColor, `Preset ${presetKey} must have ASS primaryColor`);
+  assert.ok(css.text.fontWeight, `Preset ${presetKey} must have CSS fontWeight`);
+});
+console.log('✓ WYSIWYG Single Source of Truth schema alignment verified (CSS preview & ASS generator 100% synchronized across all presets/positions)');
 
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');

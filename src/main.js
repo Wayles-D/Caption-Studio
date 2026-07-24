@@ -1,3 +1,5 @@
+import { getCSSPreviewFromConfig } from '../backend/utils/captionConfig.js';
+
 // Caption Studio Main Core Javascript Logic
 
 // ==========================================================================
@@ -109,19 +111,38 @@ function showToast(message) {
   }, 2500);
 }
 
-// Binds controls on the settings panel sidebar
+// Dynamic Google Font Loader for WYSIWYG Preview
+const loadedFonts = new Set();
+function loadGoogleFont(fontName) {
+  if (!fontName || loadedFonts.has(fontName)) return;
+  loadedFonts.add(fontName);
+
+  const cleanFont = fontName.replace(/['"]/g, '').split(',')[0].trim();
+  const fontUrl = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(cleanFont).replace(/%20/g, '+')}:wght@400;600;700;800;900&display=swap`;
+
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = fontUrl;
+  document.head.appendChild(link);
+}
+
+// Binds controls on the settings panel sidebar with exact WYSIWYG CSS rendering
 function applySettingsState() {
-  // Update local presets style class
-  subtitlesOverlay.className = "burned-subtitles-overlay";
-  subtitlesOverlay.classList.add(`pos-${appState.position}`);
-  
-  captionsText.className = "subtitles-text";
-  captionsText.classList.add(`preset-${appState.currentPreset}`);
-  
-  // Style properties
-  subtitlesOverlay.style.fontFamily = appState.fontFamily;
-  subtitlesOverlay.style.fontSize = `${appState.fontSize}px`;
-  captionsText.style.textTransform = appState.textCase;
+  loadGoogleFont(appState.fontFamily);
+
+  const cssConfig = getCSSPreviewFromConfig({
+    preset: appState.currentPreset,
+    fontFamily: appState.fontFamily,
+    fontSize: appState.fontSize,
+    textCase: appState.textCase,
+    position: appState.position
+  });
+
+  // Apply Overlay Styles
+  Object.assign(subtitlesOverlay.style, cssConfig.overlay);
+
+  // Apply Subtitle Text Styles
+  Object.assign(captionsText.style, cssConfig.text);
 }
 
 // ==========================================================================

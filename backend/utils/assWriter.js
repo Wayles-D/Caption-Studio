@@ -1,3 +1,5 @@
+import { getASSStyleFromConfig } from './captionConfig.js';
+
 /**
  * Formats a duration in seconds to the standard ASS timestamp format: H:MM:SS.cs
  * e.g., 0:02:14.35 (where cs is centiseconds, 1cs = 10ms)
@@ -108,90 +110,11 @@ export function generateASSDialogueLine(phrase, textCase = 'uppercase') {
 
 /**
  * Helper to translate frontend styles choices into raw ASS style configurations.
+ * Delegated to the shared single source of truth captionConfig schema.
  * 
  * @param {object} params - Input style settings from the client.
  * @returns {object} The resolved ASS Style parameters.
  */
 export function resolveASSStyle(params = {}) {
-  // 1. Sanitize Font Name
-  let fontName = 'Montserrat SemiBold';
-  if (params.fontFamily) {
-    fontName = params.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
-  }
-
-  // 2. Scale Font Size (frontend range: 11 - 22, map it to ASS range: 55 - 110)
-  const feSize = parseInt(params.fontSize || '14', 10);
-  const fontSize = Math.round(feSize * 5.14);
-
-  // 3. Resolve position to MarginV
-  let marginV = 300;
-  if (params.position === 'top') {
-    marginV = 1600;
-  } else if (params.position === 'center') {
-    marginV = 960;
-  }
-
-  // 4. Map Preset Styles
-  const preset = params.preset || 'bold-yellow';
-  
-  let primaryColor = '&H0000FFFF';   // Yellow
-  let secondaryColor = '&H00FFFFFF'; // White (highlight: active yellow, inactive white)
-  let outlineColor = '&H00000000';   // Black
-  let backColor = '&H00000000';
-  let borderStyle = 1;
-  let outlineSize = 5;
-  let shadowSize = 0;
-
-  switch (preset) {
-    case 'bold-yellow':
-      // Yellow active highlight, white inactive base, thick black outline
-      primaryColor = '&H0000FFFF';
-      secondaryColor = '&H00FFFFFF';
-      outlineColor = '&H00000000';
-      outlineSize = 6;
-      break;
-
-    case 'caps-white':
-      // White active highlight, transparent inactive base (appears progressive)
-      primaryColor = '&H00FFFFFF';
-      secondaryColor = '&HFFFFFFFF'; // Fully transparent
-      outlineColor = '&H00000000';
-      outlineSize = 6;
-      break;
-
-    case 'bg-black':
-      // Black background box highlight
-      primaryColor = '&H00FFFFFF';
-      secondaryColor = '&HFFFFFFFF';
-      outlineColor = '&H00000000';
-      backColor = '&H90000000'; // Opaque black background box
-      borderStyle = 3;
-      outlineSize = 0;
-      break;
-
-    case 'gradient-glow':
-      // Cyan highlight, transparent inactive, purple outline and drop shadow
-      primaryColor = '&H00FFFF00'; // Cyan
-      secondaryColor = '&HFFFFFFFF'; // transparent
-      outlineColor = '&H003F003F'; // Dark purple
-      backColor = '&H00FF00FF'; // Purple glow
-      outlineSize = 7;
-      shadowSize = 3;
-      break;
-  }
-
-  return {
-    fontName,
-    fontSize,
-    primaryColor,
-    secondaryColor,
-    outlineColor,
-    backColor,
-    bold: -1,
-    outlineSize,
-    shadowSize,
-    alignment: 2,
-    marginV,
-    borderStyle
-  };
+  return getASSStyleFromConfig(params);
 }
