@@ -23,7 +23,9 @@ export const CAPTION_PRESETS = {
     cssTextShadow: '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0px 3px 4px rgba(0,0,0,0.8)',
     cssBackground: 'transparent',
     cssPadding: '0',
-    cssBorderRadius: '0'
+    cssBorderRadius: '0',
+    cssHighlightColor: '#FEF08A',    // Active Yellow Highlight
+    cssInactiveColor: '#FFFFFF'     // Inactive White
   },
   'caps-white': {
     name: 'Caps White',
@@ -44,7 +46,9 @@ export const CAPTION_PRESETS = {
     cssTextShadow: '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0px 2px 3px rgba(0,0,0,0.7)',
     cssBackground: 'transparent',
     cssPadding: '0',
-    cssBorderRadius: '0'
+    cssBorderRadius: '0',
+    cssHighlightColor: '#FFFFFF',    // Active White
+    cssInactiveColor: 'rgba(255, 255, 255, 0.65)' // Soft White
   },
   'bg-black': {
     name: 'Boxed Black',
@@ -65,7 +69,9 @@ export const CAPTION_PRESETS = {
     cssTextShadow: '0 4px 6px rgba(0,0,0,0.2)',
     cssBackground: 'rgba(0, 0, 0, 0.75)',
     cssPadding: '6px 12px',
-    cssBorderRadius: '6px'
+    cssBorderRadius: '6px',
+    cssHighlightColor: '#FEF08A',    // Active Yellow Boxed Text
+    cssInactiveColor: '#FFFFFF'     // White Inactive
   },
   'gradient-glow': {
     name: 'Gradient Glow',
@@ -84,11 +90,11 @@ export const CAPTION_PRESETS = {
     borderStyle: 1,
     cssTextStroke: 'none',
     cssTextShadow: '0px 0px 10px rgba(129, 140, 248, 0.8), -2px -2px 0 #3f003f, 2px -2px 0 #3f003f, -2px 2px 0 #3f003f, 2px 2px 0 #3f003f',
-    cssBackground: 'linear-gradient(to right, #38bdf8, #818cf8)',
-    cssWebkitBackgroundClip: 'text',
-    cssWebkitTextFillColor: 'transparent',
+    cssBackground: 'transparent',
     cssPadding: '0',
-    cssBorderRadius: '0'
+    cssBorderRadius: '0',
+    cssHighlightColor: '#38BDF8',    // Active Cyan Glow
+    cssInactiveColor: '#818CF8'     // Purple-Blue Inactive
   }
 };
 
@@ -154,7 +160,7 @@ export function getASSStyleFromConfig(params = {}) {
  * Returns matching CSS preview rules for frontend rendering.
  * 
  * @param {object} params - Options state from client.
- * @returns {object} Object with overlay and text CSS style maps.
+ * @returns {object} Object with overlay, text, and highlight colors.
  */
 export function getCSSPreviewFromConfig(params = {}) {
   const fontName = params.fontFamily ? params.fontFamily.replace(/['"]/g, '').split(',')[0].trim() : 'Montserrat';
@@ -184,10 +190,8 @@ export function getCSSPreviewFromConfig(params = {}) {
       fontFamily: `'${fontName}', sans-serif`,
       fontSize: `${feSize}px`,
       fontWeight: presetConfig.fontWeight,
-      color: presetConfig.cssWebkitTextFillColor === 'transparent' ? 'transparent' : presetConfig.primaryColorHex,
+      color: presetConfig.primaryColorHex,
       background: presetConfig.cssBackground,
-      webkitBackgroundClip: presetConfig.cssWebkitBackgroundClip || 'border-box',
-      webkitTextFillColor: presetConfig.cssWebkitTextFillColor || 'currentColor',
       textShadow: presetConfig.cssTextShadow,
       webkitTextStroke: presetConfig.cssTextStroke,
       padding: presetConfig.cssPadding,
@@ -195,6 +199,8 @@ export function getCSSPreviewFromConfig(params = {}) {
       textTransform,
       lineHeight: '1.25',
       display: 'inline-block'
-    }
+    },
+    highlightColor: presetConfig.cssHighlightColor,
+    inactiveColor: presetConfig.cssInactiveColor
   };
 }

@@ -340,9 +340,10 @@ function startProcessingTimeline() {
           appState.subtitles = MOCK_SUBTITLES;
         }
 
-        // Store word-level data and baseName for transcript editing
+        // Store word-level data, phrases, and baseName for single source of truth captioning
         appState.baseName = result.baseName || null;
         appState.words = result.words || [];
+        appState.phrases = result.phrases || [];
 
         // Keep backend subtitle output URL and rendered video path
         appState.subtitlePath = result.subtitlePath;
@@ -417,26 +418,47 @@ function completeProcessingTimeline() {
 }
 
 // ==========================================================================
-// 6. Subtitles Sync Logic
+// 6. Subtitles Sync Logic (Word-Level Single Source of Truth Preview)
 // ==========================================================================
 function syncVideoSubtitles() {
   const currentTime = previewVideo.currentTime;
-  let activeCaption = "";
   
-  // Render real dynamic subtitles if present, otherwise fall back to MOCK
-  const currentSubtitles = (appState.subtitles && appState.subtitles.length > 0)
-    ? appState.subtitles
-    : MOCK_SUBTITLES;
+  // Fetch current style configuration highlight colors
+  const cssConfig = getCSSPreviewFromConfig({
+    preset: appState.currentPreset,
+    fontFamily: appState.fontFamily,
+    fontSize: appState.fontSize,
+    textCase: appState.textCase,
+    position: appState.position
+  });
 
-  for (let i = 0; i < currentSubtitles.length; i++) {
-    const sub = currentSubtitles[i];
-    if (currentTime >= sub.start && currentTime <= sub.end) {
-      activeCaption = sub.text;
-      break;
-    }
+  const activeHighlight = cssConfig.highlightColor || '#FEF08A';
+  const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
+
+  // Search in appState.phrases returned by phraseGrouper backend
+  let activePhrase = null;
+
+  if (appState.phrases && appState.phrases.length > 0) {
+    activePhrase = appState.phrases.find(p => currentTime >= p.start && currentTime <= p.end);
   }
 
-  captionsText.textContent = activeCaption;
+  if (!activePhrase) {
+    captionsText.innerHTML = "";
+    return;
+  }
+
+  // Render active phrase with word-by-word span highlighting matching ASS \kf tags
+  const isUppercase = appState.textCase === 'uppercase';
+  
+  const spanHtml = activePhrase.words.map((w, idx) => {
+    const isWordActive = currentTime >= w.start && currentTime <= w.end;
+    const wordText = isUppercase ? (w.word || w.text || '').toUpperCase() : (w.word || w.text || '');
+    const color = isWordActive ? activeHighlight : inactiveColor;
+    const space = idx > 0 ? ' ' : '';
+    return `${space}<span style="color: ${color}; transition: color 0.1s ease;">${wordText}</span>`;
+  }).join('');
+
+  captionsText.innerHTML = spanHtml;
 }
 
 // ==========================================================================
@@ -715,8 +737,11 @@ async function triggerRegeneration() {
     const result = await response.json();
     console.log('Regeneration result:', result);
 
-    // Update the rendered video path
+    // Update the rendered video path and phrases
     appState.renderedVideoPath = result.renderedVideoPath;
+    if (result.phrases) {
+      appState.phrases = result.phrases;
+    }
 
     // Update local words state with edits
     appState.words = editedWords;

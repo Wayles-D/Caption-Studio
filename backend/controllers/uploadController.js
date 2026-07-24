@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { extractAudio, burnSubtitles } from '../utils/ffmpeg.js';
 import { transcribeAudio } from '../services/whisperService.js';
 import { generateSubtitleFromTranscript } from '../services/subtitleService.js';
+import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -144,20 +145,10 @@ export async function uploadAndExtractAudio(req, res, next) {
     const relativeSubtitlePath = path.relative(backendRoot, subtitlePath);
     const relativeRenderedVideoPath = path.relative(backendRoot, renderedVideoPath);
 
-    // Extract word-level data for the frontend transcript editor
-    let words = [];
-    if (transcriptionJSON.words && Array.isArray(transcriptionJSON.words)) {
-      words = transcriptionJSON.words;
-    } else if (transcriptionJSON.segments) {
-      // Flatten word timestamps from segments
-      for (const seg of transcriptionJSON.segments) {
-        if (seg.words && Array.isArray(seg.words)) {
-          words.push(...seg.words);
-        }
-      }
-    }
+    // Generate phrases from words for single source of truth captioning
+    const phrases = groupWordsToPhrases(transcriptionJSON);
 
-    // Return the required success payload including word-level data for editing
+    // Return the required success payload including word-level data and phrases for editing/preview
     return res.status(200).json({
       success: true,
       message: 'Video processed, transcribing completed, subtitles compiled and burned successfully.',
@@ -168,7 +159,8 @@ export async function uploadAndExtractAudio(req, res, next) {
       subtitlePath: relativeSubtitlePath.replace(/\\/g, '/'),
       renderedVideoPath: relativeRenderedVideoPath.replace(/\\/g, '/'),
       transcription: transcriptionJSON,
-      words
+      words,
+      phrases
     });
 
   } catch (error) {
@@ -291,10 +283,14 @@ export async function regenerateCaptions(req, res, next) {
     const backendRoot = path.join(__dirname, '..');
     const relativeRenderedVideoPath = path.relative(backendRoot, renderedVideoPath).replace(/\\/g, '/');
 
+    // Generate updated phrases for the frontend single source of truth preview
+    const phrases = groupWordsToPhrases(editedTranscript);
+
     return res.status(200).json({
       success: true,
       message: 'Captions regenerated and video re-rendered successfully.',
-      renderedVideoPath: relativeRenderedVideoPath
+      renderedVideoPath: relativeRenderedVideoPath,
+      phrases
     });
 
   } catch (error) {
