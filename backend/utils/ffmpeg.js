@@ -114,9 +114,12 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {})
     // Use relative paths to avoid Windows colons (drive letters) and spaces in parent paths
     const relativeAssPath = path.relative(process.cwd(), assPath).replace(/\\/g, '/');
     
-    // Set up filter argument
-    // Use the ass filter. Wrap path in single quotes.
-    const assFilter = `ass='${relativeAssPath}'`;
+    // Resolve local fonts directory for libass font discovery
+    const fontsDir = path.join(path.dirname(assPath), '..', 'fonts');
+    const relativeFontsDir = path.relative(process.cwd(), fontsDir).replace(/\\/g, '/');
+
+    // Set up filter argument with fontsdir to point libass at our bundled font library
+    const assFilter = `ass='${relativeAssPath}':fontsdir='${relativeFontsDir}'`;
 
     // OPTIMIZED FFmpeg parameters:
     // -c:v libx264: Explicitly specify libx264 video encoder
@@ -139,7 +142,9 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {})
     const memBefore = process.memoryUsage();
     const startTime = Date.now();
 
-    const ffmpegProc = spawn(ffmpegPath, args);
+    // Spawn with inherited FONTCONFIG_FILE env so libass can find our fonts.conf
+    const spawnEnv = { ...process.env };
+    const ffmpegProc = spawn(ffmpegPath, args, { env: spawnEnv });
     if (options.onSpawn) {
       options.onSpawn(ffmpegProc);
     }

@@ -1,29 +1,36 @@
 import fs from 'fs';
 import path from 'path';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
-import { generateASSHeader, generateASSDialogueLine } from '../utils/assWriter.js';
+import { generateASSHeader, generateASSDialogueLine, resolveASSStyle } from '../utils/assWriter.js';
 
 /**
  * Service to orchestrate advanced subtitle (.ass) creation from raw Whisper transcript inputs.
- * Loads json, groups phrases, converts timings to ASS format, validates boundaries, and writes target output.
+ * Loads json or custom edited word arrays, groups phrases, resolves styling, and writes target output.
  * 
  * @param {string} transcriptPath - Absolute path to the saved Whisper JSON transcript.
  * @param {string} subtitlePath - Absolute path where the generated .ass file will be exported.
+ * @param {object} options - Optional styling parameters and custom edited word list.
  * @returns {Promise<string>} Resolves with the subtitlePath if successful.
  */
-export async function generateSubtitleFromTranscript(transcriptPath, subtitlePath) {
-  if (!fs.existsSync(transcriptPath)) {
-    throw new Error(`Transcript file not found at: ${transcriptPath}`);
-  }
-
-  console.log(`[SubtitleService] Generating subtitle file at ${subtitlePath} from transcript ${transcriptPath}`);
-
+export async function generateSubtitleFromTranscript(transcriptPath, subtitlePath, options = {}) {
   let whisperData;
-  try {
-    const rawContent = fs.readFileSync(transcriptPath, 'utf8');
-    whisperData = JSON.parse(rawContent);
-  } catch (err) {
-    throw new Error(`Corrupt JSON transcript: Failed to parse file content. Details: ${err.message}`);
+
+  if (options.words && Array.isArray(options.words)) {
+    console.log(`[SubtitleService] Generating subtitles from edited word list (${options.words.length} words)`);
+    whisperData = { words: options.words };
+  } else {
+    if (!fs.existsSync(transcriptPath)) {
+      throw new Error(`Transcript file not found at: ${transcriptPath}`);
+    }
+
+    console.log(`[SubtitleService] Generating subtitle file at ${subtitlePath} from transcript ${transcriptPath}`);
+
+    try {
+      const rawContent = fs.readFileSync(transcriptPath, 'utf8');
+      whisperData = JSON.parse(rawContent);
+    } catch (err) {
+      throw new Error(`Corrupt JSON transcript: Failed to parse file content. Details: ${err.message}`);
+    }
   }
 
   // 1. Group individual word timings to cohesive, balanced phrases
@@ -33,11 +40,13 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
     throw new Error('Incomplete transcription: The transcript contains no words or segments to subtitle.');
   }
 
-  // 2. Generate the ASS header containing resolution scaling and vertical styling directives
-  const assHeader = generateASSHeader();
+  // 2. Resolve the ASS style settings and generate header
+  const resolvedStyle = resolveASSStyle(options.styles || {});
+  const assHeader = generateASSHeader(resolvedStyle);
 
   // 3. Translate phrase objects into formatted Dialogue entries
   const dialogueLines = [];
+  const textCase = options.styles?.textCase || 'uppercase';
   
   phrases.forEach((phrase, idx) => {
     // Structural validations: sequential validation
@@ -49,8 +58,8 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
       throw new Error(`Invalid timeline bounds: Event ends before starting (Start: ${phrase.start}s, End: ${phrase.end}s) at phrase: "${phrase.text}"`);
     }
 
-    // Generate standard dialogue string
-    const dialogueLine = generateASSDialogueLine(phrase);
+    // Generate standard dialogue string with textCase
+    const dialogueLine = generateASSDialogueLine(phrase, textCase);
     dialogueLines.push(dialogueLine);
   });
 

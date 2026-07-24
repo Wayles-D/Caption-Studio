@@ -7,8 +7,8 @@
  * @returns {Array<object>} Returns an array of phrase objects with text, start, end, and word items.
  */
 export function groupWordsToPhrases(whisperData) {
-  if (!whisperData || (!whisperData.text && !whisperData.segments)) {
-    throw new Error('Invalid Whisper response format: missing transcript or segments.');
+  if (!whisperData || (!whisperData.text && !whisperData.segments && !Array.isArray(whisperData.words))) {
+    throw new Error('Invalid Whisper response format: missing transcript, segments, or words.');
   }
 
   let words = [];
@@ -69,22 +69,22 @@ export function groupWordsToPhrases(whisperData) {
     // Check for terminal punctuation at the end of the word: . , ! ? ; : -
     const hasTerminalPunctuation = /[.,!?;:\-–—]$/.test(trimmedText);
 
-    // Check for silent pauses between words (typically >0.4 seconds)
+    // Check for silent pauses between words (typically >0.25 seconds for creator rhythm)
     let hasSignificantPause = false;
     if (i < words.length - 1) {
       const nextWord = words[i + 1];
       const nextStart = typeof nextWord.start === 'number' ? nextWord.start : 0;
-      if (nextStart - end > 0.40) {
+      if (nextStart - end > 0.25) {
         hasSignificantPause = true;
       }
     }
 
-    // Words limitation rule: 2-5 words per subtitle
-    const limitReached = currentPhraseWords.length >= 5;
+    // Tight words limitation rule: Max 3 words per phrase for creator visual style
+    const limitReached = currentPhraseWords.length >= 3;
 
-    // Character length rule: Target ~38 characters limit per phrase
+    // Character length rule: Target ~24 characters limit per phrase for mobile screen width
     const currentTextLength = currentPhraseWords.map(item => item.text.trim()).join(' ').length;
-    const charLimitExceeded = currentTextLength >= 38;
+    const charLimitExceeded = currentTextLength >= 24;
 
     // Trigger phrase split if boundary conditions are satisfied
     if (
@@ -105,10 +105,20 @@ export function groupWordsToPhrases(whisperData) {
     }
   }
 
-  // Validate phrase list: Guarantee end > start and enforce sequential timestamps
-  for (const phrase of phrases) {
-    if (phrase.end <= phrase.start) {
-      phrase.end = phrase.start + 0.50; // offset slightly
+  // Validate phrase list: Enforce sequential timestamps and eliminate any overlaps
+  for (let i = 0; i < phrases.length; i++) {
+    const current = phrases[i];
+
+    if (current.end <= current.start) {
+      current.end = current.start + 0.30; // Enforce minimum duration
+    }
+
+    // Force strict sequential ordering: preceding caption must end before or at the start of next caption
+    if (i < phrases.length - 1) {
+      const next = phrases[i + 1];
+      if (current.end > next.start) {
+        current.end = next.start;
+      }
     }
   }
 

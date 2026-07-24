@@ -22,10 +22,12 @@ let appState = {
   uploadedFile: null,
   videoDuration: 0,
   currentPreset: "bold-yellow",
-  fontFamily: "'Geist', sans-serif",
+  fontFamily: "Montserrat",
   fontSize: 14,
   textCase: "uppercase",
-  position: "bottom"
+  position: "bottom",
+  baseName: null,
+  words: []
 };
 
 // ==========================================================================
@@ -81,6 +83,12 @@ const textCaseRadios = document.getElementsByName("text-case");
 const positionRadios = document.getElementsByName("sub-pos");
 const appToast = document.getElementById("app-toast");
 
+// Transcript Editor Elements
+const transcriptCard = document.getElementById("transcript-card");
+const transcriptWordsContainer = document.getElementById("transcript-words-container");
+const transcriptWordCount = document.getElementById("transcript-word-count");
+const btnApplyRender = document.getElementById("btn-apply-render");
+
 // ==========================================================================
 // 3. Application Initialization & Subtitle Settings Binding
 // ==========================================================================
@@ -88,6 +96,7 @@ function init() {
   bindUploadEvents();
   bindSidebarEvents();
   bindInteractionEvents();
+  bindTranscriptEvents();
   applySettingsState();
 }
 
@@ -310,6 +319,10 @@ function startProcessingTimeline() {
           appState.subtitles = MOCK_SUBTITLES;
         }
 
+        // Store word-level data and baseName for transcript editing
+        appState.baseName = result.baseName || null;
+        appState.words = result.words || [];
+
         // Keep backend subtitle output URL and rendered video path
         appState.subtitlePath = result.subtitlePath;
         appState.renderedVideoPath = result.renderedVideoPath;
@@ -375,6 +388,11 @@ function completeProcessingTimeline() {
   // Enable controls
   actionsPanel.classList.remove("disabled");
   showToast("Subtitles created successfully!");
+
+  // Render editable transcript if words are available
+  if (appState.words && appState.words.length > 0) {
+    renderTranscriptEditor();
+  }
 }
 
 // ==========================================================================
@@ -452,6 +470,8 @@ function resetToLaunchApp() {
 
   appState.isLoaded = false;
   appState.uploadedFile = null;
+  appState.baseName = null;
+  appState.words = [];
 
   // Toggle screens back to empty state
   stateVideo.classList.remove("active");
@@ -460,6 +480,10 @@ function resetToLaunchApp() {
 
   actionsPanel.classList.add("disabled");
   resetTimelineComponents();
+  
+  // Hide transcript card
+  transcriptCard.style.display = "none";
+  transcriptWordsContainer.innerHTML = "";
   
   // Clear file input picker
   filePicker.value = "";
@@ -567,6 +591,138 @@ function openDrawer(isOpen) {
   } else {
     settingsSidebar.classList.remove("open");
     overlayBackdrop.classList.remove("open");
+  }
+}
+
+// ==========================================================================
+// 9. Transcript Editor Logic
+// ==========================================================================
+function bindTranscriptEvents() {
+  btnApplyRender.addEventListener("click", triggerRegeneration);
+}
+
+function renderTranscriptEditor() {
+  transcriptCard.style.display = "flex";
+  transcriptWordsContainer.innerHTML = "";
+  transcriptWordCount.textContent = `${appState.words.length} words`;
+
+  appState.words.forEach((wordObj, idx) => {
+    const chip = document.createElement("span");
+    chip.className = "word-chip";
+    chip.contentEditable = "true";
+    chip.spellcheck = false;
+    chip.textContent = wordObj.word || '';
+    chip.dataset.index = idx;
+    chip.dataset.originalText = wordObj.word || '';
+
+    // Mark edited words visually
+    chip.addEventListener("input", () => {
+      const currentText = chip.textContent.trim();
+      if (currentText !== chip.dataset.originalText) {
+        chip.classList.add("edited");
+      } else {
+        chip.classList.remove("edited");
+      }
+    });
+
+    // Prevent newlines inside the chip
+    chip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        chip.blur();
+      }
+    });
+
+    transcriptWordsContainer.appendChild(chip);
+  });
+}
+
+function collectEditedWords() {
+  const chips = transcriptWordsContainer.querySelectorAll(".word-chip");
+  return Array.from(chips).map((chip, idx) => {
+    const originalWord = appState.words[idx];
+    return {
+      word: chip.textContent.trim(),
+      start: originalWord.start,
+      end: originalWord.end
+    };
+  });
+}
+
+async function triggerRegeneration() {
+  if (!appState.baseName || appState.isProcessing) return;
+
+  const editedWords = collectEditedWords();
+  if (editedWords.length === 0) {
+    showToast("No words to render.");
+    return;
+  }
+
+  appState.isProcessing = true;
+  btnApplyRender.disabled = true;
+  showToast("Regenerating captions...");
+
+  // Show processing state on preview
+  stateVideo.classList.remove("active");
+  stateProcessing.classList.add("active");
+  previewProcessingTitle.textContent = "Re-rendering captions...";
+
+  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/upload/regenerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseName: appState.baseName,
+        words: editedWords,
+        styles: {
+          fontFamily: appState.fontFamily,
+          fontSize: appState.fontSize.toString(),
+          textCase: appState.textCase,
+          position: appState.position,
+          preset: appState.currentPreset
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.message || 'Regeneration failed');
+    }
+
+    const result = await response.json();
+    console.log('Regeneration result:', result);
+
+    // Update the rendered video path
+    appState.renderedVideoPath = result.renderedVideoPath;
+
+    // Update local words state with edits
+    appState.words = editedWords;
+
+    // Mark all chips as no longer edited (they are now the source of truth)
+    const chips = transcriptWordsContainer.querySelectorAll(".word-chip");
+    chips.forEach(chip => {
+      chip.dataset.originalText = chip.textContent.trim();
+      chip.classList.remove("edited");
+    });
+
+    // Show video state again
+    stateProcessing.classList.remove("active");
+    stateVideo.classList.add("active");
+
+    showToast("Captions regenerated successfully!");
+
+  } catch (err) {
+    console.error('Regeneration error:', err);
+    showToast(`Regeneration failed: ${err.message}`);
+
+    // Restore video preview
+    stateProcessing.classList.remove("active");
+    stateVideo.classList.add("active");
+  } finally {
+    appState.isProcessing = false;
+    btnApplyRender.disabled = false;
   }
 }
 

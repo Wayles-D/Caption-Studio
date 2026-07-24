@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'path';
 import { uploadVideo } from '../utils/multerConfig.js';
-import { uploadAndExtractAudio, workspaceCleanup } from '../controllers/uploadController.js';
+import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions } from '../controllers/uploadController.js';
 
 const router = Router();
 
@@ -39,4 +39,12 @@ router.post(
  */
 router.post('/cleanup', workspaceCleanup);
 
+/**
+ * @route   POST /api/upload/regenerate
+ * @desc    Regenerate ASS subtitles from edited words/styles and re-burn into video
+ * @access  Public
+ */
+router.post('/regenerate', regenerateCaptions);
+
 export default router;
+

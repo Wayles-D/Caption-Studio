@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import uploadRouter from './routes/uploadRoute.js';
 import { cleanupJobAssets, runPeriodicCleanup } from './utils/cleanup.js';
+import { downloadFonts } from './scripts/download-fonts.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -45,19 +46,25 @@ const uploadsDir = path.join(__dirname, 'uploads');
 const outputDir = path.join(__dirname, 'output');
 const transcriptsDir = path.join(__dirname, 'transcripts');
 const subtitlesDir = path.join(__dirname, 'subtitles');
+const fontsDir = path.join(__dirname, 'fonts');
 
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+[uploadsDir, outputDir, transcriptsDir, subtitlesDir, fontsDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// Dynamically rewrite fonts.conf with absolute fonts directory path and set env for libass
+const fontsConfTemplate = path.join(__dirname, 'fonts.conf');
+if (fs.existsSync(fontsConfTemplate)) {
+  let confContent = fs.readFileSync(fontsConfTemplate, 'utf8');
+  if (confContent.includes('FONTS_DIR_PLACEHOLDER')) {
+    confContent = confContent.replace('FONTS_DIR_PLACEHOLDER', fontsDir.replace(/\\/g, '/'));
+    fs.writeFileSync(fontsConfTemplate, confContent, 'utf8');
+    console.log(`[Fonts] Configured fonts.conf with directory: ${fontsDir}`);
+  }
 }
-if (!fs.existsSync(outputDir)) {
-  fs.mkdirSync(outputDir, { recursive: true });
-}
-if (!fs.existsSync(transcriptsDir)) {
-  fs.mkdirSync(transcriptsDir, { recursive: true });
-}
-if (!fs.existsSync(subtitlesDir)) {
-  fs.mkdirSync(subtitlesDir, { recursive: true });
-}
+process.env.FONTCONFIG_FILE = fontsConfTemplate;
 
 // Serve output directory static files (allows playing/downloading extracted audio)
 app.use('/output', express.static(outputDir));
@@ -123,12 +130,13 @@ app.use((err, req, res, next) => {
 
 // Bind server
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
+  app.listen(PORT, async () => {
     console.log(`===============================================`);
     console.log(`Caption Studio Backend running on port ${PORT}`);
     console.log(`Endpoints available:`);
     console.log(`  - Health Check:   GET  http://localhost:${PORT}/api/health`);
     console.log(`  - Video Upload:   POST http://localhost:${PORT}/api/upload`);
+    console.log(`  - Regenerate:     POST http://localhost:${PORT}/api/upload/regenerate`);
     console.log(`===============================================`);
     
     // Start cleanup daemon to run every 5 minutes (300,000 ms)
@@ -141,6 +149,13 @@ if (process.env.NODE_ENV !== 'test') {
     // Proactively run on startup to catch files left behind from previous crashes
     console.log('[Cleanup Daemon] Running startup cleanup check...');
     runPeriodicCleanup();
+
+    // Boot font library (download missing fonts in the background)
+    try {
+      await downloadFonts();
+    } catch (err) {
+      console.error('[Fonts] Font download failed (non-fatal):', err.message);
+    }
   });
 }
 

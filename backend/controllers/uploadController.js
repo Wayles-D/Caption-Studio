@@ -123,14 +123,8 @@ export async function uploadAndExtractAudio(req, res, next) {
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Completed (Duration: ${Date.now() - renderStart}ms)`);
     activeProc = null;
 
-    // Clean up large intermediate temporary files (video and WAV) immediately to save space
+    // Clean up large intermediate temporary files - only WAV audio (video is retained for re-rendering)
     if (process.env.KEEP_TEMP_FILES !== 'true') {
-      try {
-        if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
-        console.log(`[Pipeline] [${baseName}] Cleaned up temporary video file: ${videoFilename}`);
-      } catch (err) {
-        console.error(`[Pipeline] [${baseName}] Failed to delete video file:`, err.message);
-      }
       try {
         if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
         console.log(`[Pipeline] [${baseName}] Cleaned up temporary audio file: ${audioFilename}`);
@@ -150,16 +144,31 @@ export async function uploadAndExtractAudio(req, res, next) {
     const relativeSubtitlePath = path.relative(backendRoot, subtitlePath);
     const relativeRenderedVideoPath = path.relative(backendRoot, renderedVideoPath);
 
-    // Return the required success payload
+    // Extract word-level data for the frontend transcript editor
+    let words = [];
+    if (transcriptionJSON.words && Array.isArray(transcriptionJSON.words)) {
+      words = transcriptionJSON.words;
+    } else if (transcriptionJSON.segments) {
+      // Flatten word timestamps from segments
+      for (const seg of transcriptionJSON.segments) {
+        if (seg.words && Array.isArray(seg.words)) {
+          words.push(...seg.words);
+        }
+      }
+    }
+
+    // Return the required success payload including word-level data for editing
     return res.status(200).json({
       success: true,
       message: 'Video processed, transcribing completed, subtitles compiled and burned successfully.',
+      baseName,
       videoPath: relativeVideoPath.replace(/\\/g, '/'),
       audioPath: relativeAudioPath.replace(/\\/g, '/'),
       transcriptPath: relativeTranscriptPath.replace(/\\/g, '/'),
       subtitlePath: relativeSubtitlePath.replace(/\\/g, '/'),
       renderedVideoPath: relativeRenderedVideoPath.replace(/\\/g, '/'),
-      transcription: transcriptionJSON
+      transcription: transcriptionJSON,
+      words
     });
 
   } catch (error) {
@@ -196,5 +205,101 @@ export async function workspaceCleanup(req, res) {
   });
 }
 
+/**
+ * Handles transcript re-generation requests.
+ * Accepts edited words array and style parameters, regenerates ASS subtitles,
+ * and re-burns them into the original uploaded video without re-transcribing.
+ */
+export async function regenerateCaptions(req, res, next) {
+  const { baseName, words, styles } = req.body;
 
+  if (!baseName) {
+    return res.status(400).json({ success: false, message: 'baseName is required.' });
+  }
 
+  if (!words || !Array.isArray(words) || words.length === 0) {
+    return res.status(400).json({ success: false, message: 'words array is required and must not be empty.' });
+  }
+
+  const transcriptPath = path.join(transcriptsDir, `${baseName}.json`);
+  const subtitlePath = path.join(subtitlesDir, `${baseName}.ass`);
+  const renderedVideoPath = path.join(outputDir, `${baseName}_captioned.mp4`);
+
+  // We need the original uploaded video to re-burn subtitles.
+  // Check if it still exists in uploads, otherwise check if it was already cleaned up
+  const uploadsDir = path.join(__dirname, '../uploads');
+  let videoPath = path.join(uploadsDir, `${baseName}.mp4`);
+
+  // If the original upload was cleaned, we cannot re-render
+  if (!fs.existsSync(videoPath)) {
+    // Try to find it with other extensions
+    const extensions = ['.mov', '.webm'];
+    let found = false;
+    for (const ext of extensions) {
+      const altPath = path.join(uploadsDir, `${baseName}${ext}`);
+      if (fs.existsSync(altPath)) {
+        videoPath = altPath;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return res.status(400).json({
+        success: false,
+        message: 'Original video file not found. Please re-upload the video first.'
+      });
+    }
+  }
+
+  console.log(`[Regenerate] Starting caption regeneration for job: ${baseName}`);
+
+  let activeProc = null;
+  let isRequestFinished = false;
+
+  req.on('close', () => {
+    if (!isRequestFinished) {
+      console.log(`[Regenerate] [${baseName}] Client aborted regeneration request.`);
+      if (activeProc) {
+        try { activeProc.kill('SIGKILL'); } catch (e) {}
+      }
+    }
+  });
+
+  try {
+    // 1. Save the edited words back to the transcript file for persistence
+    const editedTranscript = { words };
+    fs.writeFileSync(transcriptPath, JSON.stringify(editedTranscript, null, 2));
+    console.log(`[Regenerate] [${baseName}] Updated transcript JSON with ${words.length} edited words.`);
+
+    // 2. Regenerate ASS subtitles from edited words with style parameters
+    console.log(`[Regenerate] [${baseName}] Stage: Subtitle Regeneration Started`);
+    const subtitleStart = Date.now();
+    await generateSubtitleFromTranscript(transcriptPath, subtitlePath, { words, styles });
+    console.log(`[Regenerate] [${baseName}] Stage: Subtitle Regeneration Completed (Duration: ${Date.now() - subtitleStart}ms)`);
+
+    // 3. Re-burn subtitles into original video
+    console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Started`);
+    const renderStart = Date.now();
+    await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
+      onSpawn: (proc) => { activeProc = proc; }
+    });
+    console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Completed (Duration: ${Date.now() - renderStart}ms)`);
+    activeProc = null;
+
+    isRequestFinished = true;
+
+    const backendRoot = path.join(__dirname, '..');
+    const relativeRenderedVideoPath = path.relative(backendRoot, renderedVideoPath).replace(/\\/g, '/');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Captions regenerated and video re-rendered successfully.',
+      renderedVideoPath: relativeRenderedVideoPath
+    });
+
+  } catch (error) {
+    isRequestFinished = true;
+    console.error(`[Regenerate] [${baseName}] Error: ${error.message}`);
+    next(error);
+  }
+}

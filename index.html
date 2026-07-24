@@ -161,6 +161,22 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Editable Transcript Card -->
+                <div class="card transcript-card" id="transcript-card" style="display: none;">
+                    <div class="card-header">
+                        <h3 class="card-title font-geist">Transcript Editor</h3>
+                        <span class="transcript-word-count" id="transcript-word-count">0 words</span>
+                    </div>
+                    <p class="transcript-hint">Click any word to edit. Timestamps are preserved automatically.</p>
+                    <div class="transcript-words-container" id="transcript-words-container"></div>
+                    <div class="transcript-actions">
+                        <button type="button" id="btn-apply-render" class="btn btn-accent btn-grow">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                            Apply & Render
+                        </button>
+                    </div>
+                </div>
             </section>
             
             <!-- Right Panel: Phone Mockup Video Editor -->
@@ -279,9 +295,36 @@
             <div class="settings-group">
                 <label for="font-family-select" class="group-label">Typography</label>
                 <select id="font-family-select" class="select-control">
-                    <option value="'Geist', sans-serif">Geist Sans (Clean, Geometric)</option>
-                    <option value="'Inter', sans-serif">Inter (Highly Readable)</option>
-                    <option value="'Geist Mono', monospace">Geist Mono (Technical)</option>
+                    <optgroup label="Modern Sans">
+                        <option value="Inter">Inter</option>
+                        <option value="Outfit">Outfit</option>
+                        <option value="Plus Jakarta Sans">Plus Jakarta Sans</option>
+                        <option value="Manrope">Manrope</option>
+                        <option value="Space Grotesk">Space Grotesk</option>
+                    </optgroup>
+                    <optgroup label="Bold Social">
+                        <option value="Anton">Anton</option>
+                        <option value="Bebas Neue">Bebas Neue</option>
+                        <option value="League Spartan">League Spartan</option>
+                        <option value="Archivo Black">Archivo Black</option>
+                        <option value="Bricolage Grotesque">Bricolage Grotesque</option>
+                        <option value="Lilita One">Lilita One</option>
+                        <option value="Kanit">Kanit (Bold)</option>
+                    </optgroup>
+                    <optgroup label="Premium">
+                        <option value="Montserrat" selected>Montserrat (Default)</option>
+                        <option value="Poppins">Poppins (Bold)</option>
+                        <option value="Lexend">Lexend</option>
+                        <option value="Rubik">Rubik</option>
+                        <option value="Syne">Syne</option>
+                        <option value="Jost">Jost</option>
+                    </optgroup>
+                    <optgroup label="Minimal">
+                        <option value="DM Sans">DM Sans</option>
+                        <option value="IBM Plex Sans">IBM Plex Sans</option>
+                        <option value="Source Sans 3">Source Sans 3</option>
+                        <option value="Instrument Sans">Instrument Sans</option>
+                    </optgroup>
                 </select>
             </div>
 
