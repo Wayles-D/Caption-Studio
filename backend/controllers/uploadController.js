@@ -145,11 +145,22 @@ export async function uploadAndExtractAudio(req, res, next) {
     const relativeSubtitlePath = path.relative(backendRoot, subtitlePath);
     const relativeRenderedVideoPath = path.relative(backendRoot, renderedVideoPath);
 
+    // Extract word-level data for transcript editing & payload consistency
+    let words = [];
+    if (transcriptionJSON.words && Array.isArray(transcriptionJSON.words)) {
+      words = transcriptionJSON.words;
+    } else if (transcriptionJSON.segments) {
+      for (const seg of transcriptionJSON.segments) {
+        if (seg.words && Array.isArray(seg.words)) {
+          words.push(...seg.words);
+        }
+      }
+    }
+
     // Generate phrases from words for single source of truth captioning
     const phrases = groupWordsToPhrases(transcriptionJSON);
 
-    // Return the required success payload including word-level data and phrases for editing/preview
-    return res.status(200).json({
+    const responsePayload = {
       success: true,
       message: 'Video processed, transcribing completed, subtitles compiled and burned successfully.',
       baseName,
@@ -161,7 +172,10 @@ export async function uploadAndExtractAudio(req, res, next) {
       transcription: transcriptionJSON,
       words,
       phrases
-    });
+    };
+
+    console.log(`[Pipeline] [${baseName}] Returning response payload keys:`, Object.keys(responsePayload));
+    return res.status(200).json(responsePayload);
 
   } catch (error) {
     isRequestFinished = true;
@@ -286,12 +300,15 @@ export async function regenerateCaptions(req, res, next) {
     // Generate updated phrases for the frontend single source of truth preview
     const phrases = groupWordsToPhrases(editedTranscript);
 
-    return res.status(200).json({
+    const responsePayload = {
       success: true,
       message: 'Captions regenerated and video re-rendered successfully.',
       renderedVideoPath: relativeRenderedVideoPath,
       phrases
-    });
+    };
+
+    console.log(`[Regenerate] [${baseName}] Returning response payload keys:`, Object.keys(responsePayload));
+    return res.status(200).json(responsePayload);
 
   } catch (error) {
     isRequestFinished = true;
