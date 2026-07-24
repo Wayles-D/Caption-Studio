@@ -545,13 +545,59 @@ function copyTranscriptToClipboard() {
   });
 }
 
-function triggerMockVideoFormatExport() {
-  if (!appState.isLoaded) return;
+async function triggerMockVideoFormatExport() {
+  if (!appState.isLoaded || appState.isProcessing) return;
   
-  // If we have a rendered video file from Render backend, download the MP4 file!
+  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+  // If we have a baseName and word data, ensure we render with latest workspace caption options
+  if (appState.baseName && appState.words && appState.words.length > 0) {
+    showToast("Rendering MP4 with workspace caption settings...");
+    btnDownload.disabled = true;
+
+    try {
+      const editedWords = collectEditedWords();
+      const response = await fetch(`${apiBaseUrl}/api/upload/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseName: appState.baseName,
+          words: editedWords.length > 0 ? editedWords : appState.words,
+          styles: {
+            fontFamily: appState.fontFamily,
+            fontSize: appState.fontSize.toString(),
+            textCase: appState.textCase,
+            position: appState.position,
+            preset: appState.currentPreset
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.message || 'Export rendering failed');
+      }
+
+      const result = await response.json();
+      console.log('Export rendering completed:', result);
+
+      appState.renderedVideoPath = result.renderedVideoPath;
+      if (result.phrases) {
+        appState.phrases = result.phrases;
+      }
+    } catch (err) {
+      console.error('Export auto-regeneration error:', err);
+      showToast(`Export failed: ${err.message}`);
+      btnDownload.disabled = false;
+      return;
+    } finally {
+      btnDownload.disabled = false;
+    }
+  }
+
+  // Trigger browser download of the newly rendered video path
   if (appState.renderedVideoPath) {
     showToast("Downloading captioned video...");
-    const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
     const videoUrl = `${apiBaseUrl}/${appState.renderedVideoPath}`;
     
     const dlLink = document.createElement("a");
@@ -563,18 +609,16 @@ function triggerMockVideoFormatExport() {
     return;
   }
   
-  showToast("Rendering final build with captions burned-in...");
-  
-  setTimeout(() => {
-    // Generate anchor linking download
+  // Demo video download fallback
+  if (appState.uploadedFile && appState.uploadedFile.demo) {
     const dlLink = document.createElement("a");
     dlLink.href = previewVideo.src;
     dlLink.download = appState.uploadedFile.name.replace(/\.[^/.]+$/, "") + "_captioned.mp4";
     document.body.appendChild(dlLink);
     dlLink.click();
     document.body.removeChild(dlLink);
-    showToast("Video downloaded successfully!");
-  }, 1800);
+    showToast("Demo video downloaded successfully!");
+  }
 }
 
 // ==========================================================================
