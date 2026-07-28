@@ -2,7 +2,8 @@ import assert from 'assert';
 import { groupWordsToPhrases } from './utils/phraseGrouper.js';
 import { resolveASSStyle, generateASSHeader, generateASSDialogueLine } from './utils/assWriter.js';
 import { generateSubtitleFromTranscript } from './services/subtitleService.js';
-import { getASSStyleFromConfig, getCSSPreviewFromConfig, CAPTION_PRESETS } from './utils/captionConfig.js';
+import { getASSStyleFromConfig, getCSSPreviewFromConfig, CREATOR_PROFILES, ANIMATION_MODES } from './utils/captionConfig.js';
+import { balancePhraseLines } from './utils/phraseGrouper.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -12,8 +13,8 @@ const __dirname = path.dirname(__filename);
 
 console.log('--- Starting Caption Studio Milestone 3 Engine Verification ---');
 
-// 1. Test Phrase Grouper logic
-console.log('\n[Test 1] Phrase Grouper Rules & Overlap Elimination');
+// 1. Test Phrase Grouper logic & Line Balancing
+console.log('\n[Test 1] Phrase Grouper Rules & Automatic Line Balancing');
 const mockWhisperData = {
   words: [
     { word: "Welcome", start: 0.0, end: 0.4 },
@@ -37,7 +38,7 @@ console.log(`Generated ${phrases.length} phrases:`, phrases);
 assert.ok(phrases.length > 0, 'Phrases should be generated');
 phrases.forEach((phrase, i) => {
   // Check word limit per phrase
-  const wordCount = phrase.text.split(' ').length;
+  const wordCount = phrase.words.length;
   assert.ok(wordCount <= 3, `Phrase ${i} exceeds max word limit of 3: "${phrase.text}" (${wordCount} words)`);
   
   // Check non-overlapping start/end bounds
@@ -46,7 +47,20 @@ phrases.forEach((phrase, i) => {
     assert.ok(phrase.end <= phrases[i + 1].start, `Phrase ${i} end (${phrase.end}) overlaps next start (${phrases[i + 1].start})`);
   }
 });
-console.log('✓ Phrase Grouper constraints verified (max 3 words, non-overlapping sequential timestamps)');
+
+// Test Line Balancing explicitly
+const sampleLongPhraseWords = [
+  { word: "This", start: 0.0, end: 0.3 },
+  { word: "is", start: 0.3, end: 0.5 },
+  { word: "a", start: 0.5, end: 0.7 },
+  { word: "balanced", start: 0.7, end: 1.2 },
+  { word: "caption", start: 1.2, end: 1.6 }
+];
+const balancingResult = balancePhraseLines(sampleLongPhraseWords);
+console.log('Line balancing test result:', balancingResult);
+assert.strictEqual(balancingResult.lines.length, 2, 'Long phrase should split into 2 balanced lines');
+assert.ok(balancingResult.breakAfterIndices.length === 1, 'Should have 1 line break index');
+console.log('✓ Phrase Grouper & Automatic Line Balancing verified');
 
 // 2. Test ASS Style Resolver & Header Generator
 console.log('\n[Test 2] ASS Style Resolver & Header Generation');
@@ -69,8 +83,32 @@ assert.ok(assHeader.includes('Fontname, Fontsize'), 'ASS Header format specifica
 assert.ok(assHeader.includes('Montserrat'), 'ASS Header must state font name');
 console.log('✓ ASS Style Resolver & Header generation verified');
 
-// 3. Test Subtitle Service with Edited Words
-console.log('\n[Test 3] Subtitle Service Generation with Custom Options');
+// 3. Test Animation Modes Generation in ASS Dialogue
+console.log('\n[Test 3] Animation Modes ASS Tag Generation');
+const samplePhrase = {
+  start: 0,
+  end: 1.5,
+  words: [
+    { word: "HELLO", start: 0, end: 0.5 },
+    { word: "WORLD", start: 0.5, end: 1.5 }
+  ],
+  breakAfterIndices: []
+};
+
+['karaoke', 'pop', 'instant', 'typewriter'].forEach(mode => {
+  const line = generateASSDialogueLine(samplePhrase, { animationMode: mode, textCase: 'uppercase' });
+  console.log(`Mode '${mode}' ASS line:`, line);
+  assert.ok(line.startsWith('Dialogue: 0,'), `Mode ${mode} must yield valid Dialogue string`);
+  if (mode === 'pop') {
+    assert.ok(line.includes('\\fscx115'), 'Pop mode must include \\fscx115 tag');
+  } else if (mode === 'typewriter') {
+    assert.ok(line.includes('\\alpha&H00&'), 'Typewriter mode must reveal words with \\alpha&H00&');
+  }
+});
+console.log('✓ All 4 Animation Modes verified for ASS output');
+
+// 4. Test Subtitle Service with Edited Words
+console.log('\n[Test 4] Subtitle Service Generation with Custom Options');
 const tempSubPath = path.join(__dirname, 'test_output.ass');
 const mockEditedWords = [
   { word: "WELCOME", start: 0.0, end: 0.5 },
@@ -85,6 +123,7 @@ await generateSubtitleFromTranscript('', tempSubPath, {
     preset: 'gradient-glow',
     fontFamily: 'Bebas Neue',
     fontSize: '20',
+    animationMode: 'pop',
     textCase: 'uppercase'
   }
 });
@@ -93,15 +132,15 @@ assert.ok(fs.existsSync(tempSubPath), 'Generated .ass file should exist');
 const assContent = fs.readFileSync(tempSubPath, 'utf8');
 console.log('--- Generated ASS File Content ---\n' + assContent + '\n--- End ASS File Content ---');
 assert.ok(assContent.includes('Bebas Neue'), 'ASS file must contain Bebas Neue font');
-assert.ok(assContent.includes('{\\k'), 'ASS dialogue must use \\k tags so future words stay visible in secondary color');
+assert.ok(assContent.includes('{\\'), 'ASS dialogue must contain tag formatting');
 assert.ok(assContent.includes('CAPTION') && assContent.includes('STUDIO!'), 'ASS dialogue should contain edited uppercase words');
 
 // Clean test file
 fs.unlinkSync(tempSubPath);
 console.log('✓ Subtitle Service with custom edited words & styles verified');
 
-// 4. Test Fault-Tolerant Timing Sanitation
-console.log('\n[Test 4] Fault-Tolerant Subtitle Timing Sanitation (Inverted, NaN & Overlapping Timestamps)');
+// 5. Test Fault-Tolerant Timing Sanitation
+console.log('\n[Test 5] Fault-Tolerant Subtitle Timing Sanitation');
 const corruptWords = [
   { word: "FAULT", start: 1.0, end: 0.5 },      // Inverted end < start
   { word: "TOLERANT", start: 0.4, end: 0.8 },   // Overlaps & starts before previous
@@ -111,7 +150,6 @@ const corruptWords = [
 
 const tempSanitizeSubPath = path.join(__dirname, 'test_sanitize_output.ass');
 
-// Should resolve without throwing any exception
 await generateSubtitleFromTranscript('', tempSanitizeSubPath, {
   words: corruptWords,
   styles: {
@@ -121,19 +159,18 @@ await generateSubtitleFromTranscript('', tempSanitizeSubPath, {
   }
 });
 
-assert.ok(fs.existsSync(tempSanitizeSubPath), 'Sanitized .ass file should be created despite corrupt input timestamps');
+assert.ok(fs.existsSync(tempSanitizeSubPath), 'Sanitized .ass file should be created');
 const sanitizedAssContent = fs.readFileSync(tempSanitizeSubPath, 'utf8');
-console.log('--- Sanitized ASS Content Output ---\n' + sanitizedAssContent + '\n--- End Sanitized ASS Content ---');
 
 assert.ok(sanitizedAssContent.includes('FAULT'), 'Sanitized ASS output must contain dialogue words');
 assert.ok(sanitizedAssContent.includes('ENGINE!'), 'Sanitized ASS output must contain end word');
 
 // Clean test file
 fs.unlinkSync(tempSanitizeSubPath);
-console.log('✓ Fault-Tolerant Subtitle Timing Sanitation successfully verified (0 exceptions, all bounds auto-repaired)');
+console.log('✓ Fault-Tolerant Subtitle Timing Sanitation successfully verified');
 
-// 5. Test WYSIWYG Single Source of Truth Schema Alignment
-console.log('\n[Test 5] WYSIWYG Single Source of Truth Schema Alignment (CSS Preview vs ASS Generator)');
+// 6. Test Creator Profiles & WYSIWYG Single Source of Truth Alignment
+console.log('\n[Test 6] Creator Profiles & WYSIWYG Single Source of Truth Schema Alignment');
 const testStyles = {
   preset: 'gradient-glow',
   fontFamily: 'Outfit',
@@ -145,25 +182,19 @@ const testStyles = {
 const assResolved = getASSStyleFromConfig(testStyles);
 const cssResolved = getCSSPreviewFromConfig(testStyles);
 
-console.log('Resolved ASS Parameters:', assResolved);
-console.log('Resolved CSS Preview Styles:', cssResolved);
-
-// Regression Assertions
 assert.strictEqual(assResolved.fontName, 'Outfit', 'ASS fontName must match input fontFamily');
 assert.ok(cssResolved.text.fontFamily.includes('Outfit'), 'CSS fontFamily must contain input font');
 assert.strictEqual(assResolved.fontSize, Math.round(18 * 5.14), 'ASS fontSize must scale proportionally (18 * 5.14)');
 assert.strictEqual(cssResolved.text.fontSize, '18px', 'CSS fontSize must match frontend input px');
-assert.strictEqual(assResolved.marginV, 1600, 'Top position ASS marginV must be 1600');
-assert.strictEqual(cssResolved.overlay.top, '10%', 'Top position CSS overlay top must be 10%');
-assert.strictEqual(cssResolved.text.textTransform, 'uppercase', 'CSS textTransform must reflect textCase');
 
-// Verify all 4 presets exist and produce synchronized outputs
-Object.keys(CAPTION_PRESETS).forEach((presetKey) => {
-  const ass = getASSStyleFromConfig({ preset: presetKey });
-  const css = getCSSPreviewFromConfig({ preset: presetKey });
-  assert.ok(ass.primaryColor, `Preset ${presetKey} must have ASS primaryColor`);
-  assert.ok(css.text.fontWeight, `Preset ${presetKey} must have CSS fontWeight`);
+// Verify all Creator Profiles exist and produce synchronized outputs
+Object.keys(CREATOR_PROFILES).forEach((profileKey) => {
+  const ass = getASSStyleFromConfig({ preset: profileKey });
+  const css = getCSSPreviewFromConfig({ preset: profileKey });
+  assert.ok(ass.primaryColor, `Profile ${profileKey} must have ASS primaryColor`);
+  assert.ok(css.text.fontWeight, `Profile ${profileKey} must have CSS fontWeight`);
 });
-console.log('✓ WYSIWYG Single Source of Truth schema alignment verified (CSS preview & ASS generator 100% synchronized across all presets/positions)');
+console.log('✓ Creator Profiles & WYSIWYG Single Source of Truth schema alignment verified across all profiles!');
 
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');
+

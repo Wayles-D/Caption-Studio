@@ -114,11 +114,16 @@ export function groupWordsToPhrases(whisperData) {
       const calcStart = wordStarts.length > 0 ? Math.min(...wordStarts) : currentPhraseWords[0].start;
       const calcEnd = wordEnds.length > 0 ? Math.max(...wordEnds) : currentPhraseWords[currentPhraseWords.length - 1].end;
 
+      // Apply automatic line balancing algorithm
+      const lineBalancing = balancePhraseLines(currentPhraseWords);
+
       phrases.push({
         text: phraseText,
         start: calcStart,
         end: calcEnd,
-        words: [...currentPhraseWords]
+        words: [...currentPhraseWords],
+        lines: lineBalancing.lines,
+        breakAfterIndices: lineBalancing.breakAfterIndices
       });
       currentPhraseWords = [];
     }
@@ -127,6 +132,60 @@ export function groupWordsToPhrases(whisperData) {
   // Sanitize all phrases to guarantee strictly chronological, non-overlapping, and positive-duration events
   return sanitizePhraseTimings(phrases);
 }
+
+/**
+ * Computes optimal line breaks for a phrase to balance line character lengths visually.
+ * Prevents orphan short words on separate lines (e.g. balances "This is a very long sentence" to 2 balanced lines).
+ * 
+ * @param {Array<object>} words - Array of word objects in the phrase.
+ * @returns {object} { lines: Array<string>, breakAfterIndices: Array<number> }
+ */
+export function balancePhraseLines(words) {
+  if (!Array.isArray(words) || words.length === 0) {
+    return { lines: [''], breakAfterIndices: [] };
+  }
+
+  const wordTexts = words.map(w => (w.text || w.word || '').trim());
+  
+  // Single word or short phrase fits on 1 line
+  if (words.length <= 3) {
+    const fullText = wordTexts.join(' ');
+    if (fullText.length < 24) {
+      return { lines: [fullText], breakAfterIndices: [] };
+    }
+  }
+
+  // Multi-word phrase requiring balanced line split
+  let bestSplitIndex = -1;
+  let minDiff = Infinity;
+
+  // Try split points between index 0 and words.length - 2
+  for (let i = 0; i < wordTexts.length - 1; i++) {
+    const line1 = wordTexts.slice(0, i + 1).join(' ');
+    const line2 = wordTexts.slice(i + 1).join(' ');
+    const diff = Math.abs(line1.length - line2.length);
+
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestSplitIndex = i;
+    }
+  }
+
+  if (bestSplitIndex !== -1 && wordTexts.length > 2 && minDiff < 15) {
+    const line1 = wordTexts.slice(0, bestSplitIndex + 1).join(' ');
+    const line2 = wordTexts.slice(bestSplitIndex + 1).join(' ');
+    return {
+      lines: [line1, line2],
+      breakAfterIndices: [bestSplitIndex]
+    };
+  }
+
+  return {
+    lines: [wordTexts.join(' ')],
+    breakAfterIndices: []
+  };
+}
+
 
 /**
  * Sanitizes phrase and word timestamps to ensure fault tolerance.

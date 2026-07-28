@@ -66,20 +66,27 @@ export function generateASSHeader(styles = {}) {
 }
 
 /**
- * Converts a phrase object containing word units into a dialogue entry with karaoke (\k) tags.
- * Displays all words in the phrase immediately in the inactive secondary color,
- * and fills only the currently active word in the primary highlight color during its timing window.
+ * Converts a phrase object containing word units into a dialogue entry formatted for the specified animation mode.
+ * Supports:
+ *  - 'karaoke': Progressive fill in primary highlight color.
+ *  - 'pop': Active word pop scaling (\fscx115\fscy115).
+ *  - 'instant': CapCut style instant color swap on active word.
+ *  - 'typewriter': Spoken word reveal (future words hidden with \alpha&HFF&).
  * 
- * @param {object} phrase - Unified phrase containing start, end, text, and words array.
- * @param {string} textCase - The case output mode ('uppercase' or 'normal').
+ * @param {object} phrase - Unified phrase containing start, end, text, words array, and breakAfterIndices.
+ * @param {object|string} options - Style options or textCase string.
  * @returns {string} The ASS Dialogue Event line.
  */
-export function generateASSDialogueLine(phrase, textCase = 'uppercase') {
+export function generateASSDialogueLine(phrase, options = {}) {
+  const textCase = typeof options === 'string' ? options : (options.textCase || 'uppercase');
+  const animationMode = typeof options === 'object' && options.animationMode ? options.animationMode : 'karaoke';
+
   const startStr = formatASSTimestamp(phrase.start);
   const endStr = formatASSTimestamp(phrase.end);
   
   let textPayload = '';
   let lastTime = phrase.start;
+  const breakIndices = new Set(phrase.breakAfterIndices || []);
 
   phrase.words.forEach((w, idx) => {
     // Determine pause before the word (in centiseconds)
@@ -87,21 +94,40 @@ export function generateASSDialogueLine(phrase, textCase = 'uppercase') {
     // Determine word duration in centiseconds
     const duration = Math.max(1, Math.round((w.end - w.start) * 100));
 
-    // Append pause tag if there is a gap between word events
-    if (delay > 0) {
-      textPayload += `{\\k${delay}}`;
-    }
-
     let wordText = (w.word || w.text || '').trim();
     if (textCase === 'uppercase') {
       wordText = wordText.toUpperCase();
     }
 
-    // Add space before this word if it is not the first word
-    if (idx > 0) {
-      textPayload += ` {\\k${duration}}${wordText}`;
+    const isFirstWord = idx === 0;
+    const isLineBreak = breakIndices.has(idx - 1);
+    const prefixSpace = (isFirstWord || isLineBreak) ? '' : ' ';
+    const lineBreakTag = isLineBreak ? '\\N' : '';
+
+    if (animationMode === 'typewriter') {
+      // Future words remain hidden with alpha transparency (\alpha&HFF&) until word start timestamp
+      if (delay > 0) {
+        textPayload += `${lineBreakTag}{\\alpha&HFF&\\k${delay}}`;
+      }
+      textPayload += `${prefixSpace}{\\alpha&H00&\\kf${duration}}${wordText}`;
+    } else if (animationMode === 'pop') {
+      // Active word pops up with 115% font scale while active
+      if (delay > 0) {
+        textPayload += `${lineBreakTag}{\\k${delay}}`;
+      }
+      textPayload += `${prefixSpace}{\\fscx115\\fscy115\\kf${duration}}${wordText}{\\fscx100\\fscy100}`;
+    } else if (animationMode === 'instant') {
+      // CapCut style instant highlight fill
+      if (delay > 0) {
+        textPayload += `${lineBreakTag}{\\k${delay}}`;
+      }
+      textPayload += `${prefixSpace}{\\kf${duration}}${wordText}`;
     } else {
-      textPayload += `{\\k${duration}}${wordText}`;
+      // Standard progressive karaoke
+      if (delay > 0) {
+        textPayload += `${lineBreakTag}{\\k${delay}}`;
+      }
+      textPayload += `${prefixSpace}{\\k${duration}}${wordText}`;
     }
     
     lastTime = w.end;
@@ -109,6 +135,7 @@ export function generateASSDialogueLine(phrase, textCase = 'uppercase') {
 
   return `Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${textPayload}`;
 }
+
 
 /**
  * Helper to translate frontend styles choices into raw ASS style configurations.

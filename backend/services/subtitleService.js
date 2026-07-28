@@ -49,11 +49,14 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
 
   // 3. Translate phrase objects into formatted Dialogue entries
   const dialogueLines = [];
-  const textCase = options.styles?.textCase || 'uppercase';
+  const styleOptions = {
+    textCase: options.styles?.textCase || 'uppercase',
+    animationMode: resolvedStyle.animationMode || 'karaoke'
+  };
   
   phrases.forEach((phrase) => {
-    // Generate standard dialogue string with textCase
-    const dialogueLine = generateASSDialogueLine(phrase, textCase);
+    // Generate dialogue line using phrase model and resolved animation mode
+    const dialogueLine = generateASSDialogueLine(phrase, styleOptions);
     dialogueLines.push(dialogueLine);
   });
 

@@ -26,6 +26,7 @@ let appState = {
   currentPreset: "bold-yellow",
   fontFamily: "Montserrat",
   fontSize: 14,
+  animationMode: "karaoke",
   textCase: "uppercase",
   position: "bottom",
   baseName: null,
@@ -81,6 +82,7 @@ const presetButtons = document.querySelectorAll(".preset-btn");
 const fontFamilySelect = document.getElementById("font-family-select");
 const inputFontSize = document.getElementById("input-font-size");
 const valFontSize = document.getElementById("val-font-size");
+const animModeRadios = document.getElementsByName("anim-mode");
 const textCaseRadios = document.getElementsByName("text-case");
 const positionRadios = document.getElementsByName("sub-pos");
 const appToast = document.getElementById("app-toast");
@@ -135,8 +137,17 @@ function applySettingsState() {
     fontFamily: appState.fontFamily,
     fontSize: appState.fontSize,
     textCase: appState.textCase,
-    position: appState.position
+    position: appState.position,
+    animationMode: appState.animationMode
   });
+
+  // Sync animationMode from profile if changed
+  if (cssConfig.animationMode && appState.animationMode !== cssConfig.animationMode) {
+    appState.animationMode = cssConfig.animationMode;
+    animModeRadios.forEach(radio => {
+      radio.checked = radio.value === appState.animationMode;
+    });
+  }
 
   // Apply Overlay Styles
   Object.assign(subtitlesOverlay.style, cssConfig.overlay);
@@ -429,11 +440,13 @@ function syncVideoSubtitles() {
     fontFamily: appState.fontFamily,
     fontSize: appState.fontSize,
     textCase: appState.textCase,
-    position: appState.position
+    position: appState.position,
+    animationMode: appState.animationMode
   });
 
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
+  const mode = appState.animationMode || 'karaoke';
 
   // Search in appState.phrases returned by phraseGrouper backend
   let activePhrase = null;
@@ -447,15 +460,42 @@ function syncVideoSubtitles() {
     return;
   }
 
-  // Render active phrase with word-by-word span highlighting matching ASS \kf tags
+  // Render active phrase with word-by-word span highlighting matching ASS \kf / \k tags
   const isUppercase = appState.textCase === 'uppercase';
-  
+  const breakIndices = new Set(activePhrase.breakAfterIndices || []);
+
   const spanHtml = activePhrase.words.map((w, idx) => {
     const isWordActive = currentTime >= w.start && currentTime <= w.end;
+    const isPastWord = currentTime > w.end;
     const wordText = isUppercase ? (w.word || w.text || '').toUpperCase() : (w.word || w.text || '');
-    const color = isWordActive ? activeHighlight : inactiveColor;
-    const space = idx > 0 ? ' ' : '';
-    return `${space}<span style="color: ${color}; transition: color 0.1s ease;">${wordText}</span>`;
+    
+    let color = inactiveColor;
+    let extraClasses = ['word-unit'];
+
+    if (mode === 'typewriter') {
+      if (!isWordActive && !isPastWord) {
+        extraClasses.push('anim-typewriter-hidden');
+      } else {
+        color = isWordActive ? activeHighlight : inactiveColor;
+      }
+    } else if (mode === 'pop') {
+      if (isWordActive) {
+        color = activeHighlight;
+        extraClasses.push('anim-pop-active');
+      } else {
+        color = inactiveColor;
+      }
+    } else {
+      // karaoke / instant
+      color = isWordActive ? activeHighlight : inactiveColor;
+    }
+
+    const isFirstWord = idx === 0;
+    const isLineBreak = breakIndices.has(idx - 1);
+    const space = (isFirstWord || isLineBreak) ? '' : ' ';
+    const brTag = isLineBreak ? '<br/>' : '';
+
+    return `${brTag}${space}<span class="${extraClasses.join(' ')}" style="color: ${color};">${wordText}</span>`;
   }).join('');
 
   captionsText.innerHTML = spanHtml;
@@ -656,6 +696,13 @@ function bindSidebarEvents() {
   });
 
   // Checkbox radio alignments
+  animModeRadios.forEach(radio => {
+    radio.addEventListener("change", (e) => {
+      appState.animationMode = e.target.value;
+      applySettingsState();
+    });
+  });
+
   textCaseRadios.forEach(radio => {
     radio.addEventListener("change", (e) => {
       appState.textCase = e.target.value;
@@ -766,6 +813,7 @@ async function triggerRegeneration() {
         styles: {
           fontFamily: appState.fontFamily,
           fontSize: appState.fontSize.toString(),
+          animationMode: appState.animationMode,
           textCase: appState.textCase,
           position: appState.position,
           preset: appState.currentPreset
