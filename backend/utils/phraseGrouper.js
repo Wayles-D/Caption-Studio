@@ -79,21 +79,32 @@ export function groupWordsToPhrases(whisperData) {
       }
     }
 
-    // Tight words limitation rule: Max 3 words per phrase for creator visual style
+    // Smart line balancing: Max 3 words per phrase, but avoid 1-word orphan phrases if possible
     const limitReached = currentPhraseWords.length >= 3;
 
-    // Character length rule: Target ~24 characters limit per phrase for mobile screen width
+    // Character length rule: Target ~22 characters limit per phrase for mobile screen width
     const currentTextLength = currentPhraseWords.map(item => item.text.trim()).join(' ').length;
-    const charLimitExceeded = currentTextLength >= 24;
+    const charLimitExceeded = currentTextLength >= 22;
 
-    // Trigger phrase split if boundary conditions are satisfied
-    if (
+    // Look-ahead check: If adding 1 more word creates an awkward 1-word orphan before a major break, adjust break
+    const remainingWords = words.length - (i + 1);
+    const isOrphanImpending = remainingWords === 1;
+
+    let shouldSplit = (
       hasTerminalPunctuation ||
       hasSignificantPause ||
       limitReached ||
       charLimitExceeded ||
       i === words.length - 1
-    ) {
+    );
+
+    // Prevent orphan single-word phrase if we can absorb it into current phrase (when <= 4 words total)
+    if (shouldSplit && isOrphanImpending && currentPhraseWords.length === 2 && !hasTerminalPunctuation && !hasSignificantPause) {
+      shouldSplit = false; // Hold split to absorb final 3rd word smoothly
+    }
+
+    // Trigger phrase split if boundary conditions are satisfied
+    if (shouldSplit) {
       const phraseText = currentPhraseWords.map(item => item.text.trim()).join(' ');
 
       // Compute phrase start as minimum word start and end as maximum word end

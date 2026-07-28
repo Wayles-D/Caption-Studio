@@ -35,8 +35,8 @@ export const CAPTION_PRESETS = {
     secondaryColorHex: '#FFFFFF',
     outlineColorHex: '#000000',
     backColorHex: 'transparent',
-    assPrimaryColor: '&H00FFFFFF',   // White
-    assSecondaryColor: '&HFFFFFFFF', // Transparent
+    assPrimaryColor: '&H00FFFFFF',   // Active White
+    assSecondaryColor: '&H50FFFFFF', // Semi-transparent White for inactive words
     assOutlineColor: '&H00000000',   // Black
     assBackColor: '&H00000000',
     outlineSize: 6,
@@ -58,9 +58,9 @@ export const CAPTION_PRESETS = {
     secondaryColorHex: '#FFFFFF',
     outlineColorHex: '#000000',
     backColorHex: 'rgba(0, 0, 0, 0.75)',
-    assPrimaryColor: '&H00FFFFFF',
-    assSecondaryColor: '&HFFFFFFFF',
-    assOutlineColor: '&H00000000',
+    assPrimaryColor: '&H0000FFFF',   // Active Yellow
+    assSecondaryColor: '&H00FFFFFF', // Inactive White
+    assOutlineColor: '&H00000000',   // Black
     assBackColor: '&H90000000',      // Semi-transparent black box
     outlineSize: 0,
     shadowSize: 0,
@@ -81,8 +81,8 @@ export const CAPTION_PRESETS = {
     secondaryColorHex: '#FFFFFF',
     outlineColorHex: '#3F003F',
     backColorHex: '#FF00FF',
-    assPrimaryColor: '&H00FFFF00',   // Cyan
-    assSecondaryColor: '&HFFFFFFFF', // Transparent
+    assPrimaryColor: '&H00FFFF00',   // Active Cyan
+    assSecondaryColor: '&H00F88C81', // Inactive Soft Blue-Purple
     assOutlineColor: '&H003F003F',   // Dark Purple
     assBackColor: '&H00FF00FF',      // Purple Glow
     outlineSize: 7,

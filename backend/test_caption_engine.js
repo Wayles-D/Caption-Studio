@@ -93,6 +93,7 @@ assert.ok(fs.existsSync(tempSubPath), 'Generated .ass file should exist');
 const assContent = fs.readFileSync(tempSubPath, 'utf8');
 console.log('--- Generated ASS File Content ---\n' + assContent + '\n--- End ASS File Content ---');
 assert.ok(assContent.includes('Bebas Neue'), 'ASS file must contain Bebas Neue font');
+assert.ok(assContent.includes('{\\k'), 'ASS dialogue must use \\k tags so future words stay visible in secondary color');
 assert.ok(assContent.includes('CAPTION') && assContent.includes('STUDIO!'), 'ASS dialogue should contain edited uppercase words');
 
 // Clean test file

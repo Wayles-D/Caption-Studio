@@ -66,7 +66,9 @@ export function generateASSHeader(styles = {}) {
 }
 
 /**
- * Converts a phrase object containing word units into a dialogue entry with karaoke (\kf) tags.
+ * Converts a phrase object containing word units into a dialogue entry with karaoke (\k) tags.
+ * Displays all words in the phrase immediately in the inactive secondary color,
+ * and fills only the currently active word in the primary highlight color during its timing window.
  * 
  * @param {object} phrase - Unified phrase containing start, end, text, and words array.
  * @param {string} textCase - The case output mode ('uppercase' or 'normal').
@@ -87,7 +89,7 @@ export function generateASSDialogueLine(phrase, textCase = 'uppercase') {
 
     // Append pause tag if there is a gap between word events
     if (delay > 0) {
-      textPayload += `{\\kf${delay}}`;
+      textPayload += `{\\k${delay}}`;
     }
 
     let wordText = (w.word || w.text || '').trim();
@@ -97,9 +99,9 @@ export function generateASSDialogueLine(phrase, textCase = 'uppercase') {
 
     // Add space before this word if it is not the first word
     if (idx > 0) {
-      textPayload += ` {\\kf${duration}}${wordText}`;
+      textPayload += ` {\\k${duration}}${wordText}`;
     } else {
-      textPayload += `{\\kf${duration}}${wordText}`;
+      textPayload += `{\\k${duration}}${wordText}`;
     }
     
     lastTime = w.end;
