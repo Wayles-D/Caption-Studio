@@ -3,419 +3,393 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Caption Studio — Premium Burned-in Subtitles</title>
-    <!-- Google Fonts: Geist & Inter -->
+    <title>Caption Studio — Professional Short-Form Subtitle Editor</title>
+    <!-- Google Fonts: Geist & Inter & Montserrat -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&family=Inter:wght@300;400;500;600;700;800&family=Montserrat:wght@400;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/src/style.css">
 </head>
-<body>
-    <!-- Top Navigation Header -->
-    <header class="app-header">
-        <div class="header-container text-container">
-            <div class="logo-area">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="logo-icon">
-                    <rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-                    <path d="M7 10H17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    <path d="M7 14H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-                <span class="logo-title font-geist">Caption Studio</span>
-                <span class="badge">v1.0 Pro</span>
-            </div>
-            
-            <div class="header-actions">
-                <button type="button" id="settings-toggle" class="icon-button" aria-label="Settings">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.1a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
+<body class="dark-theme">
+    <!-- Top Professional Editing Toolbar -->
+    <header class="app-toolbar">
+        <div class="toolbar-brand">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="logo-icon">
+                <rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                <path d="M7 10H17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <path d="M7 14H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span class="brand-title font-geist">Caption Studio</span>
+            <span class="brand-badge">PRO</span>
+        </div>
+
+        <div class="toolbar-project">
+            <input type="text" id="project-title-input" class="project-title-field" value="Untitled Short Video" title="Click to rename project">
+        </div>
+
+        <div class="toolbar-actions">
+            <!-- Undo / Redo -->
+            <div class="toolbar-group">
+                <button type="button" id="btn-toolbar-undo" class="btn-icon-tool" title="Undo (Ctrl+Z)" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"/></svg>
+                </button>
+                <button type="button" id="btn-toolbar-redo" class="btn-icon-tool" title="Redo (Ctrl+Y)" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7"/></svg>
                 </button>
             </div>
+
+            <div class="toolbar-divider"></div>
+
+            <!-- Style Actions -->
+            <button type="button" id="btn-toolbar-reset" class="btn-toolbar-sec">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                Reset Style
+            </button>
+
+            <button type="button" id="btn-select-file" class="btn-toolbar-sec">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Import Video
+            </button>
+
+            <button type="button" id="btn-toolbar-export" class="btn-toolbar-pri">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Export MP4
+            </button>
+
+            <!-- Theme Toggle -->
+            <label class="theme-toggle-label" title="Toggle Light / Dark mode">
+                <input type="checkbox" id="theme-toggle-checkbox">
+                <span class="theme-slider"></span>
+            </label>
         </div>
     </header>
 
-    <!-- Main Content Workspace -->
-    <main class="app-content app-container">
-        <div class="workspace-grid">
-            
-            <!-- Left Panel: Controls, Upload Card, and Timeline -->
-            <section class="workspace-column left-panel">
-                
-                <!-- Upload Video Card -->
-                <div class="card upload-card" id="upload-card">
-                    <div class="drop-zone" id="drop-zone">
-                        <input type="file" id="file-picker" accept="video/mp4,video/x-m4v,video/quicktime,video/webm" style="display: none;">
-                        
-                        <div class="drop-zone-content">
-                            <div class="upload-icon-container">
-                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" class="upload-arrow">
-                                    <path d="M12 16V8M12 8L9 11M12 8L15 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                    <path d="M3 15v3c0 1.1.9 2 2 2h14a2 2 0 002-2v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                            </div>
-                            
-                            <h2 class="drop-title font-geist">Drag & drop your video here</h2>
-                            <p class="drop-subtitle font-geist">Or upload a file from your device</p>
-                            
-                            <button type="button" id="upload-trigger" class="btn btn-primary btn-upload">
-                                Upload Video
-                            </button>
-                            
-                            <div class="demo-trigger-wrapper">
-                                <span class="text-muted">or</span>
-                                <button type="button" id="demo-trigger" class="btn btn-link">Try with Demo Video</button>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="upload-info">
-                        <div class="info-row">
-                            <span class="info-label">Supported formats</span>
-                            <span class="info-value">MP4, MOV, WebM</span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label">Maximum size</span>
-                            <span class="info-value">100 MB</span>
-                        </div>
-                        <p class="info-disclaimer">Captions are burned directly into the video.</p>
-                    </div>
-                </div>
+    <!-- Hidden file input picker -->
+    <input type="file" id="video-file-input" accept="video/mp4,video/x-m4v,video/quicktime,video/webm" style="display: none;">
 
-                <!-- Processing Timeline Card -->
-                <div class="card timeline-card" id="timeline-card">
-                    <div class="card-header">
-                        <h3 class="card-title font-geist">Processing Status</h3>
-                        <span class="status-indicator-text" id="global-status-text">Ready for file</span>
-                    </div>
+    <!-- Main 3-Column Desktop Workspace -->
+    <div class="app-workspace-3col">
 
-                    <div class="progress-bar-container">
-                        <div class="progress-bar-fill" id="global-progress-bar" style="width: 0%;"></div>
-                    </div>
+        <!-- LEFT SIDEBAR: Permanent Editing Inspector Accordion -->
+        <aside class="sidebar-left">
+            <div class="sidebar-header">
+                <span class="sidebar-title">Caption Inspector</span>
+                <span class="live-indicator"><span class="pulse-dot"></span> LIVE WYSIWYG</span>
+            </div>
 
-                    <div class="timeline-steps">
-                        <!-- Step 1 -->
-                        <div class="timeline-step" data-step="1" id="step-upload">
-                            <div class="step-indicator">
-                                <span class="step-dot"></span>
-                                <svg class="step-check" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </div>
-                            <div class="step-details">
-                                <h4 class="step-name font-geist">Upload Complete</h4>
-                            </div>
+            <div class="accordion-container">
+
+                <!-- 1. Typography Section -->
+                <div class="accordion-item">
+                    <button type="button" class="accordion-header">
+                        <span class="accordion-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+                            Typography
+                        </span>
+                        <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div class="accordion-body">
+                        <div class="settings-group">
+                            <label for="font-family-select" class="group-label">Font Family</label>
+                            <select id="font-family-select" class="select-control">
+                                <optgroup label="Modern Sans">
+                                    <option value="Inter">Inter</option>
+                                    <option value="Outfit">Outfit</option>
+                                    <option value="Plus Jakarta Sans">Plus Jakarta Sans</option>
+                                    <option value="Space Grotesk">Space Grotesk</option>
+                                </optgroup>
+                                <optgroup label="Bold Social">
+                                    <option value="Anton">Anton</option>
+                                    <option value="Bebas Neue">Bebas Neue</option>
+                                    <option value="League Spartan">League Spartan</option>
+                                    <option value="Archivo Black">Archivo Black</option>
+                                    <option value="Lilita One">Lilita One</option>
+                                </optgroup>
+                                <optgroup label="Premium">
+                                    <option value="Montserrat" selected>Montserrat (Default)</option>
+                                    <option value="Poppins">Poppins</option>
+                                    <option value="Lexend">Lexend</option>
+                                    <option value="Rubik">Rubik</option>
+                                </optgroup>
+                            </select>
                         </div>
 
-                        <!-- Step 2 -->
-                        <div class="timeline-step" data-step="2" id="step-audio">
-                            <div class="step-indicator">
-                                <span class="step-dot"></span>
-                                <svg class="step-check" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Font Size</span>
+                                <span class="group-value-badge" id="val-font-size">14px</span>
                             </div>
-                            <div class="step-details">
-                                <h4 class="step-name font-geist">Extract Audio</h4>
-                            </div>
+                            <input type="range" id="input-font-size" min="11" max="24" value="14" class="slider-control">
                         </div>
 
-                        <!-- Step 3 -->
-                        <div class="timeline-step" data-step="3" id="step-transcribe">
-                            <div class="step-indicator">
-                                <span class="step-dot"></span>
-                                <svg class="step-check" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Word Spacing</span>
+                                <span class="group-value-badge" id="val-word-spacing">4px</span>
                             </div>
-                            <div class="step-details">
-                                <h4 class="step-name font-geist">Generate Transcript</h4>
-                            </div>
+                            <input type="range" id="input-word-spacing" min="0" max="20" value="4" class="slider-control">
                         </div>
 
-                        <!-- Step 4 -->
-                        <div class="timeline-step" data-step="4" id="step-captions">
-                            <div class="step-indicator">
-                                <span class="step-dot"></span>
-                                <svg class="step-check" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </div>
-                            <div class="step-details">
-                                <h4 class="step-name font-geist">Create Captions</h4>
-                            </div>
-                        </div>
-
-                        <!-- Step 5 -->
-                        <div class="timeline-step" data-step="5" id="step-burn">
-                            <div class="step-indicator">
-                                <span class="step-dot"></span>
-                                <svg class="step-check" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </div>
-                            <div class="step-details">
-                                <h4 class="step-name font-geist">Burn Into Video</h4>
-                            </div>
-                        </div>
-
-                        <!-- Step 6 -->
-                        <div class="timeline-step" data-step="6" id="step-ready">
-                            <div class="step-indicator">
-                                <span class="step-dot"></span>
-                                <svg class="step-check" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </div>
-                            <div class="step-details">
-                                <h4 class="step-name font-geist">Ready for Download</h4>
+                        <div class="settings-group">
+                            <label class="group-label">Text Case</label>
+                            <div class="radio-toggle-grid">
+                                <label class="radio-tab">
+                                    <input type="radio" name="text-case" value="uppercase" checked>
+                                    <span>UPPERCASE</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="text-case" value="normal">
+                                    <span>Sentence</span>
+                                </label>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Editable Transcript Card -->
-                <div class="card transcript-card" id="transcript-card" style="display: none;">
-                    <div class="card-header">
-                        <h3 class="card-title font-geist">Transcript Editor</h3>
-                        <span class="transcript-word-count" id="transcript-word-count">0 words</span>
-                    </div>
-                    <p class="transcript-hint">Click any word to edit. Timestamps are preserved automatically.</p>
-                    <div class="transcript-words-container" id="transcript-words-container"></div>
-                    <div class="transcript-actions">
-                        <button type="button" id="btn-apply-render" class="btn btn-accent btn-grow">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                            Apply & Render
-                        </button>
-                    </div>
-                </div>
-            </section>
-            
-            <!-- Right Panel: Phone Mockup Video Editor -->
-            <section class="workspace-column right-panel">
-                
-                <!-- Phone Mockup Frame -->
-                <div class="phone-mockup">
-                    <div class="phone-bezel">
-                        <div class="phone-speaker"></div>
-                        <div class="phone-notch"></div>
-                        <div class="phone-screen bg-placeholder" id="phone-screen">
-                            
-                            <!-- State 1: Placeholder Empty State -->
-                            <div class="screen-state state-empty active" id="state-empty">
-                                <div class="empty-illustrations">
-                                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" class="empty-video-icon">
-                                        <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
-                                        <path d="M6 21h12m-6-4H8m8 0h-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                                        <polygon points="10,7 15,10 10,13" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                                    </svg>
-                                </div>
-                                <h3 class="placeholder-title font-geist">Preview screen</h3>
-                                <p class="placeholder-text font-geist">Your vertical video and burned-in captions preview will rendered here.</p>
+                <!-- 2. Style & Presets Section -->
+                <div class="accordion-item">
+                    <button type="button" class="accordion-header">
+                        <span class="accordion-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 000 20 14.5 14.5 0 000-20"/></svg>
+                            Style & Colors
+                        </span>
+                        <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div class="accordion-body">
+                        <div class="settings-group">
+                            <label class="group-label">Preset Profile</label>
+                            <div class="preset-grid-compact">
+                                <button type="button" class="preset-btn active" data-preset="bold-yellow">
+                                    <span class="preset-preview bold-yellow-preview">YELLOW</span>
+                                </button>
+                                <button type="button" class="preset-btn" data-preset="caps-white">
+                                    <span class="preset-preview caps-white-preview">WHITE</span>
+                                </button>
+                                <button type="button" class="preset-btn" data-preset="bg-black">
+                                    <span class="preset-preview bg-black-preview">BOXED</span>
+                                </button>
+                                <button type="button" class="preset-btn" data-preset="gradient-glow">
+                                    <span class="preset-preview gradient-glow-preview">ACTIVE</span>
+                                </button>
                             </div>
+                        </div>
 
-                            <!-- State 2: Processing Anim State -->
-                            <div class="screen-state state-processing" id="state-processing">
-                                <div class="waveform-box">
-                                    <div class="wave-line"></div>
-                                    <div class="wave-line"></div>
-                                    <div class="wave-line"></div>
-                                    <div class="wave-line"></div>
-                                    <div class="wave-line"></div>
+                        <div class="settings-group">
+                            <label class="group-label">Custom Palette</label>
+                            <div class="color-picker-grid">
+                                <div class="color-picker-item">
+                                    <label for="color-active-word">Active</label>
+                                    <input type="color" id="color-active-word" value="#FEF08A" class="color-control">
                                 </div>
-                                <h3 class="processing-title font-geist" id="preview-processing-title">Extracting Audio</h3>
-                                <p class="processing-text font-geist">Processing video tracks...</p>
-                            </div>
-
-                            <!-- State 3: Active Video / Subtitle Player -->
-                            <div class="screen-state state-video" id="state-video">
-                                <video id="preview-video" playsinline loop preload="auto">
-                                    Your browser doesn't support HTML video.
-                                </video>
-                                
-                                <!-- Rendered Burned-in Subtitles overlay -->
-                                <div class="burned-subtitles-overlay text-center" id="subtitles-overlay">
-                                    <span class="subtitles-text font-geist" id="captions-text"></span>
+                                <div class="color-picker-item">
+                                    <label for="color-inactive-word">Text</label>
+                                    <input type="color" id="color-inactive-word" value="#FFFFFF" class="color-control">
                                 </div>
-
-                                <!-- Custom Subtle Video Controls Overlay -->
-                                <div class="video-overlay-controls">
-                                    <button type="button" class="btn-video-control" id="btn-video-play" aria-label="Play/Pause">
-                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" id="icon-play-state">
-                                            <polygon class="play-poly" points="6,4 20,12 6,20" fill="currentColor"/>
-                                            <rect class="pause-rects" x="6" y="4" width="4" height="16" fill="currentColor" style="display:none;"/>
-                                            <rect class="pause-rects" x="14" y="4" width="4" height="16" fill="currentColor" style="display:none;"/>
-                                        </svg>
-                                    </button>
+                                <div class="color-picker-item">
+                                    <label for="color-outline">Outline</label>
+                                    <input type="color" id="color-outline" value="#000000" class="color-control">
+                                </div>
+                                <div class="color-picker-item">
+                                    <label for="color-background">Box</label>
+                                    <input type="color" id="color-background" value="#000000" class="color-control">
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Action Controls Below Phone (disabled until video ready) -->
-                <div class="actions-panel disabled" id="actions-panel">
-                    <button type="button" id="btn-download" class="btn btn-primary btn-grow">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        Download Video
+                <!-- 3. Animation Modes Section -->
+                <div class="accordion-item">
+                    <button type="button" class="accordion-header">
+                        <span class="accordion-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                            Animation Mode
+                        </span>
+                        <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                     </button>
-                    
-                    <button type="button" id="btn-copy-transcript" class="btn btn-outline">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                        Copy Transcript
-                    </button>
+                    <div class="accordion-body">
+                        <div class="settings-group">
+                            <div class="radio-toggle-grid animation-mode-grid">
+                                <label class="radio-tab">
+                                    <input type="radio" name="anim-mode" value="karaoke" checked>
+                                    <span>Karaoke</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="anim-mode" value="pop">
+                                    <span>Pop</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="anim-mode" value="instant">
+                                    <span>Instant</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="anim-mode" value="typewriter">
+                                    <span>Typewriter</span>
+                                </label>
+                            </div>
+                        </div>
 
-                    <button type="button" id="btn-reset" class="btn btn-outline">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-                        Generate Again
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Pop Scaling</span>
+                                <span class="group-value-badge" id="val-pop-scale">118%</span>
+                            </div>
+                            <input type="range" id="input-pop-scale" min="100" max="150" value="118" class="slider-control">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. Position & Offset Section -->
+                <div class="accordion-item">
+                    <button type="button" class="accordion-header">
+                        <span class="accordion-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                            Position & Spacing
+                        </span>
+                        <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div class="accordion-body">
+                        <div class="settings-group">
+                            <label class="group-label">Vertical Alignment</label>
+                            <div class="radio-toggle-grid">
+                                <label class="radio-tab">
+                                    <input type="radio" name="sub-pos" value="top">
+                                    <span>Top</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="sub-pos" value="center">
+                                    <span>Center</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="sub-pos" value="bottom" checked>
+                                    <span>Bottom</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Vertical Offset</span>
+                                <span class="group-value-badge" id="val-margin-v">300px</span>
+                            </div>
+                            <input type="range" id="input-margin-v" min="50" max="800" value="300" class="slider-control">
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </aside>
+
+        <!-- CENTER WORKSPACE: Phone Canvas & Live Subtitle Stage -->
+        <main class="workspace-center">
+            <div class="preview-stage-container" id="preview-container">
+                <div class="phone-frame">
+                    <!-- Upload Dropzone View -->
+                    <div class="view-state active" id="state-upload">
+                        <div class="drop-zone" id="drop-zone">
+                            <div class="drop-zone-content">
+                                <div class="upload-icon-circle">
+                                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V8M12 8L9 11M12 8L15 11"/><path d="M3 15v3c0 1.1.9 2 2 2h14a2 2 0 002-2v-3"/></svg>
+                                </div>
+                                <h3 class="drop-title font-geist">Upload Video</h3>
+                                <p class="drop-subtitle">Drag & drop or click to choose file</p>
+                                <button type="button" id="btn-select-file-stage" class="btn btn-primary btn-upload">Select Video</button>
+                                <div class="demo-wrapper">
+                                    <span class="text-muted">or</span>
+                                    <button type="button" id="btn-use-demo" class="btn btn-link">Try Demo Video</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Processing State View -->
+                    <div class="view-state" id="state-processing">
+                        <div class="processing-content">
+                            <div class="spinner-ring"></div>
+                            <h3 class="processing-title" id="preview-processing-title">Transcribing Audio...</h3>
+                            <p class="processing-text" id="preview-processing-text">Whisper AI extracting word timestamps</p>
+                        </div>
+                    </div>
+
+                    <!-- Video Preview View -->
+                    <div class="view-state" id="state-video">
+                        <video id="preview-video" playsinline preload="metadata" loop></video>
+                        <div class="subtitles-overlay" id="subtitles-overlay">
+                            <div class="captions-text" id="captions-text"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Floating Playback Controls Bar -->
+                <div class="preview-controls-bar">
+                    <button type="button" id="btn-video-play" class="btn-play-toggle" aria-label="Play/Pause">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" id="icon-play-state">
+                            <polygon points="5,3 19,12 5,21" fill="currentColor" class="play-poly"/>
+                        </svg>
+                    </button>
+                    <div class="timeline-seek-wrapper">
+                        <span class="time-stamp" id="time-display-current">0:00</span>
+                        <input type="range" id="video-seek-bar" min="0" max="100" value="0" class="video-seek-slider">
+                        <span class="time-stamp" id="time-display-duration">0:00</span>
+                    </div>
+                    <button type="button" id="btn-download-video" class="btn-download-action" title="Download Captioned MP4">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     </button>
                 </div>
-            </section>
+            </div>
+        </main>
 
-        </div>
-    </main>
+        <!-- RIGHT SIDEBAR: Video Stats, Summary Badges & Transcript Editor -->
+        <aside class="sidebar-right">
+            <!-- Metadata & Config Summary Card -->
+            <div class="inspector-card">
+                <div class="inspector-card-header">
+                    <span class="card-title">Video Inspector</span>
+                    <span class="status-badge" id="global-status-badge">Ready</span>
+                </div>
+                <div class="meta-rows">
+                    <div class="meta-row">
+                        <span class="meta-label">File</span>
+                        <span class="meta-val" id="inspector-file-name">Demo Video</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Duration</span>
+                        <span class="meta-val" id="inspector-duration">0:00</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Canvas</span>
+                        <span class="meta-val">1080 × 1920 (9:16)</span>
+                    </div>
+                </div>
 
-    <!-- Slide-over Settings Panel -->
-    <aside class="settings-sidebar" id="settings-sidebar">
-        <div class="sidebar-header">
-            <h3 class="sidebar-title font-geist">Caption Settings</h3>
-            <button type="button" class="icon-button" id="settings-close" aria-label="Close Settings">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-        </div>
-        <div class="sidebar-content font-geist">
-            <!-- Caption Typography Config -->
-            <div class="settings-group">
-                <label class="group-label">Subtitle Style Preset</label>
-                <div class="preset-selector-grid">
-                    <button type="button" class="preset-btn active" data-preset="bold-yellow">
-                        <span class="preset-preview bold-yellow-preview">YELLOW</span>
-                    </button>
-                    <button type="button" class="preset-btn" data-preset="caps-white">
-                        <span class="preset-preview caps-white-preview">WHITE</span>
-                    </button>
-                    <button type="button" class="preset-btn" data-preset="bg-black">
-                        <span class="preset-preview bg-black-preview">BOXED</span>
-                    </button>
-                    <button type="button" class="preset-btn" data-preset="gradient-glow">
-                        <span class="preset-preview gradient-glow-preview">ACTIVE</span>
-                    </button>
+                <div class="badges-summary">
+                    <span class="badge-tag" id="badge-font">Montserrat</span>
+                    <span class="badge-tag" id="badge-preset">BOLD-YELLOW</span>
+                    <span class="badge-tag" id="badge-animation">KARAOKE</span>
                 </div>
             </div>
 
-            <!-- Animation Mode Config -->
-            <div class="settings-group">
-                <label class="group-label">Animation Mode</label>
-                <div class="radio-toggle-grid animation-mode-grid">
-                    <label class="radio-tab">
-                        <input type="radio" name="anim-mode" value="karaoke" checked>
-                        <span>Karaoke</span>
-                    </label>
-                    <label class="radio-tab">
-                        <input type="radio" name="anim-mode" value="pop">
-                        <span>Pop</span>
-                    </label>
-                    <label class="radio-tab">
-                        <input type="radio" name="anim-mode" value="instant">
-                        <span>Instant</span>
-                    </label>
-                    <label class="radio-tab">
-                        <input type="radio" name="anim-mode" value="typewriter">
-                        <span>Typewriter</span>
-                    </label>
+            <!-- Transcript Chip Editor Card -->
+            <div class="inspector-card transcript-card-col" id="transcript-card">
+                <div class="inspector-card-header">
+                    <span class="card-title">Transcript Editor</span>
+                    <span class="word-count-chip" id="transcript-word-count">0 words</span>
                 </div>
-            </div>
-
-            <!-- Font Selector -->
-            <div class="settings-group">
-                <label for="font-family-select" class="group-label">Typography</label>
-                <select id="font-family-select" class="select-control">
-                    <optgroup label="Modern Sans">
-                        <option value="Inter">Inter</option>
-                        <option value="Outfit">Outfit</option>
-                        <option value="Plus Jakarta Sans">Plus Jakarta Sans</option>
-                        <option value="Manrope">Manrope</option>
-                        <option value="Space Grotesk">Space Grotesk</option>
-                    </optgroup>
-                    <optgroup label="Bold Social">
-                        <option value="Anton">Anton</option>
-                        <option value="Bebas Neue">Bebas Neue</option>
-                        <option value="League Spartan">League Spartan</option>
-                        <option value="Archivo Black">Archivo Black</option>
-                        <option value="Bricolage Grotesque">Bricolage Grotesque</option>
-                        <option value="Lilita One">Lilita One</option>
-                        <option value="Kanit">Kanit (Bold)</option>
-                    </optgroup>
-                    <optgroup label="Premium">
-                        <option value="Montserrat" selected>Montserrat (Default)</option>
-                        <option value="Poppins">Poppins (Bold)</option>
-                        <option value="Lexend">Lexend</option>
-                        <option value="Rubik">Rubik</option>
-                        <option value="Syne">Syne</option>
-                        <option value="Jost">Jost</option>
-                    </optgroup>
-                    <optgroup label="Minimal">
-                        <option value="DM Sans">DM Sans</option>
-                        <option value="IBM Plex Sans">IBM Plex Sans</option>
-                        <option value="Source Sans 3">Source Sans 3</option>
-                        <option value="Instrument Sans">Instrument Sans</option>
-                    </optgroup>
-                </select>
-            </div>
-
-            <!-- Size Slider -->
-            <div class="settings-group">
-                <div class="label-justify">
-                    <span class="group-label">Font Size</span>
-                    <span class="group-value-badge" id="val-font-size">14px</span>
+                <p class="transcript-help">Click any word chip below to edit speech text:</p>
+                <div class="transcript-chips-box" id="transcript-words-container">
+                    <!-- Word chips generated dynamically -->
                 </div>
-                <input type="range" id="input-font-size" min="11" max="22" value="14" class="slider-control">
+                <button type="button" id="btn-apply-render" class="btn btn-primary btn-apply-full">
+                    Re-render Captioned Video
+                </button>
             </div>
+        </aside>
 
-            <!-- Caption Alignment/Case -->
-            <div class="settings-group">
-                <label class="group-label">Text Case</label>
-                <div class="radio-toggle-grid">
-                    <label class="radio-tab">
-                        <input type="radio" name="text-case" value="uppercase" checked>
-                        <span>UPPERCASE</span>
-                    </label>
-                    <label class="radio-tab">
-                        <input type="radio" name="text-case" value="normal">
-                        <span>Sentence Case</span>
-                    </label>
-                </div>
-            </div>
+    </div>
 
-            <div class="settings-group">
-                <label class="group-label">Subtitle Position</label>
-                <div class="radio-toggle-grid">
-                    <label class="radio-tab">
-                        <input type="radio" name="sub-pos" value="top">
-                        <span>Top</span>
-                    </label>
-                    <label class="radio-tab">
-                        <input type="radio" name="sub-pos" value="center">
-                        <span>Center</span>
-                    </label>
-                    <label class="radio-tab">
-                        <input type="radio" name="sub-pos" value="bottom" checked>
-                        <span>Bottom</span>
-                    </label>
-                </div>
-            </div>
+    <!-- Floating Toast Notification -->
+    <div id="app-toast" class="toast-notification"></div>
 
-            <!-- Engine & Advanced Info -->
-            <div class="settings-divider"></div>
-            <div class="settings-group">
-                <label for="engine-select" class="group-label">AI Engine</label>
-                <select id="engine-select" class="select-control">
-                    <option value="captionstudio-high" selected>CaptionStudio Whisper v3 (High Quality)</option>
-                    <option value="captionstudio-fast">CaptionStudio Turbo (Fast Processing)</option>
-                </select>
-            </div>
-            
-            <div class="settings-footer-info">
-                <p>Caption settings apply dynamically and will be burned into the final downloadable file.</p>
-            </div>
-        </div>
-    </aside>
-
-    <!-- Overlay Backdrop -->
-    <div class="overlay-backdrop" id="overlay-backdrop"></div>
-
-    <!-- Notification Toast -->
-    <div class="toast" id="app-toast">Caption Copied!</div>
-
-    <!-- Entry module -->
     <script type="module" src="/src/main.js"></script>
 </body>
 </html>

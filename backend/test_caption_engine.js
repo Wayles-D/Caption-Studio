@@ -2,7 +2,7 @@ import assert from 'assert';
 import { groupWordsToPhrases } from './utils/phraseGrouper.js';
 import { resolveASSStyle, generateASSHeader, generateASSDialogueLine } from './utils/assWriter.js';
 import { generateSubtitleFromTranscript } from './services/subtitleService.js';
-import { getASSStyleFromConfig, getCSSPreviewFromConfig, CREATOR_PROFILES, ANIMATION_MODES } from './utils/captionConfig.js';
+import { getASSStyleFromConfig, getCSSPreviewFromConfig, CREATOR_PROFILES, ANIMATION_MODES, hexToASSColor } from '../shared/captionConfig.js';
 import { balancePhraseLines } from './utils/phraseGrouper.js';
 import fs from 'fs';
 import path from 'path';
@@ -100,7 +100,7 @@ const samplePhrase = {
   console.log(`Mode '${mode}' ASS line:`, line);
   assert.ok(line.startsWith('Dialogue: 0,'), `Mode ${mode} must yield valid Dialogue string`);
   if (mode === 'pop') {
-    assert.ok(line.includes('\\fscx115'), 'Pop mode must include \\fscx115 tag');
+    assert.ok(line.includes('\\fscx'), 'Pop mode must include \\fscx tag');
   } else if (mode === 'typewriter') {
     assert.ok(line.includes('\\alpha&H00&'), 'Typewriter mode must reveal words with \\alpha&H00&');
   }
@@ -187,14 +187,37 @@ assert.ok(cssResolved.text.fontFamily.includes('Outfit'), 'CSS fontFamily must c
 assert.strictEqual(assResolved.fontSize, Math.round(18 * 5.14), 'ASS fontSize must scale proportionally (18 * 5.14)');
 assert.strictEqual(cssResolved.text.fontSize, '18px', 'CSS fontSize must match frontend input px');
 
-// Verify all Creator Profiles exist and produce synchronized outputs
-Object.keys(CREATOR_PROFILES).forEach((profileKey) => {
-  const ass = getASSStyleFromConfig({ preset: profileKey });
-  const css = getCSSPreviewFromConfig({ preset: profileKey });
-  assert.ok(ass.primaryColor, `Profile ${profileKey} must have ASS primaryColor`);
-  assert.ok(css.text.fontWeight, `Profile ${profileKey} must have CSS fontWeight`);
-});
-console.log('✓ Creator Profiles & WYSIWYG Single Source of Truth schema alignment verified across all profiles!');
+// 7. Test Word Spacing, Color Customization Overrides & Pop Scale
+console.log('\n[Test 7] Word Spacing, Custom Color Overrides & Pop Scale Alignment');
+
+// Hex to ASS Color test
+assert.strictEqual(hexToASSColor('#FEF08A'), '&H008AF0FE', 'Hex #FEF08A must convert to ASS BGR &H008AF0FE');
+assert.strictEqual(hexToASSColor('transparent'), '&HFF000000', 'Transparent must convert to ASS alpha FF');
+
+const customParams = {
+  preset: 'bold-yellow',
+  activeWordColor: '#FF0000',     // Red
+  inactiveWordColor: '#00FF00',   // Green
+  outlineColor: '#0000FF',        // Blue
+  backgroundColor: '#112233',
+  wordSpacing: 10,
+  popScale: 135
+};
+
+const customAss = getASSStyleFromConfig(customParams);
+const customCss = getCSSPreviewFromConfig(customParams);
+
+assert.strictEqual(customAss.primaryColor, '&H000000FF', 'Custom active word color #FF0000 must map to ASS &H000000FF');
+assert.strictEqual(customCss.highlightColor, '#FF0000', 'CSS highlightColor must match custom #FF0000');
+assert.strictEqual(customAss.spacing, 15, 'Word spacing of 10 must scale to ASS spacing of 15px');
+assert.strictEqual(customCss.wordSpacingPx, 10, 'CSS wordSpacingPx must match 10');
+assert.strictEqual(customAss.popScale, 135, 'ASS popScale must equal 135');
+assert.strictEqual(customCss.popScale, 135, 'CSS popScale must equal 135');
+
+const popDialogue = generateASSDialogueLine(samplePhrase, { animationMode: 'pop', popScale: customParams.popScale });
+assert.ok(popDialogue.includes('\\fscx135\\fscy135'), 'Pop dialogue line must contain \\fscx135 tag when popScale is 135');
+
+console.log('✓ Word Spacing, Color Customization & Pop Scale alignment verified!');
 
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');
 

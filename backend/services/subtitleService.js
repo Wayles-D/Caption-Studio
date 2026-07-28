@@ -51,7 +51,8 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
   const dialogueLines = [];
   const styleOptions = {
     textCase: options.styles?.textCase || 'uppercase',
-    animationMode: resolvedStyle.animationMode || 'karaoke'
+    animationMode: resolvedStyle.animationMode || 'karaoke',
+    popScale: resolvedStyle.popScale || 118
   };
   
   phrases.forEach((phrase) => {

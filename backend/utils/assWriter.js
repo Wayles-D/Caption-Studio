@@ -1,4 +1,4 @@
-import { getASSStyleFromConfig } from './captionConfig.js';
+import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
 
 /**
  * Formats a duration in seconds to the standard ASS timestamp format: H:MM:SS.cs
@@ -45,6 +45,7 @@ export function generateASSHeader(styles = {}) {
   const alignment = styles.alignment || 2;
   const marginV = styles.marginV !== undefined ? styles.marginV : 300;
   const borderStyle = styles.borderStyle !== undefined ? styles.borderStyle : 1;
+  const spacing = styles.spacing !== undefined ? styles.spacing : 0;
 
   return [
     '[Script Info]',
@@ -58,7 +59,7 @@ export function generateASSHeader(styles = {}) {
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: Default,${fontName},${fontSize},${primaryColor},${secondaryColor},${outlineColor},${backColor},${bold},0,0,0,100,100,0,0,${borderStyle},${outlineSize},${shadowSize},${alignment},100,100,${marginV},1`,
+    `Style: Default,${fontName},${fontSize},${primaryColor},${secondaryColor},${outlineColor},${backColor},${bold},0,0,0,100,100,${spacing},0,${borderStyle},${outlineSize},${shadowSize},${alignment},100,100,${marginV},1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
@@ -69,7 +70,7 @@ export function generateASSHeader(styles = {}) {
  * Converts a phrase object containing word units into a dialogue entry formatted for the specified animation mode.
  * Supports:
  *  - 'karaoke': Progressive fill in primary highlight color.
- *  - 'pop': Active word pop scaling (\fscx115\fscy115).
+ *  - 'pop': Active word pop scaling (\fscx{popScale}\fscy{popScale}).
  *  - 'instant': CapCut style instant color swap on active word.
  *  - 'typewriter': Spoken word reveal (future words hidden with \alpha&HFF&).
  * 
@@ -80,6 +81,7 @@ export function generateASSHeader(styles = {}) {
 export function generateASSDialogueLine(phrase, options = {}) {
   const textCase = typeof options === 'string' ? options : (options.textCase || 'uppercase');
   const animationMode = typeof options === 'object' && options.animationMode ? options.animationMode : 'karaoke';
+  const popScale = typeof options === 'object' && options.popScale ? Math.round(options.popScale) : 118;
 
   const startStr = formatASSTimestamp(phrase.start);
   const endStr = formatASSTimestamp(phrase.end);
@@ -111,11 +113,11 @@ export function generateASSDialogueLine(phrase, options = {}) {
       }
       textPayload += `${prefixSpace}{\\alpha&H00&\\kf${duration}}${wordText}`;
     } else if (animationMode === 'pop') {
-      // Active word pops up with 115% font scale while active
+      // Active word pops up with configurable font scale while active
       if (delay > 0) {
         textPayload += `${lineBreakTag}{\\k${delay}}`;
       }
-      textPayload += `${prefixSpace}{\\fscx115\\fscy115\\kf${duration}}${wordText}{\\fscx100\\fscy100}`;
+      textPayload += `${prefixSpace}{\\fscx${popScale}\\fscy${popScale}\\kf${duration}}${wordText}{\\fscx100\\fscy100}`;
     } else if (animationMode === 'instant') {
       // CapCut style instant highlight fill
       if (delay > 0) {
