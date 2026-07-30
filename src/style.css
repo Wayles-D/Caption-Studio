@@ -595,6 +595,10 @@ input:checked + .theme-slider::before {
   border-color: var(--border-color-hover);
 }
 
+.color-picker-popover[hidden] {
+  display: none;
+}
+
 .color-picker-popover {
   position: fixed;
   width: 232px;
