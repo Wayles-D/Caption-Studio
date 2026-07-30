@@ -1,8 +1,22 @@
 /**
  * Left Sidebar Inspector UI Component for Caption Studio
  */
-import { appState, updateState, subscribe } from '../state.js';
+import { appState, updateState, subscribe, getStyleParams } from '../state.js';
 import { getCSSPreviewFromConfig } from '../../../shared/captionConfig.js';
+import { initColorPicker, syncColorSwatches } from './colorPicker.js';
+
+const COLOR_FALLBACK_MAP = {
+  activeWordColor: (cssConfig) => cssConfig.highlightColor || '#FEF08A',
+  inactiveWordColor: (cssConfig) => cssConfig.inactiveColor || '#FFFFFF',
+  outlineColor: (cssConfig) => cssConfig.outlineColor || '#000000',
+  backgroundColor: (cssConfig) => (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') ? cssConfig.backgroundColor : '#000000'
+};
+
+function getFallbackColorFor(fieldKey) {
+  const cssConfig = getCSSPreviewFromConfig(getStyleParams());
+  const resolver = COLOR_FALLBACK_MAP[fieldKey];
+  return resolver ? resolver(cssConfig) : '#000000';
+}
 
 export function initSidebarInspector() {
   // 1. Accordion Header Toggle Binding
@@ -22,14 +36,9 @@ export function initSidebarInspector() {
       btn.classList.add('active');
 
       const presetKey = btn.dataset.preset;
-      updateState({
-        currentPreset: presetKey,
-        // Reset color overrides so preset defaults take effect
-        activeWordColor: null,
-        inactiveWordColor: null,
-        outlineColor: null,
-        backgroundColor: null
-      });
+      // Presets define style only (typography, border, shadow, padding) — never colors.
+      // Custom color overrides must survive a preset switch.
+      updateState({ currentPreset: presetKey });
     });
   });
 
@@ -69,35 +78,8 @@ export function initSidebarInspector() {
     });
   });
 
-  // 4. Color Customization Pickers
-  const colorActive = document.getElementById('color-active-word');
-  const colorInactive = document.getElementById('color-inactive-word');
-  const colorOutline = document.getElementById('color-outline');
-  const colorBackground = document.getElementById('color-background');
-
-  if (colorActive) {
-    colorActive.addEventListener('input', (e) => {
-      updateState({ activeWordColor: e.target.value });
-    });
-  }
-
-  if (colorInactive) {
-    colorInactive.addEventListener('input', (e) => {
-      updateState({ inactiveWordColor: e.target.value });
-    });
-  }
-
-  if (colorOutline) {
-    colorOutline.addEventListener('input', (e) => {
-      updateState({ outlineColor: e.target.value });
-    });
-  }
-
-  if (colorBackground) {
-    colorBackground.addEventListener('input', (e) => {
-      updateState({ backgroundColor: e.target.value });
-    });
-  }
+  // 4. Custom Color Picker Popovers (preset palette + hex + recently used)
+  initColorPicker({ getFallbackColor: getFallbackColorFor });
 
   // 5. Animation Mode & Pop Scale Inputs
   const animModeRadios = document.getElementsByName('anim-mode');
@@ -149,21 +131,6 @@ export function initSidebarInspector() {
  * Synchronize input controls with global appState values
  */
 function syncSidebarUI() {
-  const cssConfig = getCSSPreviewFromConfig({
-    preset: appState.currentPreset,
-    fontFamily: appState.fontFamily,
-    fontSize: appState.fontSize,
-    wordSpacing: appState.wordSpacing,
-    popScale: appState.popScale,
-    activeWordColor: appState.activeWordColor,
-    inactiveWordColor: appState.inactiveWordColor,
-    outlineColor: appState.outlineColor,
-    backgroundColor: appState.backgroundColor,
-    textCase: appState.textCase,
-    position: appState.position,
-    animationMode: appState.animationMode
-  });
-
   // Preset Buttons
   const presetBtns = document.querySelectorAll('.preset-btn');
   presetBtns.forEach(btn => {
@@ -189,15 +156,7 @@ function syncSidebarUI() {
   if (valWordSpacing) valWordSpacing.textContent = `${appState.wordSpacing}px`;
 
   // Colors
-  const colorActive = document.getElementById('color-active-word');
-  const colorInactive = document.getElementById('color-inactive-word');
-  const colorOutline = document.getElementById('color-outline');
-  const colorBackground = document.getElementById('color-background');
-
-  if (colorActive) colorActive.value = cssConfig.highlightColor || '#FEF08A';
-  if (colorInactive) colorInactive.value = cssConfig.inactiveColor || '#FFFFFF';
-  if (colorOutline) colorOutline.value = cssConfig.outlineColor || '#000000';
-  if (colorBackground) colorBackground.value = (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') ? cssConfig.backgroundColor : '#000000';
+  syncColorSwatches(getFallbackColorFor);
 
   // Animation Mode
   const animModeRadios = document.getElementsByName('anim-mode');

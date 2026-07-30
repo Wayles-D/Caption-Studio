@@ -52,7 +52,9 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
   const styleOptions = {
     textCase: options.styles?.textCase || 'uppercase',
     animationMode: resolvedStyle.animationMode || 'karaoke',
-    popScale: resolvedStyle.popScale || 118
+    popScale: resolvedStyle.popScale || 118,
+    primaryColor: resolvedStyle.primaryColor,
+    secondaryColor: resolvedStyle.secondaryColor
   };
   
   phrases.forEach((phrase) => {

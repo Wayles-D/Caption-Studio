@@ -48,13 +48,13 @@ export const CREATOR_PROFILES = {
     outlineSize: 6,
     shadowSize: 0,
     borderStyle: 1,
+    boxPaddingPx: 0,
     wordSpacing: '0.2em',
     lineSpacing: '1.25',
     phraseSpacing: '0 4px',
     cssTextStroke: '2px #000000',
     cssTextShadow: '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0px 3px 4px rgba(0,0,0,0.8)',
     cssBackground: 'transparent',
-    cssPadding: '0',
     cssBorderRadius: '0',
     cssHighlightColor: '#FEF08A',
     cssInactiveColor: '#FFFFFF'
@@ -79,13 +79,13 @@ export const CREATOR_PROFILES = {
     outlineSize: 6,
     shadowSize: 0,
     borderStyle: 1,
+    boxPaddingPx: 0,
     wordSpacing: '0.2em',
     lineSpacing: '1.25',
     phraseSpacing: '0 4px',
     cssTextStroke: '1.5px #000000',
     cssTextShadow: '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0px 2px 3px rgba(0,0,0,0.7)',
     cssBackground: 'transparent',
-    cssPadding: '0',
     cssBorderRadius: '0',
     cssHighlightColor: '#FFFFFF',
     cssInactiveColor: 'rgba(255, 255, 255, 0.65)'
@@ -110,13 +110,13 @@ export const CREATOR_PROFILES = {
     outlineSize: 0,
     shadowSize: 0,
     borderStyle: 3,
+    boxPaddingPx: 12,
     wordSpacing: '0.25em',
     lineSpacing: '1.3',
     phraseSpacing: '6px 12px',
     cssTextStroke: 'none',
     cssTextShadow: '0 4px 6px rgba(0,0,0,0.2)',
     cssBackground: 'rgba(0, 0, 0, 0.75)',
-    cssPadding: '6px 12px',
     cssBorderRadius: '6px',
     cssHighlightColor: '#FEF08A',
     cssInactiveColor: '#FFFFFF'
@@ -141,13 +141,13 @@ export const CREATOR_PROFILES = {
     outlineSize: 7,
     shadowSize: 3,
     borderStyle: 1,
+    boxPaddingPx: 0,
     wordSpacing: '0.2em',
     lineSpacing: '1.2',
     phraseSpacing: '0 4px',
     cssTextStroke: 'none',
     cssTextShadow: '0px 0px 10px rgba(129, 140, 248, 0.8), -2px -2px 0 #3f003f, 2px -2px 0 #3f003f, -2px 2px 0 #3f003f, 2px 2px 0 #3f003f',
     cssBackground: 'transparent',
-    cssPadding: '0',
     cssBorderRadius: '0',
     cssHighlightColor: '#38BDF8',
     cssInactiveColor: '#818CF8'
@@ -258,8 +258,8 @@ export function getASSStyleFromConfig(params = {}) {
     ? hexToASSColor(params.outlineColor, profile.colors.outlineHex) 
     : profile.colors.assOutline;
 
-  const backColor = params.backgroundColor 
-    ? hexToASSColor(params.backgroundColor, profile.colors.backHex) 
+  const backColor = params.backgroundColor
+    ? hexToASSColor(params.backgroundColor, profile.colors.backHex)
     : profile.colors.assBack;
 
   // Word spacing conversion (scaled to 1080p canvas)
@@ -269,6 +269,22 @@ export function getASSStyleFromConfig(params = {}) {
   // Advanced Animation Controls
   const popScale = parseFloat(params.popScale || 118);
 
+  // Box mode + padding: single source of truth shared with getCSSPreviewFromConfig.
+  // A custom background color always implies box mode, even on a preset that
+  // doesn't box by default; the box padding then falls back to a sensible default.
+  const { isBoxed, boxPaddingPx } = resolveBoxState(params, profile);
+  const borderStyle = isBoxed ? 3 : profile.borderStyle;
+  // Outline field doubles as box padding under BorderStyle 3; otherwise it's real text-outline width.
+  const outlineSize = isBoxed
+    ? Math.round(boxPaddingPx * 1.5) // scaled to ASS canvas pixels, matching word spacing's scale factor
+    : (params.outlineSize !== undefined ? parseInt(params.outlineSize, 10) : profile.outlineSize);
+
+  // ASS only supports a boolean Bold flag (no numeric weight) — derive it from
+  // the same fontWeight the CSS preview uses so both sides agree on bold-ness,
+  // even though libass can't reproduce the exact numeric weight a browser can.
+  const fontWeightNum = parseInt(profile.fontWeight, 10) || 700;
+  const bold = fontWeightNum >= 600 ? -1 : 0;
+
   return {
     fontName,
     fontSize,
@@ -276,17 +292,39 @@ export function getASSStyleFromConfig(params = {}) {
     secondaryColor,
     outlineColor,
     backColor,
-    bold: -1,
-    outlineSize: params.outlineSize !== undefined ? parseInt(params.outlineSize, 10) : profile.outlineSize,
+    bold,
+    outlineSize,
     shadowSize: params.shadowSize !== undefined ? parseInt(params.shadowSize, 10) : profile.shadowSize,
     alignment: 2,
     marginV,
-    borderStyle: params.backgroundColor && params.backgroundColor !== 'transparent' ? 3 : profile.borderStyle,
+    borderStyle,
     spacing: assSpacing,
     popScale,
     animationMode,
     profile
   };
+}
+
+/**
+ * Determines whether the caption background renders as a solid box, and how
+ * much padding that box has, from the same inputs used by both the ASS and
+ * CSS builders — the two must never resolve this independently.
+ *
+ * @param {object} params - Client style params (may include a custom backgroundColor).
+ * @param {object} profile - The resolved creator profile.
+ * @returns {{isBoxed: boolean, boxPaddingPx: number}}
+ */
+function resolveBoxState(params, profile) {
+  // profile.borderStyle === 3 is the preset's own authored box/no-box intent.
+  // profile.colors.backHex isn't a reliable signal on its own: under
+  // BorderStyle 1 that same color is used as the drop-shadow color, not a box fill.
+  const isBoxed = params.backgroundColor
+    ? params.backgroundColor !== 'transparent'
+    : profile.borderStyle === 3;
+
+  const boxPaddingPx = isBoxed ? (profile.boxPaddingPx || 12) : 0;
+
+  return { isBoxed, boxPaddingPx };
 }
 
 /**
@@ -325,6 +363,11 @@ export function getCSSPreviewFromConfig(params = {}) {
   const numericWordSpacing = parseFloat(params.wordSpacing !== undefined ? params.wordSpacing : 4);
   const popScale = parseFloat(params.popScale || 118);
 
+  // Box mode + padding: derived identically to getASSStyleFromConfig so the
+  // preview's box always matches the exported video's box.
+  const { isBoxed, boxPaddingPx } = resolveBoxState(params, profile);
+  const cssPadding = isBoxed ? `${Math.round(boxPaddingPx / 2)}px ${boxPaddingPx}px` : '0';
+
   return {
     animationMode,
     profile,
@@ -349,7 +392,7 @@ export function getCSSPreviewFromConfig(params = {}) {
       background: cssBackground,
       textShadow: profile.cssTextShadow,
       webkitTextStroke: cssTextStroke,
-      padding: profile.cssPadding,
+      padding: cssPadding,
       borderRadius: profile.cssBorderRadius,
       textTransform,
       lineHeight: profile.lineSpacing || '1.25',

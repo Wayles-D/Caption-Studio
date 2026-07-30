@@ -1,7 +1,7 @@
 /**
  * Center Preview Workspace Component for Caption Studio
  */
-import { appState, subscribe, MOCK_SUBTITLES } from '../state.js';
+import { appState, subscribe, MOCK_SUBTITLES, getStyleParams } from '../state.js';
 import { getCSSPreviewFromConfig } from '../../../shared/captionConfig.js';
 
 // Dynamic Google Font Loader
@@ -99,20 +99,7 @@ export function applyCSSPreviewStyles() {
 
   loadGoogleFont(appState.fontFamily);
 
-  const cssConfig = getCSSPreviewFromConfig({
-    preset: appState.currentPreset,
-    fontFamily: appState.fontFamily,
-    fontSize: appState.fontSize,
-    wordSpacing: appState.wordSpacing,
-    popScale: appState.popScale,
-    activeWordColor: appState.activeWordColor,
-    inactiveWordColor: appState.inactiveWordColor,
-    outlineColor: appState.outlineColor,
-    backgroundColor: appState.backgroundColor,
-    textCase: appState.textCase,
-    position: appState.position,
-    animationMode: appState.animationMode
-  });
+  const cssConfig = getCSSPreviewFromConfig(getStyleParams());
 
   // Apply Overlay Styles
   Object.assign(subtitlesOverlay.style, cssConfig.overlay);
@@ -133,20 +120,7 @@ export function syncVideoSubtitles() {
 
   const currentTime = previewVideo.currentTime;
 
-  const cssConfig = getCSSPreviewFromConfig({
-    preset: appState.currentPreset,
-    fontFamily: appState.fontFamily,
-    fontSize: appState.fontSize,
-    wordSpacing: appState.wordSpacing,
-    popScale: appState.popScale,
-    activeWordColor: appState.activeWordColor,
-    inactiveWordColor: appState.inactiveWordColor,
-    outlineColor: appState.outlineColor,
-    backgroundColor: appState.backgroundColor,
-    textCase: appState.textCase,
-    position: appState.position,
-    animationMode: appState.animationMode
-  });
+  const cssConfig = getCSSPreviewFromConfig(getStyleParams());
 
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';

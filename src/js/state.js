@@ -171,3 +171,26 @@ export function redo() {
 export function resetStyles() {
   updateState({ ...initialStyleState }, { recordHistory: true });
 }
+
+/**
+ * Single source of truth for resolved caption style parameters.
+ * Every consumer (preview CSS, sidebar UI sync, upload/regenerate payloads)
+ * must derive its params object from this function so preview and export
+ * always resolve styling from identical input.
+ */
+export function getStyleParams() {
+  return {
+    preset: appState.currentPreset,
+    fontFamily: appState.fontFamily,
+    fontSize: appState.fontSize,
+    wordSpacing: appState.wordSpacing,
+    popScale: appState.popScale,
+    activeWordColor: appState.activeWordColor,
+    inactiveWordColor: appState.inactiveWordColor,
+    outlineColor: appState.outlineColor,
+    backgroundColor: appState.backgroundColor,
+    textCase: appState.textCase,
+    position: appState.position,
+    animationMode: appState.animationMode
+  };
+}

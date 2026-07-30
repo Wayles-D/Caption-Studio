@@ -2,7 +2,7 @@
  * Caption Studio Main Core Javascript Logic (Modular Architecture)
  */
 
-import { appState, updateState, DEFAULT_DEMO_VIDEO_URL } from './js/state.js';
+import { appState, updateState, DEFAULT_DEMO_VIDEO_URL, getStyleParams } from './js/state.js';
 import { initToolbar } from './js/components/toolbar.js';
 import { initSidebarInspector } from './js/components/sidebarInspector.js';
 import { initPreviewWorkspace, applyCSSPreviewStyles } from './js/components/preview.js';
@@ -112,14 +112,11 @@ async function handleFileSelected(file) {
 
   const formData = new FormData();
   formData.append('video', file);
-  formData.append('preset', appState.currentPreset);
-  formData.append('fontFamily', appState.fontFamily);
-  formData.append('fontSize', appState.fontSize.toString());
-  formData.append('wordSpacing', appState.wordSpacing.toString());
-  formData.append('popScale', appState.popScale.toString());
-  formData.append('animationMode', appState.animationMode);
-  formData.append('textCase', appState.textCase);
-  formData.append('position', appState.position);
+  Object.entries(getStyleParams()).forEach(([key, value]) => {
+    if (value !== null && value !== undefined) {
+      formData.append(key, value.toString());
+    }
+  });
 
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -220,20 +217,7 @@ async function triggerRegeneration() {
       body: JSON.stringify({
         baseName: appState.baseName,
         words: editedWords,
-        styles: {
-          fontFamily: appState.fontFamily,
-          fontSize: appState.fontSize.toString(),
-          wordSpacing: appState.wordSpacing,
-          popScale: appState.popScale,
-          activeWordColor: appState.activeWordColor,
-          inactiveWordColor: appState.inactiveWordColor,
-          outlineColor: appState.outlineColor,
-          backgroundColor: appState.backgroundColor,
-          animationMode: appState.animationMode,
-          textCase: appState.textCase,
-          position: appState.position,
-          preset: appState.currentPreset
-        }
+        styles: getStyleParams()
       })
     });
 

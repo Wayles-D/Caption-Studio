@@ -3,7 +3,7 @@ import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
 /**
  * Formats a duration in seconds to the standard ASS timestamp format: H:MM:SS.cs
  * e.g., 0:02:14.35 (where cs is centiseconds, 1cs = 10ms)
- * 
+ *
  * @param {number} seconds - The time in seconds.
  * @returns {string} The formatted timestamp.
  */
@@ -14,7 +14,7 @@ export function formatASSTimestamp(seconds) {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-  
+
   // Calculate centiseconds (.00 to .99)
   const cs = Math.round((seconds - Math.floor(seconds)) * 100);
 
@@ -28,7 +28,7 @@ export function formatASSTimestamp(seconds) {
 
 /**
  * Builds the ASS format string header with metadata and styles configured for short form video.
- * 
+ *
  * @param {object} styles - The resolved style preferences.
  * @returns {string} The formatted file header sections.
  */
@@ -66,34 +66,110 @@ export function generateASSHeader(styles = {}) {
   ].join('\n');
 }
 
+// Fallback colors used only when a caller (e.g. direct unit tests) omits the
+// resolved style colors — production calls always pass the real resolved values.
+const DEFAULT_PRIMARY_COLOR = '&H0000FFFF';
+const DEFAULT_SECONDARY_COLOR = '&H00FFFFFF';
+
 /**
- * Converts a phrase object containing word units into a dialogue entry formatted for the specified animation mode.
- * Supports:
- *  - 'karaoke': Progressive fill in primary highlight color.
- *  - 'pop': Active word pop scaling (\fscx{popScale}\fscy{popScale}).
- *  - 'instant': CapCut style instant color swap on active word.
- *  - 'typewriter': Spoken word reveal (future words hidden with \alpha&HFF&).
- * 
- * @param {object} phrase - Unified phrase containing start, end, text, words array, and breakAfterIndices.
- * @param {object|string} options - Style options or textCase string.
- * @returns {string} The ASS Dialogue Event line.
+ * Converts an 8-hex AABBGGRR ASS color string (as used in [V4+ Styles]) into
+ * inline override tags (\Na\Nc) that force that exact color for a text run,
+ * regardless of the Dialogue event's Style-level default color.
+ *
+ * @param {string} assColor - Color string such as '&H0000FFFF'.
+ * @param {number} index - Color slot to target (1 = Primary/fill).
+ * @returns {string} Inline alpha + color override tags.
  */
-export function generateASSDialogueLine(phrase, options = {}) {
-  const textCase = typeof options === 'string' ? options : (options.textCase || 'uppercase');
-  const animationMode = typeof options === 'object' && options.animationMode ? options.animationMode : 'karaoke';
-  const popScale = typeof options === 'object' && options.popScale ? Math.round(options.popScale) : 118;
+function toInlineColorTags(assColor, index) {
+  const clean = (assColor || DEFAULT_PRIMARY_COLOR).replace(/^&H/i, '').replace(/&$/, '').padStart(8, '0');
+  const alpha = clean.substring(0, 2);
+  const bgr = clean.substring(2, 8);
+  return `\\${index}a&H${alpha}&\\${index}c&H${bgr}&`;
+}
+
+/**
+ * Builds the Dialogue Text payload for one time-slice of a phrase: the full
+ * phrase text is always present, only the active word's color (and, in pop
+ * mode, scale) differs from the rest.
+ */
+function buildStaticHighlightText(wordTexts, breakIndices, activeIdx, animationMode, popScale, primaryColor, secondaryColor) {
+  let payload = '';
+
+  wordTexts.forEach((wordText, idx) => {
+    const isLineBreak = breakIndices.has(idx - 1);
+    const isFirstWord = idx === 0;
+    const prefixSpace = (isFirstWord || isLineBreak) ? '' : ' ';
+    const lineBreakTag = isLineBreak ? '\\N' : '';
+    const isActive = idx === activeIdx;
+
+    const colorTags = toInlineColorTags(isActive ? primaryColor : secondaryColor, 1);
+    const scaleOpenTag = (isActive && animationMode === 'pop') ? `\\fscx${popScale}\\fscy${popScale}` : '';
+    const scaleCloseTag = (isActive && animationMode === 'pop') ? '{\\fscx100\\fscy100}' : '';
+
+    payload += `${lineBreakTag}${prefixSpace}{${colorTags}${scaleOpenTag}}${wordText}${scaleCloseTag}`;
+  });
+
+  return payload;
+}
+
+/**
+ * Generates one Dialogue event per word-boundary time-slice within a phrase.
+ * The full phrase is always visible; only the currently active word's color
+ * (and scale, for 'pop') differs — no word is ever hidden or swept/revealed.
+ * This mirrors the preview's per-frame word coloring exactly (word is active
+ * iff currentTime falls within its own [start, end]).
+ *
+ * Used for 'karaoke', 'instant', and 'pop' modes, which are all the same
+ * hard-swap highlight behavior in the preview; only the scale tag differs.
+ */
+function generateStaticHighlightDialogueEvents(phrase, options) {
+  const { textCase, animationMode, popScale, primaryColor, secondaryColor } = options;
+  const breakIndices = new Set(phrase.breakAfterIndices || []);
+
+  const wordTexts = phrase.words.map((w) => {
+    const raw = (w.word || w.text || '').trim();
+    return textCase === 'uppercase' ? raw.toUpperCase() : raw;
+  });
+
+  const clamp = (t) => Math.max(phrase.start, Math.min(phrase.end, t));
+  const boundarySet = new Set([phrase.start, phrase.end]);
+  phrase.words.forEach((w) => {
+    boundarySet.add(clamp(w.start));
+    boundarySet.add(clamp(w.end));
+  });
+  const boundaries = Array.from(boundarySet).sort((a, b) => a - b);
+
+  const events = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const sliceStart = boundaries[i];
+    const sliceEnd = boundaries[i + 1];
+    if (sliceEnd - sliceStart < 0.001) continue; // skip degenerate zero-length slices
+
+    const activeIdx = phrase.words.findIndex((w) => sliceStart >= w.start - 0.001 && sliceStart < w.end - 0.001);
+    const text = buildStaticHighlightText(wordTexts, breakIndices, activeIdx, animationMode, popScale, primaryColor, secondaryColor);
+    events.push(`Dialogue: 0,${formatASSTimestamp(sliceStart)},${formatASSTimestamp(sliceEnd)},Default,,0,0,0,,${text}`);
+  }
+
+  return events.join('\n');
+}
+
+/**
+ * Generates a single karaoke-tagged Dialogue event where future words remain
+ * hidden until spoken. Distinct from the other modes by design: this is the
+ * only mode where words are deliberately revealed/hidden over time.
+ */
+function generateTypewriterDialogueLine(phrase, options) {
+  const { textCase, popScale } = options;
+  const breakIndices = new Set(phrase.breakAfterIndices || []);
 
   const startStr = formatASSTimestamp(phrase.start);
   const endStr = formatASSTimestamp(phrase.end);
-  
+
   let textPayload = '';
   let lastTime = phrase.start;
-  const breakIndices = new Set(phrase.breakAfterIndices || []);
 
   phrase.words.forEach((w, idx) => {
-    // Determine pause before the word (in centiseconds)
     const delay = Math.max(0, Math.round((w.start - lastTime) * 100));
-    // Determine word duration in centiseconds
     const duration = Math.max(1, Math.round((w.end - w.start) * 100));
 
     let wordText = (w.word || w.text || '').trim();
@@ -106,43 +182,50 @@ export function generateASSDialogueLine(phrase, options = {}) {
     const prefixSpace = (isFirstWord || isLineBreak) ? '' : ' ';
     const lineBreakTag = isLineBreak ? '\\N' : '';
 
-    if (animationMode === 'typewriter') {
-      // Future words remain hidden with alpha transparency (\alpha&HFF&) until word start timestamp
-      if (delay > 0) {
-        textPayload += `${lineBreakTag}{\\alpha&HFF&\\k${delay}}`;
-      }
-      textPayload += `${prefixSpace}{\\alpha&H00&\\kf${duration}}${wordText}`;
-    } else if (animationMode === 'pop') {
-      // Active word pops up with configurable font scale while active
-      if (delay > 0) {
-        textPayload += `${lineBreakTag}{\\k${delay}}`;
-      }
-      textPayload += `${prefixSpace}{\\fscx${popScale}\\fscy${popScale}\\kf${duration}}${wordText}{\\fscx100\\fscy100}`;
-    } else if (animationMode === 'instant') {
-      // CapCut style instant highlight fill
-      if (delay > 0) {
-        textPayload += `${lineBreakTag}{\\k${delay}}`;
-      }
-      textPayload += `${prefixSpace}{\\kf${duration}}${wordText}`;
-    } else {
-      // Standard progressive karaoke
-      if (delay > 0) {
-        textPayload += `${lineBreakTag}{\\k${delay}}`;
-      }
-      textPayload += `${prefixSpace}{\\k${duration}}${wordText}`;
+    if (delay > 0) {
+      textPayload += `${lineBreakTag}{\\alpha&HFF&\\k${delay}}`;
     }
-    
+    textPayload += `${prefixSpace}{\\alpha&H00&\\kf${duration}}${wordText}`;
+
     lastTime = w.end;
   });
 
   return `Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${textPayload}`;
 }
 
+/**
+ * Converts a phrase object containing word units into ASS Dialogue event(s),
+ * matching the preview's word-highlighting behavior exactly for the given
+ * animation mode.
+ * Supports:
+ *  - 'karaoke'/'instant': Full phrase always visible; only the current word
+ *    shows the active color, everything else shows the inactive color.
+ *  - 'pop': Same hard-swap coloring as karaoke, plus the active word scales up.
+ *  - 'typewriter': Future words hidden until spoken (intentionally distinct).
+ *
+ * @param {object} phrase - Unified phrase containing start, end, text, words array, and breakAfterIndices.
+ * @param {object|string} options - Style options or textCase string.
+ * @returns {string} One or more newline-joined ASS Dialogue Event lines.
+ */
+export function generateASSDialogueLine(phrase, options = {}) {
+  const textCase = typeof options === 'string' ? options : (options.textCase || 'uppercase');
+  const animationMode = typeof options === 'object' && options.animationMode ? options.animationMode : 'karaoke';
+  const popScale = typeof options === 'object' && options.popScale ? Math.round(options.popScale) : 118;
+  const primaryColor = (typeof options === 'object' && options.primaryColor) || DEFAULT_PRIMARY_COLOR;
+  const secondaryColor = (typeof options === 'object' && options.secondaryColor) || DEFAULT_SECONDARY_COLOR;
+
+  if (animationMode === 'typewriter') {
+    return generateTypewriterDialogueLine(phrase, { textCase, popScale });
+  }
+
+  return generateStaticHighlightDialogueEvents(phrase, { textCase, animationMode, popScale, primaryColor, secondaryColor });
+}
+
 
 /**
  * Helper to translate frontend styles choices into raw ASS style configurations.
  * Delegated to the shared single source of truth captionConfig schema.
- * 
+ *
  * @param {object} params - Input style settings from the client.
  * @returns {object} The resolved ASS Style parameters.
  */

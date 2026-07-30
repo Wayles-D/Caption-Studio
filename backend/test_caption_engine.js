@@ -107,6 +107,35 @@ const samplePhrase = {
 });
 console.log('✓ All 4 Animation Modes verified for ASS output');
 
+// 3b. Hard-swap highlighting must match preview: full phrase always visible,
+// only the currently active word colored, no progressive sweep, and earlier
+// words must revert to inactive once no longer active.
+console.log('\n[Test 3b] Hard-Swap Highlighting Matches Preview (No Reveal/Sweep)');
+['karaoke', 'pop', 'instant'].forEach(mode => {
+  const events = generateASSDialogueLine(samplePhrase, {
+    animationMode: mode,
+    textCase: 'uppercase',
+    primaryColor: '&H0000FFFF',
+    secondaryColor: '&H00FFFFFF'
+  }).split('\n');
+
+  assert.ok(events.length >= 2, `Mode ${mode} must slice into multiple boundary events, not one karaoke-tagged line`);
+  events.forEach(event => {
+    assert.ok(!event.includes('\\k') && !event.includes('\\kf'), `Mode ${mode} must not use \\k/\\kf progressive-fill tags: ${event}`);
+    assert.ok(event.includes('HELLO') && event.includes('WORLD'), `Mode ${mode} must keep the full phrase visible in every event: ${event}`);
+  });
+
+  // First event: HELLO active (yellow primary), WORLD inactive (white secondary)
+  assert.ok(events[0].includes('HELLO {\\1a&H00&\\1c&H00FFFF&') === false, 'sanity: active tag precedes word, not after');
+  assert.ok(/\{\\1a&H00&\\1c&H00FFFF&[^}]*\}HELLO/.test(events[0]), `Mode ${mode} first event must color HELLO active`);
+  assert.ok(/\{\\1a&H00&\\1c&HFFFFFF&\}WORLD/.test(events[0]), `Mode ${mode} first event must color WORLD inactive`);
+
+  // Second event: WORLD becomes active, HELLO must revert to inactive (not stay highlighted)
+  assert.ok(/\{\\1a&H00&\\1c&HFFFFFF&\}HELLO/.test(events[1]), `Mode ${mode} must revert HELLO to inactive once WORLD is active`);
+  assert.ok(/\{\\1a&H00&\\1c&H00FFFF&[^}]*\}WORLD/.test(events[1]), `Mode ${mode} second event must color WORLD active`);
+});
+console.log('✓ Hard-swap highlighting confirmed frame-accurate with no reveal/sweep, and words revert to inactive');
+
 // 4. Test Subtitle Service with Edited Words
 console.log('\n[Test 4] Subtitle Service Generation with Custom Options');
 const tempSubPath = path.join(__dirname, 'test_output.ass');
