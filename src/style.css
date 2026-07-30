@@ -610,10 +610,39 @@ input:checked + .theme-slider::before {
   gap: 10px;
 }
 
+.color-picker-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .color-picker-heading {
   font-size: 12px;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.color-picker-close-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 0;
+}
+
+.color-picker-close-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-input);
 }
 
 .color-picker-preview-row {

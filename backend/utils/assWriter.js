@@ -1,4 +1,4 @@
-import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
+import { getASSStyleFromConfig, applyCaseTransform } from '../../shared/captionConfig.js';
 
 /**
  * Formats a duration in seconds to the standard ASS timestamp format: H:MM:SS.cs
@@ -150,9 +150,9 @@ function generateStaticHighlightDialogueEvents(phrase, options) {
   const { textCase, posOverrideTag } = options;
   const breakIndices = new Set(phrase.breakAfterIndices || []);
 
-  const wordTexts = phrase.words.map((w) => {
+  const wordTexts = phrase.words.map((w, idx) => {
     const raw = (w.word || w.text || '').trim();
-    return textCase === 'uppercase' ? raw.toUpperCase() : raw;
+    return applyCaseTransform(raw, textCase, idx === 0);
   });
 
   const clamp = (t) => Math.max(phrase.start, Math.min(phrase.end, t));
@@ -196,10 +196,7 @@ function generateTypewriterDialogueLine(phrase, options) {
     const delay = Math.max(0, Math.round((w.start - lastTime) * 100));
     const duration = Math.max(1, Math.round((w.end - w.start) * 100));
 
-    let wordText = (w.word || w.text || '').trim();
-    if (textCase === 'uppercase') {
-      wordText = wordText.toUpperCase();
-    }
+    const wordText = applyCaseTransform((w.word || w.text || '').trim(), textCase, idx === 0);
 
     const isFirstWord = idx === 0;
     const isLineBreak = breakIndices.has(idx - 1);

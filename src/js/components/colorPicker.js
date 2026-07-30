@@ -114,10 +114,23 @@ function renderPopoverContentInner() {
 
   popoverEl.innerHTML = '';
 
+  const headerRow = document.createElement('div');
+  headerRow.className = 'color-picker-header-row';
+
   const heading = document.createElement('div');
   heading.className = 'color-picker-heading';
   heading.textContent = field.label;
-  popoverEl.appendChild(heading);
+  headerRow.appendChild(heading);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'color-picker-close-btn';
+  closeBtn.setAttribute('aria-label', 'Close color picker');
+  closeBtn.textContent = '×';
+  closeBtn.addEventListener('click', () => closePopover());
+  headerRow.appendChild(closeBtn);
+
+  popoverEl.appendChild(headerRow);
 
   const previewRow = document.createElement('div');
   previewRow.className = 'color-picker-preview-row';

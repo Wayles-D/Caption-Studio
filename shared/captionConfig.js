@@ -179,6 +179,34 @@ export const CAPTION_POSITIONS = {
 };
 
 /**
+ * Applies the selected text-case transform to a single caption text unit
+ * (a whole phrase or a single word). This is the single source of truth for
+ * casing — both the live CSS/HTML preview and the ASS/FFmpeg export call
+ * this exact function so a preset always exports with the same casing shown
+ * on screen.
+ *
+ * @param {string} text - Raw text (word or full phrase), untransformed.
+ * @param {string} textCase - 'uppercase' | 'lowercase' | anything else (sentence case).
+ * @param {boolean} [isSentenceStart=true] - Whether this unit starts the sentence/phrase.
+ *   Only relevant for sentence case: the sentence-starting word/phrase gets its
+ *   first letter capitalized, every other unit is lowercased.
+ * @returns {string} Transformed text.
+ */
+export function applyCaseTransform(text, textCase, isSentenceStart = true) {
+  if (!text) return text;
+  switch (textCase) {
+    case 'uppercase':
+      return text.toUpperCase();
+    case 'lowercase':
+      return text.toLowerCase();
+    default:
+      return isSentenceStart
+        ? text.charAt(0).toUpperCase() + text.slice(1).toLowerCase()
+        : text.toLowerCase();
+  }
+}
+
+/**
  * Converts a CSS Hex/RGBA color string to standard ASS BGR color format (&HAABBGGRR&).
  * Note: ASS uses BGR byte ordering and inverted alpha (00 = opaque, FF = transparent).
  * 
@@ -369,7 +397,12 @@ export function getCSSPreviewFromConfig(params = {}) {
     ? params.animationMode
     : profile.defaultAnimationMode || 'karaoke';
 
-  const textTransform = params.textCase === 'uppercase' ? 'uppercase' : 'none';
+  // Word content is already case-transformed via applyCaseTransform before it
+  // reaches the DOM (see preview.js), so this CSS textTransform is only a
+  // backstop for any text rendered without going through that per-word path.
+  const textTransform = params.textCase === 'uppercase' ? 'uppercase'
+    : params.textCase === 'lowercase' ? 'lowercase'
+    : 'none';
 
   // Custom Colors or Fallbacks
   const highlightColor = params.activeWordColor || profile.cssHighlightColor || profile.colors.primaryHex;

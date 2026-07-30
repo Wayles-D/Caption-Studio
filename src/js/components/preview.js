@@ -2,7 +2,7 @@
  * Center Preview Workspace Component for Caption Studio
  */
 import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from '../state.js';
-import { getCSSPreviewFromConfig } from '../../../shared/captionConfig.js';
+import { getCSSPreviewFromConfig, applyCaseTransform } from '../../../shared/captionConfig.js';
 
 // Dynamic Google Font Loader
 const loadedFonts = new Set();
@@ -186,7 +186,7 @@ export function syncVideoSubtitles() {
   if (!activePhrase) {
     const demoItem = MOCK_SUBTITLES.find(s => currentTime >= s.start && currentTime <= s.end);
     if (demoItem) {
-      const text = appState.textCase === 'uppercase' ? demoItem.text.toUpperCase() : demoItem.text;
+      const text = applyCaseTransform(demoItem.text, appState.textCase);
       const wordElement = document.createElement('span');
       wordElement.className = 'word-unit';
       wordElement.style.color = inactiveColor;
@@ -199,7 +199,6 @@ export function syncVideoSubtitles() {
   }
 
   // Render active phrase words
-  const isUppercase = appState.textCase === 'uppercase';
   const breakIndices = new Set(activePhrase.breakAfterIndices || []);
 
   const keywordsEnabled = appState.enableKeywordHighlighting;
@@ -209,7 +208,7 @@ export function syncVideoSubtitles() {
   const wordElements = activePhrase.words.map((w, idx) => {
     const isWordActive = currentTime >= w.start && currentTime <= w.end;
     const isPastWord = currentTime > w.end;
-    const wordText = isUppercase ? (w.word || w.text || '').toUpperCase() : (w.word || w.text || '');
+    const wordText = applyCaseTransform(w.word || w.text || '', appState.textCase, idx === 0);
     const isActiveKeyword = keywordsEnabled && w.isKeyword && isWordActive;
     const keywordColor = w.importance === 'high' ? keywordColorHigh : keywordColorMedium;
 
