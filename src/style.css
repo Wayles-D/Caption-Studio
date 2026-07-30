@@ -431,6 +431,12 @@ input:checked + .theme-slider::before {
   justify-content: space-between;
 }
 
+.field-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
 .group-value-badge {
   font-size: 11px;
   font-weight: 700;
@@ -592,6 +598,7 @@ input:checked + .theme-slider::before {
 .color-picker-popover {
   position: fixed;
   width: 232px;
+  box-sizing: border-box;
   background: var(--bg-sidebar);
   border: 1px solid var(--border-color-hover);
   border-radius: var(--radius-md);
@@ -625,6 +632,8 @@ input:checked + .theme-slider::before {
 
 .color-picker-hex-input {
   flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
   background: var(--bg-input);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -791,6 +800,17 @@ input:checked + .theme-slider::before {
 .captions-text {
   text-align: center;
   line-height: 1.3;
+}
+
+.subtitles-overlay.manual-drag-mode {
+  cursor: grab;
+  outline: 1px dashed rgba(255, 255, 255, 0.4);
+  outline-offset: 4px;
+  touch-action: none;
+}
+
+.subtitles-overlay.manual-drag-mode:active {
+  cursor: grabbing;
 }
 
 /* Floating Playback Controls Bar */

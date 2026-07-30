@@ -32,6 +32,11 @@ export const initialStyleState = {
   textCase: "uppercase",
   position: "bottom",
   marginV: 300,
+  customPosX: 50,
+  customPosY: 85,
+  enableKeywordHighlighting: true,
+  keywordColorHigh: "#EF4444",
+  keywordColorMedium: "#FB923C",
   theme: "dark"
 };
 
@@ -191,6 +196,11 @@ export function getStyleParams() {
     backgroundColor: appState.backgroundColor,
     textCase: appState.textCase,
     position: appState.position,
-    animationMode: appState.animationMode
+    customPosX: appState.customPosX,
+    customPosY: appState.customPosY,
+    animationMode: appState.animationMode,
+    enableKeywordHighlighting: appState.enableKeywordHighlighting,
+    keywordColorHigh: appState.keywordColorHigh,
+    keywordColorMedium: appState.keywordColorMedium
   };
 }

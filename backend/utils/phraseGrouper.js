@@ -63,7 +63,18 @@ export function groupWordsToPhrases(whisperData) {
     // Ensure word duration sits above 0
     const end = typeof w.end === 'number' ? Math.max(w.end, start + 0.05) : start + 0.05;
 
-    currentPhraseWords.push({ text, start, end });
+    // Carry through AI keyword emphasis metadata (if present) so both the
+    // frontend preview and the ASS writer can render it identically.
+    currentPhraseWords.push({
+      text,
+      start,
+      end,
+      wordIndex: i,
+      isKeyword: !!w.isKeyword,
+      importance: w.importance || null,
+      confidence: w.confidence ?? null,
+      source: w.source || null
+    });
 
     const trimmedText = text.trim();
     // Check for terminal punctuation at the end of the word: . , ! ? ; : -

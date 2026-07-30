@@ -264,7 +264,12 @@
                                     <input type="radio" name="sub-pos" value="bottom" checked>
                                     <span>Bottom</span>
                                 </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="sub-pos" value="manual">
+                                    <span>Manual</span>
+                                </label>
                             </div>
+                            <p class="field-hint" id="manual-pos-hint" hidden>Drag the caption directly in the preview to reposition it.</p>
                         </div>
 
                         <div class="settings-group">
@@ -273,6 +278,42 @@
                                 <span class="group-value-badge" id="val-margin-v">300px</span>
                             </div>
                             <input type="range" id="input-margin-v" min="50" max="800" value="300" class="slider-control">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. AI Keyword Highlighting Section -->
+                <div class="accordion-item">
+                    <button type="button" class="accordion-header">
+                        <span class="accordion-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                            AI Keywords
+                        </span>
+                        <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div class="accordion-body">
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Highlight Important Words</span>
+                                <label class="theme-toggle-label" title="Toggle AI keyword highlighting">
+                                    <input type="checkbox" id="toggle-keyword-highlighting" checked>
+                                    <span class="theme-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="settings-group">
+                            <label class="group-label">Keyword Colors</label>
+                            <div class="color-picker-grid">
+                                <div class="color-picker-item">
+                                    <label id="label-color-keyword-high">High</label>
+                                    <button type="button" class="color-swatch-trigger" id="color-keyword-high" data-color-key="keywordColorHigh" aria-haspopup="true" aria-labelledby="label-color-keyword-high"></button>
+                                </div>
+                                <div class="color-picker-item">
+                                    <label id="label-color-keyword-medium">Medium</label>
+                                    <button type="button" class="color-swatch-trigger" id="color-keyword-medium" data-color-key="keywordColorMedium" aria-haspopup="true" aria-labelledby="label-color-keyword-medium"></button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

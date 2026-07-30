@@ -1,7 +1,7 @@
 /**
  * Center Preview Workspace Component for Caption Studio
  */
-import { appState, subscribe, MOCK_SUBTITLES, getStyleParams } from '../state.js';
+import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from '../state.js';
 import { getCSSPreviewFromConfig } from '../../../shared/captionConfig.js';
 
 // Dynamic Google Font Loader
@@ -84,8 +84,56 @@ export function initPreviewWorkspace() {
     syncVideoSubtitles();
   });
 
+  initManualDragPositioning();
+
   applyCSSPreviewStyles();
   syncVideoSubtitles();
+}
+
+/**
+ * Enables dragging the caption overlay around the phone preview when
+ * appState.position === 'manual'. Uses Pointer Events so a single set of
+ * handlers covers both mouse and touch input. Stores the dragged position as
+ * customPosX/customPosY percentages of the phone-frame canvas — the exact
+ * same coordinate space getCSSPreviewFromConfig/getASSStyleFromConfig resolve
+ * from, so preview and export always agree on where the caption sits.
+ */
+function initManualDragPositioning() {
+  const subtitlesOverlay = document.getElementById('subtitles-overlay');
+  const phoneFrame = document.querySelector('.phone-frame');
+  if (!subtitlesOverlay || !phoneFrame) return;
+
+  let isDragging = false;
+
+  function updatePositionFromPointer(e) {
+    const rect = phoneFrame.getBoundingClientRect();
+    const xPct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    const yPct = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+    updateState({ customPosX: xPct, customPosY: yPct }, { recordHistory: false });
+  }
+
+  subtitlesOverlay.addEventListener('pointerdown', (e) => {
+    if (appState.position !== 'manual') return;
+    isDragging = true;
+    subtitlesOverlay.setPointerCapture(e.pointerId);
+    updatePositionFromPointer(e);
+  });
+
+  subtitlesOverlay.addEventListener('pointermove', (e) => {
+    if (!isDragging) return;
+    updatePositionFromPointer(e);
+  });
+
+  function endDrag(e) {
+    if (!isDragging) return;
+    isDragging = false;
+    updatePositionFromPointer(e);
+    // Commit the whole drag as a single undo step
+    updateState({ customPosX: appState.customPosX, customPosY: appState.customPosY }, { recordHistory: true });
+  }
+
+  subtitlesOverlay.addEventListener('pointerup', endDrag);
+  subtitlesOverlay.addEventListener('pointercancel', endDrag);
 }
 
 /**
@@ -103,6 +151,7 @@ export function applyCSSPreviewStyles() {
 
   // Apply Overlay Styles
   Object.assign(subtitlesOverlay.style, cssConfig.overlay);
+  subtitlesOverlay.classList.toggle('manual-drag-mode', appState.position === 'manual');
 
   // Apply Text Styles
   Object.assign(captionsText.style, cssConfig.text);
@@ -153,15 +202,24 @@ export function syncVideoSubtitles() {
   const isUppercase = appState.textCase === 'uppercase';
   const breakIndices = new Set(activePhrase.breakAfterIndices || []);
 
+  const keywordsEnabled = appState.enableKeywordHighlighting;
+  const keywordColorHigh = appState.keywordColorHigh || '#EF4444';
+  const keywordColorMedium = appState.keywordColorMedium || '#FB923C';
+
   const wordElements = activePhrase.words.map((w, idx) => {
     const isWordActive = currentTime >= w.start && currentTime <= w.end;
     const isPastWord = currentTime > w.end;
     const wordText = isUppercase ? (w.word || w.text || '').toUpperCase() : (w.word || w.text || '');
+    const isActiveKeyword = keywordsEnabled && w.isKeyword && isWordActive;
+    const keywordColor = w.importance === 'high' ? keywordColorHigh : keywordColorMedium;
 
     let color = inactiveColor;
     let extraClasses = ['word-unit'];
 
     if (mode === 'typewriter') {
+      // Typewriter's ASS export has no active/inactive color swap, so the
+      // dedicated keyword color is intentionally not applied here either —
+      // only the mode-agnostic bold/italic styling below stays in sync.
       if (!isWordActive && !isPastWord) {
         extraClasses.push('anim-typewriter-hidden');
       } else {
@@ -169,18 +227,22 @@ export function syncVideoSubtitles() {
       }
     } else if (mode === 'pop') {
       if (isWordActive) {
-        color = activeHighlight;
+        color = isActiveKeyword ? keywordColor : activeHighlight;
         extraClasses.push('anim-pop-active');
       } else {
         color = inactiveColor;
       }
     } else {
-      color = isWordActive ? activeHighlight : inactiveColor;
+      color = isWordActive ? (isActiveKeyword ? keywordColor : activeHighlight) : inactiveColor;
     }
 
     const wordElement = document.createElement('span');
     wordElement.className = extraClasses.join(' ');
     wordElement.style.color = color;
+    if (keywordsEnabled && w.isKeyword) {
+      wordElement.style.fontWeight = w.importance === 'high' ? '900' : '';
+      wordElement.style.fontStyle = w.importance === 'medium' ? 'italic' : '';
+    }
     wordElement.textContent = wordText;
 
     if (!breakIndices.has(idx) && idx !== activePhrase.words.length - 1) {

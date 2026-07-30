@@ -6,6 +6,7 @@
  * preview updates live and the same value flows through to export.
  */
 import { appState, updateState } from '../state.js';
+import { registerDismissable } from '../utils/clickOutside.js';
 
 const RECENT_COLORS_STORAGE_KEY = 'captionStudio.recentColors';
 const MAX_RECENT_COLORS = 8;
@@ -19,7 +20,9 @@ const PICKER_FIELDS = [
   { key: 'activeWordColor', triggerId: 'color-active-word', label: 'Active Word Color' },
   { key: 'inactiveWordColor', triggerId: 'color-inactive-word', label: 'Inactive Word Color' },
   { key: 'outlineColor', triggerId: 'color-outline', label: 'Outline Color' },
-  { key: 'backgroundColor', triggerId: 'color-background', label: 'Background Color' }
+  { key: 'backgroundColor', triggerId: 'color-background', label: 'Background Color' },
+  { key: 'keywordColorHigh', triggerId: 'color-keyword-high', label: 'High Importance Keyword Color' },
+  { key: 'keywordColorMedium', triggerId: 'color-keyword-medium', label: 'Medium Importance Keyword Color' }
 ];
 
 let popoverEl = null;
@@ -84,18 +87,10 @@ function ensurePopover() {
 
   popoverEl.addEventListener('click', (e) => e.stopPropagation());
 
-  document.addEventListener('click', (e) => {
-    if (!popoverEl.hidden && !popoverEl.contains(e.target) && !e.target.closest('.color-swatch-trigger')) {
-      closePopover();
-    }
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closePopover();
-  });
-
-  window.addEventListener('resize', () => {
-    if (!popoverEl.hidden) closePopover();
+  registerDismissable({
+    getElement: () => popoverEl,
+    isTrigger: (target) => !!target.closest?.('.color-swatch-trigger'),
+    onDismiss: closePopover
   });
 
   return popoverEl;
@@ -204,8 +199,18 @@ function openPopover(triggerEl, fieldKey, fallback) {
 
   const rect = triggerEl.getBoundingClientRect();
   const popoverWidth = 232; // matches CSS width; used to keep the popover on-screen
+  const popoverHeight = popover.getBoundingClientRect().height;
+
   const left = Math.min(rect.left, window.innerWidth - popoverWidth - 16);
-  popover.style.top = `${rect.bottom + 8 + window.scrollY}px`;
+
+  // Flip above the trigger when there isn't enough room below the viewport,
+  // and clamp so the panel never gets clipped off the top edge either.
+  const fitsBelow = rect.bottom + 8 + popoverHeight <= window.innerHeight;
+  const top = fitsBelow
+    ? rect.bottom + 8
+    : Math.max(8, rect.top - popoverHeight - 8);
+
+  popover.style.top = `${top + window.scrollY}px`;
   popover.style.left = `${Math.max(16, left) + window.scrollX}px`;
 }
 

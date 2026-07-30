@@ -9,7 +9,9 @@ const COLOR_FALLBACK_MAP = {
   activeWordColor: (cssConfig) => cssConfig.highlightColor || '#FEF08A',
   inactiveWordColor: (cssConfig) => cssConfig.inactiveColor || '#FFFFFF',
   outlineColor: (cssConfig) => cssConfig.outlineColor || '#000000',
-  backgroundColor: (cssConfig) => (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') ? cssConfig.backgroundColor : '#000000'
+  backgroundColor: (cssConfig) => (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') ? cssConfig.backgroundColor : '#000000',
+  keywordColorHigh: (cssConfig) => cssConfig.keywordColorHigh || '#EF4444',
+  keywordColorMedium: (cssConfig) => cssConfig.keywordColorMedium || '#FB923C'
 };
 
 function getFallbackColorFor(fieldKey) {
@@ -107,7 +109,15 @@ export function initSidebarInspector() {
 
   positionRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
-      updateState({ position: e.target.value });
+      const newPosition = e.target.value;
+      if (newPosition === 'manual') {
+        updateState({ position: newPosition });
+      } else {
+        // Switching back to a preset resets the dragged custom position, so
+        // re-entering Manual mode later always starts from the same default
+        // spot rather than a stale dragged one.
+        updateState({ position: newPosition, customPosX: 50, customPosY: 85 });
+      }
     });
   });
 
@@ -119,7 +129,15 @@ export function initSidebarInspector() {
     });
   }
 
-  // 7. Subscribe to global state changes to synchronize UI controls
+  // 7. AI Keyword Highlighting Toggle
+  const toggleKeywordHighlighting = document.getElementById('toggle-keyword-highlighting');
+  if (toggleKeywordHighlighting) {
+    toggleKeywordHighlighting.addEventListener('change', (e) => {
+      updateState({ enableKeywordHighlighting: e.target.checked });
+    });
+  }
+
+  // 8. Subscribe to global state changes to synchronize UI controls
   subscribe('*', () => {
     syncSidebarUI();
   });
@@ -176,8 +194,15 @@ function syncSidebarUI() {
     r.checked = r.value === appState.position;
   });
 
+  const manualPosHint = document.getElementById('manual-pos-hint');
+  if (manualPosHint) manualPosHint.hidden = appState.position !== 'manual';
+
   const inputMarginV = document.getElementById('input-margin-v');
   const valMarginV = document.getElementById('val-margin-v');
   if (inputMarginV) inputMarginV.value = appState.marginV || 300;
   if (valMarginV) valMarginV.textContent = `${appState.marginV || 300}px`;
+
+  // AI Keyword Highlighting Toggle
+  const toggleKeywordHighlighting = document.getElementById('toggle-keyword-highlighting');
+  if (toggleKeywordHighlighting) toggleKeywordHighlighting.checked = !!appState.enableKeywordHighlighting;
 }

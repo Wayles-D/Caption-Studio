@@ -54,7 +54,11 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
     animationMode: resolvedStyle.animationMode || 'karaoke',
     popScale: resolvedStyle.popScale || 118,
     primaryColor: resolvedStyle.primaryColor,
-    secondaryColor: resolvedStyle.secondaryColor
+    secondaryColor: resolvedStyle.secondaryColor,
+    posOverrideTag: resolvedStyle.posOverrideTag || null,
+    enableKeywordHighlighting: resolvedStyle.enableKeywordHighlighting !== false,
+    keywordHighColor: resolvedStyle.keywordHighColor,
+    keywordMediumColor: resolvedStyle.keywordMediumColor
   };
   
   phrases.forEach((phrase) => {

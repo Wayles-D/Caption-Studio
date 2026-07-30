@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { extractAudio, burnSubtitles } from '../utils/ffmpeg.js';
 import { transcribeAudio } from '../services/whisperService.js';
 import { generateSubtitleFromTranscript } from '../services/subtitleService.js';
+import { analyzeKeywords } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
 
@@ -20,6 +21,46 @@ function isValidJobId(value) {
 function getMaxConcurrentJobs() {
   const configuredLimit = Number.parseInt(process.env.MAX_CONCURRENT_JOBS || '2', 10);
   return Number.isInteger(configuredLimit) && configuredLimit > 0 ? configuredLimit : 2;
+}
+
+/**
+ * Extracts the flat, speaking-order word list from a Whisper transcription
+ * payload, whether words live at the top level or nested inside segments.
+ */
+function extractFlatWords(transcriptionJSON) {
+  if (transcriptionJSON.words && Array.isArray(transcriptionJSON.words)) {
+    return transcriptionJSON.words;
+  }
+  const words = [];
+  if (transcriptionJSON.segments) {
+    for (const seg of transcriptionJSON.segments) {
+      if (seg.words && Array.isArray(seg.words)) {
+        words.push(...seg.words);
+      }
+    }
+  }
+  return words;
+}
+
+/**
+ * Merges a flat, enriched word list (same length/order as extractFlatWords
+ * produced) back into the transcription payload, matching whichever shape
+ * (top-level words vs. per-segment words) the payload originally used.
+ */
+function mergeWordsIntoTranscription(transcriptionJSON, enrichedWords) {
+  if (transcriptionJSON.words && Array.isArray(transcriptionJSON.words)) {
+    transcriptionJSON.words = enrichedWords;
+    return;
+  }
+  if (transcriptionJSON.segments) {
+    let cursor = 0;
+    for (const seg of transcriptionJSON.segments) {
+      if (seg.words && Array.isArray(seg.words)) {
+        seg.words = enrichedWords.slice(cursor, cursor + seg.words.length);
+        cursor += seg.words.length;
+      }
+    }
+  }
 }
 
 
@@ -114,18 +155,30 @@ export async function uploadAndExtractAudio(req, res, next) {
     const transcriptionJSON = await transcribeAudio(audioPath);
     console.log(`[Pipeline] [${baseName}] Stage: Whisper Request Completed (Duration: ${Date.now() - whisperStart}ms)`);
 
-    // 3. Save raw transcription JSON output
+    // 3. Extract flat word-level data, run AI keyword emphasis tagging (best-effort,
+    // never fails the pipeline), and merge the enriched words back into the
+    // transcription payload before anything downstream reads it.
+    let words = extractFlatWords(transcriptionJSON);
+
+    console.log(`[Pipeline] [${baseName}] Stage: AI Keyword Analysis Started`);
+    const keywordAnalysisStart = Date.now();
+    words = await analyzeKeywords(words);
+    console.log(`[Pipeline] [${baseName}] Stage: AI Keyword Analysis Completed (Duration: ${Date.now() - keywordAnalysisStart}ms)`);
+
+    mergeWordsIntoTranscription(transcriptionJSON, words);
+
+    // 4. Save raw transcription JSON output (now enriched with keyword metadata)
     console.log(`[Pipeline] [${baseName}] Stage: Saving Transcript JSON...`);
     fs.writeFileSync(transcriptPath, JSON.stringify(transcriptionJSON, null, 2));
     console.log(`[Pipeline] [${baseName}] Stage: Transcripts saved`);
 
-    // 4. Generate Advanced SubStation Alpha (.ass) style subtitles
+    // 5. Generate Advanced SubStation Alpha (.ass) style subtitles
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Started`);
     const subtitleStart = Date.now();
     await generateSubtitleFromTranscript(transcriptPath, subtitlePath, { styles: req.body });
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Completed (Duration: ${Date.now() - subtitleStart}ms)`);
 
-    // 5. Burn subtitles into original uploaded video to create the final captioned video
+    // 6. Burn subtitles into original uploaded video to create the final captioned video
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Started`);
     const renderStart = Date.now();
     await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
@@ -154,18 +207,6 @@ export async function uploadAndExtractAudio(req, res, next) {
     const relativeTranscriptPath = path.relative(backendRoot, transcriptPath);
     const relativeSubtitlePath = path.relative(backendRoot, subtitlePath);
     const relativeRenderedVideoPath = `/${path.relative(backendRoot, renderedVideoPath).replace(/\\/g, '/')}`;
-
-    // Extract word-level data for transcript editing & payload consistency
-    let words = [];
-    if (transcriptionJSON.words && Array.isArray(transcriptionJSON.words)) {
-      words = transcriptionJSON.words;
-    } else if (transcriptionJSON.segments) {
-      for (const seg of transcriptionJSON.segments) {
-        if (seg.words && Array.isArray(seg.words)) {
-          words.push(...seg.words);
-        }
-      }
-    }
 
     // Generate phrases from words for single source of truth captioning
     const phrases = groupWordsToPhrases(transcriptionJSON);

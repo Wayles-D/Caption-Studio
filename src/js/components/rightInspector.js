@@ -112,6 +112,7 @@ export function collectEditedWords() {
   return Array.from(chips).map((chip, idx) => {
     const originalWord = appState.words[idx];
     return {
+      ...originalWord,
       word: chip.textContent.trim(),
       start: originalWord ? originalWord.start : 0,
       end: originalWord ? originalWord.end : 0

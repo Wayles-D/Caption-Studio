@@ -88,11 +88,27 @@ function toInlineColorTags(assColor, index) {
 }
 
 /**
+ * Builds the inline weight/style override tags for a keyword word, based on
+ * its importance. Mirrors the frontend preview's fontWeight/fontStyle rule
+ * exactly: high importance -> bold, medium importance -> italic. Applied
+ * regardless of active/inactive state, and regardless of animation mode.
+ */
+function toKeywordStyleTags(word, enableKeywordHighlighting) {
+  if (!enableKeywordHighlighting || !word || !word.isKeyword) return '';
+  if (word.importance === 'high') return '\\b1';
+  if (word.importance === 'medium') return '\\i1';
+  return '';
+}
+
+/**
  * Builds the Dialogue Text payload for one time-slice of a phrase: the full
  * phrase text is always present, only the active word's color (and, in pop
- * mode, scale) differs from the rest.
+ * mode, scale) differs from the rest. An active keyword word gets a dedicated
+ * keyword color instead of the normal active color; keyword bold/italic
+ * styling applies regardless of active state.
  */
-function buildStaticHighlightText(wordTexts, breakIndices, activeIdx, animationMode, popScale, primaryColor, secondaryColor) {
+function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, options) {
+  const { animationMode, popScale, primaryColor, secondaryColor, enableKeywordHighlighting, keywordHighColor, keywordMediumColor } = options;
   let payload = '';
 
   wordTexts.forEach((wordText, idx) => {
@@ -101,12 +117,20 @@ function buildStaticHighlightText(wordTexts, breakIndices, activeIdx, animationM
     const prefixSpace = (isFirstWord || isLineBreak) ? '' : ' ';
     const lineBreakTag = isLineBreak ? '\\N' : '';
     const isActive = idx === activeIdx;
+    const word = words[idx];
+    const isActiveKeyword = isActive && enableKeywordHighlighting && word?.isKeyword;
 
-    const colorTags = toInlineColorTags(isActive ? primaryColor : secondaryColor, 1);
+    let fillColor = isActive ? primaryColor : secondaryColor;
+    if (isActiveKeyword) {
+      fillColor = word.importance === 'high' ? keywordHighColor : keywordMediumColor;
+    }
+
+    const colorTags = toInlineColorTags(fillColor, 1);
+    const styleTags = toKeywordStyleTags(word, enableKeywordHighlighting);
     const scaleOpenTag = (isActive && animationMode === 'pop') ? `\\fscx${popScale}\\fscy${popScale}` : '';
     const scaleCloseTag = (isActive && animationMode === 'pop') ? '{\\fscx100\\fscy100}' : '';
 
-    payload += `${lineBreakTag}${prefixSpace}{${colorTags}${scaleOpenTag}}${wordText}${scaleCloseTag}`;
+    payload += `${lineBreakTag}${prefixSpace}{${colorTags}${styleTags}${scaleOpenTag}}${wordText}${scaleCloseTag}`;
   });
 
   return payload;
@@ -123,7 +147,7 @@ function buildStaticHighlightText(wordTexts, breakIndices, activeIdx, animationM
  * hard-swap highlight behavior in the preview; only the scale tag differs.
  */
 function generateStaticHighlightDialogueEvents(phrase, options) {
-  const { textCase, animationMode, popScale, primaryColor, secondaryColor } = options;
+  const { textCase, posOverrideTag } = options;
   const breakIndices = new Set(phrase.breakAfterIndices || []);
 
   const wordTexts = phrase.words.map((w) => {
@@ -146,8 +170,8 @@ function generateStaticHighlightDialogueEvents(phrase, options) {
     if (sliceEnd - sliceStart < 0.001) continue; // skip degenerate zero-length slices
 
     const activeIdx = phrase.words.findIndex((w) => sliceStart >= w.start - 0.001 && sliceStart < w.end - 0.001);
-    const text = buildStaticHighlightText(wordTexts, breakIndices, activeIdx, animationMode, popScale, primaryColor, secondaryColor);
-    events.push(`Dialogue: 0,${formatASSTimestamp(sliceStart)},${formatASSTimestamp(sliceEnd)},Default,,0,0,0,,${text}`);
+    const text = buildStaticHighlightText(phrase.words, wordTexts, breakIndices, activeIdx, options);
+    events.push(`Dialogue: 0,${formatASSTimestamp(sliceStart)},${formatASSTimestamp(sliceEnd)},Default,,0,0,0,,${posOverrideTag || ''}${text}`);
   }
 
   return events.join('\n');
@@ -159,7 +183,7 @@ function generateStaticHighlightDialogueEvents(phrase, options) {
  * only mode where words are deliberately revealed/hidden over time.
  */
 function generateTypewriterDialogueLine(phrase, options) {
-  const { textCase, popScale } = options;
+  const { textCase, posOverrideTag, enableKeywordHighlighting } = options;
   const breakIndices = new Set(phrase.breakAfterIndices || []);
 
   const startStr = formatASSTimestamp(phrase.start);
@@ -181,16 +205,20 @@ function generateTypewriterDialogueLine(phrase, options) {
     const isLineBreak = breakIndices.has(idx - 1);
     const prefixSpace = (isFirstWord || isLineBreak) ? '' : ' ';
     const lineBreakTag = isLineBreak ? '\\N' : '';
+    // Typewriter has no existing active/inactive color swap in ASS, so keywords
+    // only get bold/italic styling here (no dedicated keyword color), keeping
+    // this mode self-consistent with its own current rendering model.
+    const styleTags = toKeywordStyleTags(w, enableKeywordHighlighting);
 
     if (delay > 0) {
       textPayload += `${lineBreakTag}{\\alpha&HFF&\\k${delay}}`;
     }
-    textPayload += `${prefixSpace}{\\alpha&H00&\\kf${duration}}${wordText}`;
+    textPayload += `${prefixSpace}{\\alpha&H00&\\kf${duration}${styleTags}}${wordText}`;
 
     lastTime = w.end;
   });
 
-  return `Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${textPayload}`;
+  return `Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${posOverrideTag || ''}${textPayload}`;
 }
 
 /**
@@ -213,12 +241,21 @@ export function generateASSDialogueLine(phrase, options = {}) {
   const popScale = typeof options === 'object' && options.popScale ? Math.round(options.popScale) : 118;
   const primaryColor = (typeof options === 'object' && options.primaryColor) || DEFAULT_PRIMARY_COLOR;
   const secondaryColor = (typeof options === 'object' && options.secondaryColor) || DEFAULT_SECONDARY_COLOR;
+  const posOverrideTag = (typeof options === 'object' && options.posOverrideTag) || null;
+  const enableKeywordHighlighting = typeof options === 'object' && options.enableKeywordHighlighting !== false;
+  const keywordHighColor = (typeof options === 'object' && options.keywordHighColor) || DEFAULT_PRIMARY_COLOR;
+  const keywordMediumColor = (typeof options === 'object' && options.keywordMediumColor) || DEFAULT_PRIMARY_COLOR;
+
+  const resolvedOptions = {
+    textCase, animationMode, popScale, primaryColor, secondaryColor,
+    posOverrideTag, enableKeywordHighlighting, keywordHighColor, keywordMediumColor
+  };
 
   if (animationMode === 'typewriter') {
-    return generateTypewriterDialogueLine(phrase, { textCase, popScale });
+    return generateTypewriterDialogueLine(phrase, resolvedOptions);
   }
 
-  return generateStaticHighlightDialogueEvents(phrase, { textCase, animationMode, popScale, primaryColor, secondaryColor });
+  return generateStaticHighlightDialogueEvents(phrase, resolvedOptions);
 }
 
 

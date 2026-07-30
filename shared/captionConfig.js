@@ -235,8 +235,15 @@ export function getASSStyleFromConfig(params = {}) {
   const feSize = parseInt(params.fontSize || '14', 10);
   const fontSize = Math.round(feSize * 5.14);
 
-  const posKey = params.position && CAPTION_POSITIONS[params.position] ? params.position : 'bottom';
-  const marginV = CAPTION_POSITIONS[posKey].marginV;
+  const posKey = params.position === 'manual' ? 'manual' : (params.position && CAPTION_POSITIONS[params.position] ? params.position : 'bottom');
+  const marginV = posKey === 'manual' ? CAPTION_POSITIONS.bottom.marginV : CAPTION_POSITIONS[posKey].marginV;
+
+  // Manual mode overrides both the alignment anchor and the position entirely
+  // via an inline \pos() tag, matching the CSS preview's left/top % + centered
+  // transform anchor point exactly (both anchor at the same relative point).
+  const posOverrideTag = posKey === 'manual'
+    ? `\\an5\\pos(${Math.round((parseFloat(params.customPosX ?? 50) / 100) * 1080)},${Math.round((parseFloat(params.customPosY ?? 85) / 100) * 1920)})`
+    : null;
 
   const presetKey = params.preset && CREATOR_PROFILES[params.preset] ? params.preset : 'bold-yellow';
   const profile = CREATOR_PROFILES[presetKey];
@@ -246,13 +253,20 @@ export function getASSStyleFromConfig(params = {}) {
     : profile.defaultAnimationMode || 'karaoke';
 
   // Custom Color Overrides or Profile Defaults
-  const primaryColor = params.activeWordColor 
-    ? hexToASSColor(params.activeWordColor, profile.colors.primaryHex) 
+  const primaryColor = params.activeWordColor
+    ? hexToASSColor(params.activeWordColor, profile.colors.primaryHex)
     : profile.colors.assPrimary;
 
-  const secondaryColor = params.inactiveWordColor 
-    ? hexToASSColor(params.inactiveWordColor, profile.colors.secondaryHex) 
+  const secondaryColor = params.inactiveWordColor
+    ? hexToASSColor(params.inactiveWordColor, profile.colors.secondaryHex)
     : profile.colors.assSecondary;
+
+  // AI Keyword Highlighting: dedicated colors for active high/medium importance
+  // keyword words. Disabled by default resolution stays the same regardless —
+  // callers gate on enableKeywordHighlighting before applying these.
+  const enableKeywordHighlighting = params.enableKeywordHighlighting !== false && params.enableKeywordHighlighting !== 'false';
+  const keywordHighColor = hexToASSColor(params.keywordColorHigh || '#EF4444', '#EF4444');
+  const keywordMediumColor = hexToASSColor(params.keywordColorMedium || '#FB923C', '#FB923C');
 
   const outlineColor = params.outlineColor 
     ? hexToASSColor(params.outlineColor, profile.colors.outlineHex) 
@@ -301,6 +315,10 @@ export function getASSStyleFromConfig(params = {}) {
     spacing: assSpacing,
     popScale,
     animationMode,
+    posOverrideTag,
+    enableKeywordHighlighting,
+    keywordHighColor,
+    keywordMediumColor,
     profile
   };
 }
@@ -338,8 +356,11 @@ export function getCSSPreviewFromConfig(params = {}) {
   const fontName = params.fontFamily ? params.fontFamily.replace(/['"]/g, '').split(',')[0].trim() : 'Montserrat';
   const feSize = parseInt(params.fontSize || '14', 10);
   
-  const posKey = params.position && CAPTION_POSITIONS[params.position] ? params.position : 'bottom';
-  const posConfig = CAPTION_POSITIONS[posKey];
+  const isManualPosition = params.position === 'manual';
+  const posKey = isManualPosition ? 'manual' : (params.position && CAPTION_POSITIONS[params.position] ? params.position : 'bottom');
+  const posConfig = isManualPosition ? null : CAPTION_POSITIONS[posKey];
+  const customPosX = parseFloat(params.customPosX ?? 50);
+  const customPosY = parseFloat(params.customPosY ?? 85);
 
   const presetKey = params.preset && CREATOR_PROFILES[params.preset] ? params.preset : 'bold-yellow';
   const profile = CREATOR_PROFILES[presetKey];
@@ -368,22 +389,44 @@ export function getCSSPreviewFromConfig(params = {}) {
   const { isBoxed, boxPaddingPx } = resolveBoxState(params, profile);
   const cssPadding = isBoxed ? `${Math.round(boxPaddingPx / 2)}px ${boxPaddingPx}px` : '0';
 
+  // AI Keyword Highlighting resolved colors (mirrors getASSStyleFromConfig).
+  const enableKeywordHighlighting = params.enableKeywordHighlighting !== false && params.enableKeywordHighlighting !== 'false';
+  const keywordColorHigh = params.keywordColorHigh || '#EF4444';
+  const keywordColorMedium = params.keywordColorMedium || '#FB923C';
+
+  const overlay = isManualPosition
+    ? {
+        position: 'absolute',
+        left: `${customPosX}%`,
+        top: `${customPosY}%`,
+        bottom: 'auto',
+        transform: 'translate(-50%, -50%)',
+        width: '90%',
+        pointerEvents: 'auto',
+        textAlign: 'center',
+        zIndex: '10'
+      }
+    : {
+        position: 'absolute',
+        left: '50%',
+        top: posConfig.cssTop,
+        bottom: posConfig.cssBottom,
+        transform: posConfig.cssTransform,
+        width: '90%',
+        pointerEvents: 'none',
+        textAlign: 'center',
+        zIndex: '10'
+      };
+
   return {
     animationMode,
     profile,
     popScale,
     wordSpacingPx: numericWordSpacing,
-    overlay: {
-      position: 'absolute',
-      left: '50%',
-      top: posConfig.cssTop,
-      bottom: posConfig.cssBottom,
-      transform: posConfig.cssTransform,
-      width: '90%',
-      pointerEvents: 'none',
-      textAlign: 'center',
-      zIndex: '10'
-    },
+    enableKeywordHighlighting,
+    keywordColorHigh,
+    keywordColorMedium,
+    overlay,
     text: {
       fontFamily: `'${fontName}', sans-serif`,
       fontSize: `${feSize}px`,
