@@ -10,8 +10,17 @@ import { cleanupJobAssets } from '../utils/cleanup.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Single active workspace track across requests
-let activeJobId = null;
+const activeJobIds = new Set();
+const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isValidJobId(value) {
+  return typeof value === 'string' && JOB_ID_PATTERN.test(value);
+}
+
+function getMaxConcurrentJobs() {
+  const configuredLimit = Number.parseInt(process.env.MAX_CONCURRENT_JOBS || '2', 10);
+  return Number.isInteger(configuredLimit) && configuredLimit > 0 ? configuredLimit : 2;
+}
 
 
 // Ensure output, transcripts and subtitles directories exist
@@ -58,22 +67,23 @@ export async function uploadAndExtractAudio(req, res, next) {
   const renderedVideoFilename = `${baseName}_captioned.mp4`;
   const renderedVideoPath = path.join(outputDir, renderedVideoFilename);
 
+  if (activeJobIds.size >= getMaxConcurrentJobs()) {
+    cleanupJobAssets(baseName);
+    return res.status(503).json({
+      success: false,
+      message: 'The processing queue is full. Please try again shortly.'
+    });
+  }
+
   console.log(`[Pipeline] [${baseName}] Processing media pipeline:\n  Video: ${videoPath}\n  Audio: ${audioPath}\n  Transcript: ${transcriptPath}\n  Subtitles: ${subtitlePath}\n  Rendered: ${renderedVideoPath}`);
 
-  // Purge any temporary assets from a previous job before starting
-  if (activeJobId && activeJobId !== baseName) {
-    console.log(`[Pipeline] Pre-upload Cleanup: Purging resources of previous job: ${activeJobId}`);
-    cleanupJobAssets(activeJobId);
-  }
-  
-  // Set current baseName as the active job workspace
-  activeJobId = baseName;
+  activeJobIds.add(baseName);
 
   let activeProc = null;
   let isRequestFinished = false;
 
   // Handle client request cancellation/abort during upload/processing
-  req.on('close', () => {
+  req.on('aborted', () => {
     if (!isRequestFinished) {
       console.log(`[Pipeline] [${baseName}] Warning: Client request aborted before completion. Initiating cleanup...`);
       if (activeProc) {
@@ -112,7 +122,7 @@ export async function uploadAndExtractAudio(req, res, next) {
     // 4. Generate Advanced SubStation Alpha (.ass) style subtitles
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Started`);
     const subtitleStart = Date.now();
-    await generateSubtitleFromTranscript(transcriptPath, subtitlePath);
+    await generateSubtitleFromTranscript(transcriptPath, subtitlePath, { styles: req.body });
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Completed (Duration: ${Date.now() - subtitleStart}ms)`);
 
     // 5. Burn subtitles into original uploaded video to create the final captioned video
@@ -143,7 +153,7 @@ export async function uploadAndExtractAudio(req, res, next) {
     const relativeAudioPath = path.relative(backendRoot, audioPath);
     const relativeTranscriptPath = path.relative(backendRoot, transcriptPath);
     const relativeSubtitlePath = path.relative(backendRoot, subtitlePath);
-    const relativeRenderedVideoPath = path.relative(backendRoot, renderedVideoPath);
+    const relativeRenderedVideoPath = `/${path.relative(backendRoot, renderedVideoPath).replace(/\\/g, '/')}`;
 
     // Extract word-level data for transcript editing & payload consistency
     let words = [];
@@ -168,7 +178,7 @@ export async function uploadAndExtractAudio(req, res, next) {
       audioPath: relativeAudioPath.replace(/\\/g, '/'),
       transcriptPath: relativeTranscriptPath.replace(/\\/g, '/'),
       subtitlePath: relativeSubtitlePath.replace(/\\/g, '/'),
-      renderedVideoPath: relativeRenderedVideoPath.replace(/\\/g, '/'),
+      renderedVideoPath: relativeRenderedVideoPath,
       transcription: transcriptionJSON,
       words,
       phrases
@@ -181,14 +191,11 @@ export async function uploadAndExtractAudio(req, res, next) {
     isRequestFinished = true;
     console.error(`[Pipeline] [${baseName}] Step Failure: Execution error in pipeline: ${error.message}`);
     
-    // Clear active job if current job failed
-    if (activeJobId === baseName) {
-      activeJobId = null;
-    }
-
     // Immediate cleanup on error path
     cleanupJobAssets(baseName);
     next(error);
+  } finally {
+    activeJobIds.delete(baseName);
   }
 }
 
@@ -196,19 +203,18 @@ export async function uploadAndExtractAudio(req, res, next) {
  * Endpoint to explicitly trigger cleanup of the active workspace job.
  */
 export async function workspaceCleanup(req, res) {
-  console.log(`[Workspace Cleanup] Explicit request to cleanup active job: ${activeJobId}`);
-  if (activeJobId) {
-    cleanupJobAssets(activeJobId);
-    activeJobId = null;
-    return res.status(200).json({
-      success: true,
-      message: 'Workspace cleaned up successfully.'
-    });
+  const { baseName } = req.body;
+
+  if (!isValidJobId(baseName)) {
+    return res.status(400).json({ success: false, message: 'A valid job ID is required.' });
   }
-  return res.status(200).json({
-    success: true,
-    message: 'Workspace already clean.'
-  });
+
+  if (activeJobIds.has(baseName)) {
+    return res.status(409).json({ success: false, message: 'The job is still processing and cannot be cleaned up.' });
+  }
+
+  cleanupJobAssets(baseName);
+  return res.status(200).json({ success: true, message: 'Workspace cleaned up successfully.' });
 }
 
 /**
@@ -221,6 +227,10 @@ export async function regenerateCaptions(req, res, next) {
 
   if (!baseName) {
     return res.status(400).json({ success: false, message: 'baseName is required.' });
+  }
+
+  if (!isValidJobId(baseName)) {
+    return res.status(400).json({ success: false, message: 'baseName must be a valid job ID.' });
   }
 
   if (!words || !Array.isArray(words) || words.length === 0) {
@@ -257,12 +267,17 @@ export async function regenerateCaptions(req, res, next) {
     }
   }
 
+  if (activeJobIds.has(baseName)) {
+    return res.status(409).json({ success: false, message: 'This job is already being processed.' });
+  }
+  activeJobIds.add(baseName);
+
   console.log(`[Regenerate] Starting caption regeneration for job: ${baseName}`);
 
   let activeProc = null;
   let isRequestFinished = false;
 
-  req.on('close', () => {
+  req.on('aborted', () => {
     if (!isRequestFinished) {
       console.log(`[Regenerate] [${baseName}] Client aborted regeneration request.`);
       if (activeProc) {
@@ -295,7 +310,7 @@ export async function regenerateCaptions(req, res, next) {
     isRequestFinished = true;
 
     const backendRoot = path.join(__dirname, '..');
-    const relativeRenderedVideoPath = path.relative(backendRoot, renderedVideoPath).replace(/\\/g, '/');
+    const relativeRenderedVideoPath = `/${path.relative(backendRoot, renderedVideoPath).replace(/\\/g, '/')}`;
 
     // Generate updated phrases for the frontend single source of truth preview
     const phrases = groupWordsToPhrases(editedTranscript);
@@ -314,5 +329,7 @@ export async function regenerateCaptions(req, res, next) {
     isRequestFinished = true;
     console.error(`[Regenerate] [${baseName}] Error: ${error.message}`);
     next(error);
+  } finally {
+    activeJobIds.delete(baseName);
   }
 }

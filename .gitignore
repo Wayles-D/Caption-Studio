@@ -1,8 +1,6 @@
 # Dependencies
 node_modules/
 **/node_modules/
-package-lock.json
-/backend/package-lock.json
 
 # Environment Variables & Secrets
 .env

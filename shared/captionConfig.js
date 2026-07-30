@@ -229,7 +229,7 @@ export function hexToASSColor(hex, defaultHex = '#FFFFFF') {
 export function getASSStyleFromConfig(params = {}) {
   let fontName = 'Montserrat SemiBold';
   if (params.fontFamily) {
-    fontName = params.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+    fontName = params.fontFamily.replace(/['"\r\n]/g, '').split(',')[0].trim();
   }
 
   const feSize = parseInt(params.fontSize || '14', 10);

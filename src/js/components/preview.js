@@ -164,9 +164,13 @@ export function syncVideoSubtitles() {
     const demoItem = MOCK_SUBTITLES.find(s => currentTime >= s.start && currentTime <= s.end);
     if (demoItem) {
       const text = appState.textCase === 'uppercase' ? demoItem.text.toUpperCase() : demoItem.text;
-      captionsText.innerHTML = `<span class="word-unit" style="color: ${inactiveColor};">${text}</span>`;
+      const wordElement = document.createElement('span');
+      wordElement.className = 'word-unit';
+      wordElement.style.color = inactiveColor;
+      wordElement.textContent = text;
+      captionsText.replaceChildren(wordElement);
     } else {
-      captionsText.innerHTML = '';
+      captionsText.replaceChildren();
     }
     return;
   }
@@ -175,7 +179,7 @@ export function syncVideoSubtitles() {
   const isUppercase = appState.textCase === 'uppercase';
   const breakIndices = new Set(activePhrase.breakAfterIndices || []);
 
-  const spanHtml = activePhrase.words.map((w, idx) => {
+  const wordElements = activePhrase.words.map((w, idx) => {
     const isWordActive = currentTime >= w.start && currentTime <= w.end;
     const isPastWord = currentTime > w.end;
     const wordText = isUppercase ? (w.word || w.text || '').toUpperCase() : (w.word || w.text || '');
@@ -200,15 +204,26 @@ export function syncVideoSubtitles() {
       color = isWordActive ? activeHighlight : inactiveColor;
     }
 
-    const isLastInLine = breakIndices.has(idx) || idx === activePhrase.words.length - 1;
-    const isLineBreak = breakIndices.has(idx - 1);
-    const spacingStyle = isLastInLine ? '' : `margin-right: ${wordSpacingPx}px;`;
-    const brTag = isLineBreak ? '<br/>' : '';
+    const wordElement = document.createElement('span');
+    wordElement.className = extraClasses.join(' ');
+    wordElement.style.color = color;
+    wordElement.textContent = wordText;
 
-    return `${brTag}<span class="${extraClasses.join(' ')}" style="color: ${color}; ${spacingStyle}">${wordText}</span>`;
-  }).join('');
+    if (!breakIndices.has(idx) && idx !== activePhrase.words.length - 1) {
+      wordElement.style.marginRight = `${wordSpacingPx}px`;
+    }
 
-  captionsText.innerHTML = spanHtml;
+    return { wordElement, isLineBreak: breakIndices.has(idx - 1) };
+  });
+
+  const fragment = document.createDocumentFragment();
+  wordElements.forEach(({ wordElement, isLineBreak }) => {
+    if (isLineBreak) {
+      fragment.append(document.createElement('br'));
+    }
+    fragment.append(wordElement);
+  });
+  captionsText.replaceChildren(fragment);
 }
 
 function formatTime(seconds) {
