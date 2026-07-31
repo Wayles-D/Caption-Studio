@@ -42,6 +42,17 @@ export const initialStyleState = {
   enableKeywordHighlighting: true,
   keywordColorHigh: "#EF4444",
   keywordColorMedium: "#FB923C",
+  keywordPrimaryFont: null,
+  keywordMediumFont: null,
+  keywordPrimaryScale: null,
+  keywordMediumScale: null,
+  keywordPrimaryWeight: null,
+  keywordMediumWeight: null,
+  keywordPrimaryAnimation: null,
+  keywordShadowEnabled: null,
+  keywordOutlineEnabled: null,
+  keywordOpacity: 100,
+  enableActiveHighlight: null,
   theme: "dark"
 };
 
@@ -213,6 +224,17 @@ export function getStyleParams() {
     animationMode: appState.animationMode,
     enableKeywordHighlighting: appState.enableKeywordHighlighting,
     keywordColorHigh: appState.keywordColorHigh,
-    keywordColorMedium: appState.keywordColorMedium
+    keywordColorMedium: appState.keywordColorMedium,
+    keywordPrimaryFont: appState.keywordPrimaryFont,
+    keywordMediumFont: appState.keywordMediumFont,
+    keywordPrimaryScale: appState.keywordPrimaryScale,
+    keywordMediumScale: appState.keywordMediumScale,
+    keywordPrimaryWeight: appState.keywordPrimaryWeight,
+    keywordMediumWeight: appState.keywordMediumWeight,
+    keywordPrimaryAnimation: appState.keywordPrimaryAnimation,
+    keywordShadowEnabled: appState.keywordShadowEnabled,
+    keywordOutlineEnabled: appState.keywordOutlineEnabled,
+    keywordOpacity: appState.keywordOpacity,
+    enableActiveHighlight: appState.enableActiveHighlight
   };
 }

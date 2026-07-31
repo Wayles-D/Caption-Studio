@@ -45,6 +45,16 @@ function getFallbackShadowOffset() {
   return appState.shadowSize ?? getFallbackShadowSize();
 }
 
+const DEFAULT_KEYWORD_TIER_FALLBACK = { fontFamily: '', fontWeight: '', fontScale: 1, animation: 'none', shadowByDefault: false, outlineByDefault: false };
+
+function getFallbackKeywordTier(tier) {
+  return getCurrentProfile().keywordStyle?.[tier] || DEFAULT_KEYWORD_TIER_FALLBACK;
+}
+
+function getFallbackActiveHighlightEnabled() {
+  return !getCurrentProfile().disableActiveHighlightByDefault;
+}
+
 export function initSidebarInspector() {
   // 1. Accordion Header Toggle Binding
   const accordionHeaders = document.querySelectorAll('.accordion-header');
@@ -65,7 +75,16 @@ export function initSidebarInspector() {
       const presetKey = btn.dataset.preset;
       // Presets define style only (typography, border, shadow, padding) — never colors.
       // Custom color overrides must survive a preset switch.
-      updateState({ currentPreset: presetKey });
+      const updates = { currentPreset: presetKey };
+      // Font Family is otherwise a global override independent of preset; a
+      // preset can opt into a one-time convenience default the moment it's
+      // selected via autoFontFamilyOnSelect (still just a regular override
+      // afterward — the user can change it like any other preset's font).
+      const targetProfile = CREATOR_PROFILES[presetKey];
+      if (targetProfile?.autoFontFamilyOnSelect) {
+        updates.fontFamily = targetProfile.autoFontFamilyOnSelect;
+      }
+      updateState(updates);
     });
   });
 
@@ -224,7 +243,95 @@ export function initSidebarInspector() {
     });
   }
 
-  // 8. Subscribe to global state changes to synchronize UI controls
+  // 8. Keyword Style Section (keyword-driven presets, e.g. WAYLES)
+  const toggleActiveHighlight = document.getElementById('toggle-active-highlight');
+  const selectKeywordPrimaryFont = document.getElementById('select-keyword-primary-font');
+  const selectKeywordMediumFont = document.getElementById('select-keyword-medium-font');
+  const selectKeywordPrimaryWeight = document.getElementById('select-keyword-primary-weight');
+  const selectKeywordMediumWeight = document.getElementById('select-keyword-medium-weight');
+  const inputKeywordPrimaryScale = document.getElementById('input-keyword-primary-scale');
+  const valKeywordPrimaryScale = document.getElementById('val-keyword-primary-scale');
+  const inputKeywordMediumScale = document.getElementById('input-keyword-medium-scale');
+  const valKeywordMediumScale = document.getElementById('val-keyword-medium-scale');
+  const selectKeywordPrimaryAnimation = document.getElementById('select-keyword-primary-animation');
+  const toggleKeywordShadow = document.getElementById('toggle-keyword-shadow');
+  const toggleKeywordOutline = document.getElementById('toggle-keyword-outline');
+  const inputKeywordOpacity = document.getElementById('input-keyword-opacity');
+  const valKeywordOpacity = document.getElementById('val-keyword-opacity');
+
+  if (toggleActiveHighlight) {
+    toggleActiveHighlight.addEventListener('change', (e) => {
+      updateState({ enableActiveHighlight: e.target.checked });
+    });
+  }
+
+  if (selectKeywordPrimaryFont) {
+    selectKeywordPrimaryFont.addEventListener('change', (e) => {
+      updateState({ keywordPrimaryFont: e.target.value || null });
+    });
+  }
+
+  if (selectKeywordMediumFont) {
+    selectKeywordMediumFont.addEventListener('change', (e) => {
+      updateState({ keywordMediumFont: e.target.value || null });
+    });
+  }
+
+  if (selectKeywordPrimaryWeight) {
+    selectKeywordPrimaryWeight.addEventListener('change', (e) => {
+      updateState({ keywordPrimaryWeight: e.target.value || null });
+    });
+  }
+
+  if (selectKeywordMediumWeight) {
+    selectKeywordMediumWeight.addEventListener('change', (e) => {
+      updateState({ keywordMediumWeight: e.target.value || null });
+    });
+  }
+
+  if (inputKeywordPrimaryScale) {
+    inputKeywordPrimaryScale.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (valKeywordPrimaryScale) valKeywordPrimaryScale.textContent = `${val}%`;
+      updateState({ keywordPrimaryScale: val / 100 });
+    });
+  }
+
+  if (inputKeywordMediumScale) {
+    inputKeywordMediumScale.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (valKeywordMediumScale) valKeywordMediumScale.textContent = `${val}%`;
+      updateState({ keywordMediumScale: val / 100 });
+    });
+  }
+
+  if (selectKeywordPrimaryAnimation) {
+    selectKeywordPrimaryAnimation.addEventListener('change', (e) => {
+      updateState({ keywordPrimaryAnimation: e.target.value || null });
+    });
+  }
+
+  if (toggleKeywordShadow) {
+    toggleKeywordShadow.addEventListener('change', (e) => {
+      updateState({ keywordShadowEnabled: e.target.checked });
+    });
+  }
+
+  if (toggleKeywordOutline) {
+    toggleKeywordOutline.addEventListener('change', (e) => {
+      updateState({ keywordOutlineEnabled: e.target.checked });
+    });
+  }
+
+  if (inputKeywordOpacity) {
+    inputKeywordOpacity.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (valKeywordOpacity) valKeywordOpacity.textContent = `${val}%`;
+      updateState({ keywordOpacity: val });
+    });
+  }
+
+  // 9. Subscribe to global state changes to synchronize UI controls
   subscribe('*', () => {
     syncSidebarUI();
   });
@@ -329,4 +436,55 @@ function syncSidebarUI() {
   // AI Keyword Highlighting Toggle
   const toggleKeywordHighlighting = document.getElementById('toggle-keyword-highlighting');
   if (toggleKeywordHighlighting) toggleKeywordHighlighting.checked = !!appState.enableKeywordHighlighting;
+
+  // Keyword Style Section (keyword-driven presets, e.g. WAYLES)
+  const toggleActiveHighlight = document.getElementById('toggle-active-highlight');
+  if (toggleActiveHighlight) {
+    toggleActiveHighlight.checked = appState.enableActiveHighlight ?? getFallbackActiveHighlightEnabled();
+  }
+
+  const selectKeywordPrimaryFont = document.getElementById('select-keyword-primary-font');
+  if (selectKeywordPrimaryFont) selectKeywordPrimaryFont.value = appState.keywordPrimaryFont || '';
+
+  const selectKeywordMediumFont = document.getElementById('select-keyword-medium-font');
+  if (selectKeywordMediumFont) selectKeywordMediumFont.value = appState.keywordMediumFont || '';
+
+  const selectKeywordPrimaryWeight = document.getElementById('select-keyword-primary-weight');
+  if (selectKeywordPrimaryWeight) selectKeywordPrimaryWeight.value = appState.keywordPrimaryWeight || '';
+
+  const selectKeywordMediumWeight = document.getElementById('select-keyword-medium-weight');
+  if (selectKeywordMediumWeight) selectKeywordMediumWeight.value = appState.keywordMediumWeight || '';
+
+  const inputKeywordPrimaryScale = document.getElementById('input-keyword-primary-scale');
+  const valKeywordPrimaryScale = document.getElementById('val-keyword-primary-scale');
+  const keywordPrimaryScalePct = Math.round((appState.keywordPrimaryScale ?? getFallbackKeywordTier('high').fontScale) * 100);
+  if (inputKeywordPrimaryScale) inputKeywordPrimaryScale.value = keywordPrimaryScalePct;
+  if (valKeywordPrimaryScale) valKeywordPrimaryScale.textContent = `${keywordPrimaryScalePct}%`;
+
+  const inputKeywordMediumScale = document.getElementById('input-keyword-medium-scale');
+  const valKeywordMediumScale = document.getElementById('val-keyword-medium-scale');
+  const keywordMediumScalePct = Math.round((appState.keywordMediumScale ?? getFallbackKeywordTier('medium').fontScale) * 100);
+  if (inputKeywordMediumScale) inputKeywordMediumScale.value = keywordMediumScalePct;
+  if (valKeywordMediumScale) valKeywordMediumScale.textContent = `${keywordMediumScalePct}%`;
+
+  const selectKeywordPrimaryAnimation = document.getElementById('select-keyword-primary-animation');
+  if (selectKeywordPrimaryAnimation) {
+    selectKeywordPrimaryAnimation.value = appState.keywordPrimaryAnimation || getFallbackKeywordTier('high').animation || 'none';
+  }
+
+  const toggleKeywordShadow = document.getElementById('toggle-keyword-shadow');
+  if (toggleKeywordShadow) {
+    toggleKeywordShadow.checked = appState.keywordShadowEnabled ?? getFallbackKeywordTier('high').shadowByDefault;
+  }
+
+  const toggleKeywordOutline = document.getElementById('toggle-keyword-outline');
+  if (toggleKeywordOutline) {
+    toggleKeywordOutline.checked = appState.keywordOutlineEnabled ?? getFallbackKeywordTier('high').outlineByDefault;
+  }
+
+  const inputKeywordOpacity = document.getElementById('input-keyword-opacity');
+  const valKeywordOpacity = document.getElementById('val-keyword-opacity');
+  const keywordOpacity = appState.keywordOpacity ?? 100;
+  if (inputKeywordOpacity) inputKeywordOpacity.value = keywordOpacity;
+  if (valKeywordOpacity) valKeywordOpacity.textContent = `${keywordOpacity}%`;
 }

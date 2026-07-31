@@ -178,6 +178,9 @@
                                 <button type="button" class="preset-btn" data-preset="gradient-glow">
                                     <span class="preset-preview gradient-glow-preview">ACTIVE</span>
                                 </button>
+                                <button type="button" class="preset-btn" data-preset="signature-v1">
+                                    <span class="preset-preview signature-v1-preview">WAYLES</span>
+                                </button>
                             </div>
                         </div>
 
@@ -375,6 +378,129 @@
                                     <button type="button" class="color-swatch-trigger" id="color-keyword-medium" data-color-key="keywordColorMedium" aria-haspopup="true" aria-labelledby="label-color-keyword-medium"></button>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6. Keyword Style Section (keyword-driven presets, e.g. WAYLES) -->
+                <div class="accordion-item">
+                    <button type="button" class="accordion-header">
+                        <span class="accordion-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+                            Keyword Style
+                        </span>
+                        <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div class="accordion-body">
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Active Word Highlight</span>
+                                <label class="theme-toggle-label" title="Toggle the base active/inactive word highlight">
+                                    <input type="checkbox" id="toggle-active-highlight" checked>
+                                    <span class="theme-slider"></span>
+                                </label>
+                            </div>
+                            <p class="field-hint">Disabled by default on keyword-driven presets like WAYLES, where keyword styling is the primary emphasis system. Can be re-enabled manually.</p>
+                        </div>
+
+                        <div class="settings-group">
+                            <label for="select-keyword-primary-font" class="group-label">Primary Font</label>
+                            <select id="select-keyword-primary-font" class="select-control">
+                                <option value="">Preset Default</option>
+                                <option value="Poppins">Poppins</option>
+                                <option value="Montserrat">Montserrat</option>
+                                <option value="Bebas Neue">Bebas Neue</option>
+                                <option value="Anton">Anton</option>
+                                <option value="Inter">Inter</option>
+                                <option value="Caveat">Caveat</option>
+                            </select>
+                        </div>
+
+                        <div class="settings-group">
+                            <label for="select-keyword-medium-font" class="group-label">Medium Font</label>
+                            <select id="select-keyword-medium-font" class="select-control">
+                                <option value="">Preset Default</option>
+                                <option value="Caveat">Caveat</option>
+                                <option value="Kalam">Kalam</option>
+                                <option value="Poppins">Poppins</option>
+                                <option value="Montserrat">Montserrat</option>
+                                <option value="Inter">Inter</option>
+                            </select>
+                        </div>
+
+                        <div class="settings-group">
+                            <label for="select-keyword-primary-weight" class="group-label">Primary Weight</label>
+                            <select id="select-keyword-primary-weight" class="select-control">
+                                <option value="">Preset Default</option>
+                                <option value="400">Regular (400)</option>
+                                <option value="600">Semi-Bold (600)</option>
+                                <option value="700">Bold (700)</option>
+                                <option value="800">Extra-Bold (800)</option>
+                                <option value="900">Black (900)</option>
+                            </select>
+                        </div>
+
+                        <div class="settings-group">
+                            <label for="select-keyword-medium-weight" class="group-label">Medium Weight</label>
+                            <select id="select-keyword-medium-weight" class="select-control">
+                                <option value="">Preset Default</option>
+                                <option value="400">Regular (400)</option>
+                                <option value="600">Semi-Bold (600)</option>
+                                <option value="700">Bold (700)</option>
+                                <option value="800">Extra-Bold (800)</option>
+                            </select>
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Primary Scale</span>
+                                <span class="group-value-badge" id="val-keyword-primary-scale">120%</span>
+                            </div>
+                            <input type="range" id="input-keyword-primary-scale" min="100" max="150" value="120" class="slider-control">
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Medium Scale</span>
+                                <span class="group-value-badge" id="val-keyword-medium-scale">105%</span>
+                            </div>
+                            <input type="range" id="input-keyword-medium-scale" min="100" max="150" value="105" class="slider-control">
+                        </div>
+
+                        <div class="settings-group">
+                            <label for="select-keyword-primary-animation" class="group-label">Primary Animation</label>
+                            <select id="select-keyword-primary-animation" class="select-control">
+                                <option value="pop">Pop</option>
+                                <option value="none">None</option>
+                            </select>
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Keyword Shadow</span>
+                                <label class="theme-toggle-label" title="Toggle a soft shadow on high-importance keyword words">
+                                    <input type="checkbox" id="toggle-keyword-shadow">
+                                    <span class="theme-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Keyword Outline</span>
+                                <label class="theme-toggle-label" title="Toggle an outline on high-importance keyword words">
+                                    <input type="checkbox" id="toggle-keyword-outline">
+                                    <span class="theme-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Keyword Opacity</span>
+                                <span class="group-value-badge" id="val-keyword-opacity">100%</span>
+                            </div>
+                            <input type="range" id="input-keyword-opacity" min="0" max="100" value="100" class="slider-control">
                         </div>
                     </div>
                 </div>

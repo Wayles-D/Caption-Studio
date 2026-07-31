@@ -151,6 +151,74 @@ export const CREATOR_PROFILES = {
     cssBorderRadius: '0',
     cssHighlightColor: '#38BDF8',
     cssInactiveColor: '#818CF8'
+  },
+  // Internal id kept generic (not the literal display name) so future
+  // creator-style packs (e.g. a "V2") can be added as sibling presets without
+  // renaming this one — see `name` below for the UI-facing label ("WAYLES").
+  'signature-v1': {
+    id: 'signature-v1',
+    name: 'WAYLES',
+    fontFamily: 'Poppins',
+    fontWeight: '400',
+    fontSize: 14,
+    defaultAnimationMode: 'karaoke',
+    colors: {
+      primaryHex: '#FFFFFF',
+      secondaryHex: '#FFFFFF',
+      outlineHex: '#000000',
+      backHex: 'transparent',
+      shadowHex: '#000000',
+      assPrimary: '&H00FFFFFF',
+      assSecondary: '&H00FFFFFF',
+      assOutline: '&H00000000',
+      assBack: '&H00000000'
+    },
+    outlineSize: 0,
+    shadowSize: 0,
+    borderStyle: 1,
+    boxPaddingPx: 0,
+    wordSpacing: '0.2em',
+    lineSpacing: '1.25',
+    phraseSpacing: '0 4px',
+    useNativeStroke: false,
+    cssBackground: 'transparent',
+    cssBorderRadius: '0',
+    cssHighlightColor: '#FFFFFF',
+    cssInactiveColor: '#FFFFFF',
+    // This preset is driven by keyword importance rather than active-word
+    // highlighting — see resolveWordStyleMetadata. Any future preset can opt
+    // into the same generic renderer by setting keywordDriven + keywordStyle;
+    // no changes to preview.js/assWriter.js are needed to add one.
+    keywordDriven: true,
+    disableActiveHighlightByDefault: true,
+    // The Font Family control is a global override independent of preset (an
+    // existing, pre-WAYLES app characteristic — presets don't otherwise drive
+    // it), so a preset can opt into auto-selecting its own base font the
+    // moment it's picked, purely as a one-time convenience default; the user
+    // can still override it afterward like any other font choice.
+    autoFontFamilyOnSelect: 'Poppins',
+    keywordStyle: {
+      high: {
+        fontFamily: 'Poppins',
+        fontWeight: '700',
+        fontScale: 1.2,
+        colorMode: 'always',
+        defaultColorHex: '#FFD60A',
+        animation: 'pop',
+        shadowByDefault: true,
+        outlineByDefault: false
+      },
+      medium: {
+        fontFamily: "'Caveat', 'Kalam', cursive",
+        fontWeight: '600',
+        fontScale: 1.05,
+        colorMode: 'always',
+        defaultColorHex: '#FFFFFF',
+        animation: 'none',
+        shadowByDefault: false,
+        outlineByDefault: false
+      }
+    }
   }
 };
 
@@ -356,10 +424,159 @@ function resolveShadowOutlineParams(params, profile, isBoxed) {
   };
 }
 
+const DEFAULT_KEYWORD_TIER = {
+  fontFamily: null,
+  fontWeight: null,
+  fontScale: 1,
+  colorMode: 'onlyWhenActive', // legacy presets only show the keyword color while the word is the active one
+  defaultColorHex: null,
+  animation: 'none',
+  shadowByDefault: false,
+  outlineByDefault: false
+};
+
+/**
+ * Resolves the "high"/"medium" keyword tiers a preset renders keyword words
+ * with, merging the active preset's own `keywordStyle` authoring with any
+ * client overrides (the "Keyword Style" editor section). Single place both
+ * getASSStyleFromConfig and getCSSPreviewFromConfig — and, per word,
+ * resolveWordStyleMetadata — read this from, so a slider always produces the
+ * same effective value in both renderers.
+ *
+ * @param {object} params - Client style params.
+ * @param {object} profile - The resolved creator profile.
+ */
+export function resolveKeywordStyleConfig(params, profile) {
+  const presetHigh = { ...DEFAULT_KEYWORD_TIER, ...(profile.keywordStyle?.high || {}) };
+  const presetMedium = { ...DEFAULT_KEYWORD_TIER, ...(profile.keywordStyle?.medium || {}) };
+
+  const high = {
+    fontFamily: params.keywordPrimaryFont || presetHigh.fontFamily,
+    fontWeight: params.keywordPrimaryWeight || presetHigh.fontWeight,
+    fontScale: params.keywordPrimaryScale != null ? parseFloat(params.keywordPrimaryScale) : presetHigh.fontScale,
+    colorHex: params.keywordColorHigh || presetHigh.defaultColorHex || '#EF4444',
+    colorMode: presetHigh.colorMode,
+    animation: params.keywordPrimaryAnimation || presetHigh.animation,
+    hasShadow: params.keywordShadowEnabled != null ? (params.keywordShadowEnabled !== false && params.keywordShadowEnabled !== 'false') : presetHigh.shadowByDefault,
+    hasOutline: params.keywordOutlineEnabled != null ? (params.keywordOutlineEnabled !== false && params.keywordOutlineEnabled !== 'false') : presetHigh.outlineByDefault
+  };
+
+  const medium = {
+    fontFamily: params.keywordMediumFont || presetMedium.fontFamily,
+    fontWeight: params.keywordMediumWeight || presetMedium.fontWeight,
+    fontScale: params.keywordMediumScale != null ? parseFloat(params.keywordMediumScale) : presetMedium.fontScale,
+    colorHex: params.keywordColorMedium || presetMedium.defaultColorHex || '#FB923C',
+    colorMode: presetMedium.colorMode,
+    animation: presetMedium.animation,
+    hasShadow: presetMedium.shadowByDefault,
+    hasOutline: presetMedium.outlineByDefault
+  };
+
+  const opacity = params.keywordOpacity != null ? Math.max(0, Math.min(100, parseFloat(params.keywordOpacity))) : 100;
+
+  return { high, medium, opacity };
+}
+
+/**
+ * Whether the base active/inactive word-highlight system is enabled. Most
+ * presets want it on; a keyword-driven preset like WAYLES defaults it off
+ * (keyword styling is the primary emphasis system instead) but the user can
+ * still switch it back on manually.
+ */
+export function resolveActiveHighlightEnabled(params, profile) {
+  if (params.enableActiveHighlight != null) {
+    return params.enableActiveHighlight !== false && params.enableActiveHighlight !== 'false';
+  }
+  return !profile.disableActiveHighlightByDefault;
+}
+
+// Fixed "soft emphasis" effect strengths for the Keyword Shadow/Outline
+// toggles — self-contained so the toggle always has a visible effect
+// regardless of the caption's own (possibly zero) global outline/shadow
+// sliders. Defined once here in both CSS px and ASS canvas units (via
+// ASS_TO_CSS_SCALE) so the two renderers can never drift apart.
+const KEYWORD_SHADOW_ASS_DEPTH = 3;
+const KEYWORD_SHADOW_COLOR_HEX = '#000000';
+const KEYWORD_SHADOW_CSS_ALPHA = 0.45;
+const KEYWORD_OUTLINE_ASS_WIDTH = 3;
+const KEYWORD_OUTLINE_COLOR_HEX = '#000000';
+
+function buildKeywordShadowMetadata() {
+  const offsetCss = round2(KEYWORD_SHADOW_ASS_DEPTH / ASS_TO_CSS_SCALE);
+  const blurCss = round2((KEYWORD_SHADOW_ASS_DEPTH * 1.3) / ASS_TO_CSS_SCALE);
+  return {
+    assDepth: KEYWORD_SHADOW_ASS_DEPTH,
+    colorHex: KEYWORD_SHADOW_COLOR_HEX,
+    css: `${offsetCss}px ${offsetCss}px ${blurCss}px rgba(0, 0, 0, ${KEYWORD_SHADOW_CSS_ALPHA})`
+  };
+}
+
+function buildKeywordOutlineMetadata() {
+  return {
+    assWidth: KEYWORD_OUTLINE_ASS_WIDTH,
+    colorHex: KEYWORD_OUTLINE_COLOR_HEX,
+    css: `${round2(KEYWORD_OUTLINE_ASS_WIDTH / ASS_TO_CSS_SCALE)}px ${KEYWORD_OUTLINE_COLOR_HEX}`
+  };
+}
+
+/**
+ * Resolves the final per-word style metadata — the single generic model both
+ * the CSS preview and the ASS exporter derive a word's appearance from.
+ * Neither renderer hardcodes preset-specific logic: they just read this
+ * metadata and translate it into their own native format (CSS px/rgba vs ASS
+ * canvas units/BGR colors). A future preset only needs to supply its own
+ * `keywordStyle` config on CREATOR_PROFILES — no renderer changes required.
+ *
+ * @param {object} word - The word unit (word/text, isKeyword, importance).
+ * @param {object} context - { keywordStyleConfig, keywordsEnabled, activeHighlightEnabled, isWordActive, mode, activeHighlightColorHex, inactiveColorHex, baseFontFamily, baseFontWeight }.
+ * @returns {object} Unit-neutral metadata (fontScale as a ratio, colors as hex/rgba, shadow/outline pre-computed for both renderers).
+ *   fontFamily/fontWeight are always a concrete value (never null) so a
+ *   renderer that emits one override tag per word (ASS's \fn/\b) never leaks
+ *   a keyword's font into the next, unrelated word.
+ */
+export function resolveWordStyleMetadata(word, context) {
+  const { keywordStyleConfig, keywordsEnabled, activeHighlightEnabled, isWordActive, mode, activeHighlightColorHex, inactiveColorHex, baseFontFamily, baseFontWeight } = context;
+
+  const isKeyword = !!(keywordsEnabled && word && word.isKeyword);
+  const importance = isKeyword ? word.importance : null;
+  const tier = importance === 'high' ? keywordStyleConfig.high : importance === 'medium' ? keywordStyleConfig.medium : null;
+
+  const showActiveHighlight = !!activeHighlightEnabled && isWordActive;
+  const baseColorHex = showActiveHighlight ? activeHighlightColorHex : inactiveColorHex;
+
+  if (!tier) {
+    return {
+      isKeyword: false,
+      importance: null,
+      fontFamily: baseFontFamily || null,
+      fontWeight: baseFontWeight || null,
+      fontScale: 1,
+      colorHex: baseColorHex,
+      shadow: null,
+      outline: null,
+      animation: (mode === 'pop' && showActiveHighlight) ? 'pop' : 'none'
+    };
+  }
+
+  const showTierColor = tier.colorMode === 'always' || (tier.colorMode === 'onlyWhenActive' && isWordActive);
+
+  return {
+    isKeyword: true,
+    importance,
+    fontFamily: tier.fontFamily || baseFontFamily || null,
+    fontWeight: tier.fontWeight || baseFontWeight || null,
+    fontScale: tier.fontScale || 1,
+    colorHex: showTierColor ? tier.colorHex : baseColorHex,
+    shadow: tier.hasShadow ? buildKeywordShadowMetadata() : null,
+    outline: tier.hasOutline ? buildKeywordOutlineMetadata() : null,
+    animation: (tier.animation === 'pop' && isWordActive) ? 'pop' : 'none'
+  };
+}
+
 /**
  * Maps input style parameters to resolved ASS style parameters.
  * Supports custom color overrides, wordSpacing, popScale, and animation settings.
- * 
+ *
  * @param {object} params - Options passed from client.
  * @returns {object} Resolved ASS parameters.
  */
@@ -397,6 +614,13 @@ export function getASSStyleFromConfig(params = {}) {
   let secondaryColor = params.inactiveWordColor
     ? hexToASSColor(params.inactiveWordColor, profile.colors.secondaryHex)
     : profile.colors.assSecondary;
+
+  // Plain-hex equivalents of the two colors above (mirroring getCSSPreviewFromConfig's
+  // highlightColor/inactiveColor resolution exactly) — resolveWordStyleMetadata deals
+  // only in hex, so keyword-driven presets resolve their base color identically in
+  // both renderers instead of each parsing the other's native color format.
+  const primaryColorHex = params.activeWordColor || profile.cssHighlightColor || profile.colors.primaryHex;
+  const secondaryColorHex = params.inactiveWordColor || profile.cssInactiveColor || profile.colors.secondaryHex;
 
   // AI Keyword Highlighting: dedicated colors for active high/medium importance
   // keyword words. Disabled by default resolution stays the same regardless —
@@ -465,11 +689,19 @@ export function getASSStyleFromConfig(params = {}) {
   const fontWeightNum = parseInt(profile.fontWeight, 10) || 700;
   const bold = fontWeightNum >= 600 ? -1 : 0;
 
+  // Keyword-driven styling (e.g. WAYLES) and whether the base active/inactive
+  // highlight system runs at all — resolved once here so assWriter builds its
+  // per-word override tags from the exact same config the CSS preview uses.
+  const keywordStyleConfig = resolveKeywordStyleConfig(params, profile);
+  const activeHighlightEnabled = resolveActiveHighlightEnabled(params, profile);
+
   return {
     fontName,
     fontSize,
     primaryColor,
     secondaryColor,
+    primaryColorHex,
+    secondaryColorHex,
     outlineColor,
     backColor,
     shadowColor,
@@ -490,6 +722,10 @@ export function getASSStyleFromConfig(params = {}) {
     enableKeywordHighlighting,
     keywordHighColor,
     keywordMediumColor,
+    keywordDriven: !!profile.keywordDriven,
+    keywordStyleConfig,
+    activeHighlightEnabled,
+    textOpacity: shadowParams.textOpacity,
     profile
   };
 }
@@ -641,6 +877,12 @@ export function getCSSPreviewFromConfig(params = {}) {
         zIndex: '10'
       };
 
+  // Keyword-driven styling (e.g. WAYLES) and whether the base active/inactive
+  // highlight system runs at all — resolved identically to getASSStyleFromConfig
+  // so the preview always matches the exported video.
+  const keywordStyleConfig = resolveKeywordStyleConfig(params, profile);
+  const activeHighlightEnabled = resolveActiveHighlightEnabled(params, profile);
+
   return {
     animationMode,
     profile,
@@ -649,6 +891,9 @@ export function getCSSPreviewFromConfig(params = {}) {
     enableKeywordHighlighting,
     keywordColorHigh,
     keywordColorMedium,
+    keywordDriven: !!profile.keywordDriven,
+    keywordStyleConfig,
+    activeHighlightEnabled,
     overlay,
     text: {
       fontFamily: `'${fontName}', sans-serif`,

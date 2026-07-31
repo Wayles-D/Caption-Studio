@@ -55,13 +55,23 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
     popScale: resolvedStyle.popScale || 118,
     primaryColor: resolvedStyle.primaryColor,
     secondaryColor: resolvedStyle.secondaryColor,
+    primaryColorHex: resolvedStyle.primaryColorHex,
+    secondaryColorHex: resolvedStyle.secondaryColorHex,
     posOverrideTag: resolvedStyle.posOverrideTag || null,
     enableKeywordHighlighting: resolvedStyle.enableKeywordHighlighting !== false,
     keywordHighColor: resolvedStyle.keywordHighColor,
     keywordMediumColor: resolvedStyle.keywordMediumColor,
     shadowColor: resolvedStyle.shadowColor,
     shadowOffsetX: resolvedStyle.shadowOffsetX,
-    shadowOffsetY: resolvedStyle.shadowOffsetY
+    shadowOffsetY: resolvedStyle.shadowOffsetY,
+    outlineSize: resolvedStyle.outlineSize,
+    shadowSize: resolvedStyle.shadowSize,
+    keywordDriven: resolvedStyle.keywordDriven,
+    keywordStyleConfig: resolvedStyle.keywordStyleConfig,
+    activeHighlightEnabled: resolvedStyle.activeHighlightEnabled,
+    textOpacity: resolvedStyle.textOpacity,
+    baseFontFamily: resolvedStyle.fontName,
+    baseFontWeight: resolvedStyle.profile?.fontWeight
   };
   
   phrases.forEach((phrase) => {

@@ -1,4 +1,4 @@
-import { getASSStyleFromConfig, applyCaseTransform } from '../../shared/captionConfig.js';
+import { getASSStyleFromConfig, applyCaseTransform, resolveWordStyleMetadata, hexToASSColor, opacityToAssAlpha } from '../../shared/captionConfig.js';
 
 /**
  * Formats a duration in seconds to the standard ASS timestamp format: H:MM:SS.cs
@@ -126,14 +126,70 @@ function toKeywordStyleTags(word, enableKeywordHighlighting) {
 }
 
 /**
+ * Builds one word's inline override block from resolveWordStyleMetadata's
+ * generic metadata — the same function the CSS preview calls — so a
+ * keyword-driven preset (e.g. WAYLES) never needs its own hardcoded ASS
+ * tag logic. Font family/weight are emitted explicitly for every word
+ * (not just keywords) so an override never leaks into the next word.
+ *
+ * @param {number} wordAlphaHex - Combined text/keyword opacity, as an ASS
+ *   alpha byte, applied to this word's fill color (metadata.colorHex is
+ *   plain hex and carries no alpha of its own).
+ */
+function buildKeywordDrivenWordBlock(word, wordText, metadata, baselineOutlineSize, baselineShadowSize, wordAlphaHex) {
+  const rawAssColor = hexToASSColor(metadata.colorHex).replace(/^&H/i, '').replace(/&$/, '');
+  const fillColorAss = `&H${wordAlphaHex}${rawAssColor.substring(2)}`;
+  let openTag = toInlineColorTags(fillColorAss, 1);
+  let closeTag = '';
+
+  if (metadata.fontFamily) {
+    // ASS's \fn tag takes a single literal font name — unlike CSS, it can't
+    // take a comma-separated fallback list, so strip that down the same way
+    // the base fontFamily is sanitized in getASSStyleFromConfig.
+    const cleanFont = metadata.fontFamily.replace(/['"\r\n]/g, '').split(',')[0].trim();
+    openTag += `\\fn${cleanFont}`;
+  }
+  const fontWeightNum = parseInt(metadata.fontWeight, 10) || 0;
+  openTag += fontWeightNum >= 600 ? '\\b1' : '\\b0';
+
+  if (metadata.fontScale && metadata.fontScale !== 1) {
+    const scalePct = Math.round(metadata.fontScale * 100);
+    openTag += `\\fscx${scalePct}\\fscy${scalePct}`;
+    closeTag += '\\fscx100\\fscy100';
+  }
+
+  if (metadata.shadow) {
+    openTag += `\\shad${metadata.shadow.assDepth}`;
+    closeTag += `\\shad${baselineShadowSize}`;
+  }
+
+  if (metadata.outline) {
+    openTag += `\\bord${metadata.outline.assWidth}\\3c&H${hexToASSColor(metadata.outline.colorHex).replace(/^&H/i, '').substring(2)}&`;
+    closeTag += `\\bord${baselineOutlineSize}`;
+  }
+
+  return `{${openTag}}${wordText}${closeTag ? `{${closeTag}}` : ''}`;
+}
+
+/**
  * Builds the Dialogue Text payload for one time-slice of a phrase: the full
  * phrase text is always present, only the active word's color (and, in pop
  * mode, scale) differs from the rest. An active keyword word gets a dedicated
  * keyword color instead of the normal active color; keyword bold/italic
  * styling applies regardless of active state.
+ *
+ * Keyword-driven presets (options.keywordDriven) instead derive every word's
+ * complete appearance from resolveWordStyleMetadata (see
+ * buildKeywordDrivenWordBlock) — the exact same metadata the CSS preview
+ * uses — rather than the active/inactive/keyword-color logic below, which
+ * legacy presets keep using unchanged.
  */
 function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, options) {
-  const { animationMode, popScale, primaryColor, secondaryColor, enableKeywordHighlighting, keywordHighColor, keywordMediumColor } = options;
+  const {
+    animationMode, popScale, primaryColor, secondaryColor, enableKeywordHighlighting, keywordHighColor, keywordMediumColor,
+    keywordDriven, keywordStyleConfig, activeHighlightEnabled, outlineSize, shadowSize,
+    primaryColorHex, secondaryColorHex, textOpacity, baseFontFamily, baseFontWeight
+  } = options;
   let payload = buildShadowOverrideTag(options);
 
   wordTexts.forEach((wordText, idx) => {
@@ -143,6 +199,30 @@ function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, opt
     const lineBreakTag = isLineBreak ? '\\N' : '';
     const isActive = idx === activeIdx;
     const word = words[idx];
+
+    if (keywordDriven) {
+      const metadata = resolveWordStyleMetadata(word || {}, {
+        keywordStyleConfig,
+        keywordsEnabled: enableKeywordHighlighting,
+        activeHighlightEnabled,
+        isWordActive: isActive,
+        mode: animationMode,
+        activeHighlightColorHex: primaryColorHex,
+        inactiveColorHex: secondaryColorHex,
+        baseFontFamily,
+        baseFontWeight
+      });
+      // Global text opacity always applies; a keyword word additionally
+      // layers the dedicated "Keyword Opacity" slider on top, matching the
+      // exact composition preview.js uses.
+      const combinedOpacity = metadata.isKeyword
+        ? (textOpacity ?? 100) * (keywordStyleConfig.opacity ?? 100) / 100
+        : (textOpacity ?? 100);
+      const wordAlphaHex = opacityToAssAlpha(combinedOpacity);
+      payload += `${lineBreakTag}${prefixSpace}${buildKeywordDrivenWordBlock(word, wordText, metadata, outlineSize || 0, shadowSize || 0, wordAlphaHex)}`;
+      return;
+    }
+
     const isActiveKeyword = isActive && enableKeywordHighlighting && word?.isKeyword;
 
     let fillColor = isActive ? primaryColor : secondaryColor;
@@ -271,10 +351,26 @@ export function generateASSDialogueLine(phrase, options = {}) {
   const shadowOffsetX = (typeof options === 'object' && options.shadowOffsetX != null) ? options.shadowOffsetX : null;
   const shadowOffsetY = (typeof options === 'object' && options.shadowOffsetY != null) ? options.shadowOffsetY : null;
 
+  // Keyword-driven preset support (e.g. WAYLES) — all optional/undefined for
+  // legacy presets, which never set keywordDriven and so never touch this path.
+  const primaryColorHex = (typeof options === 'object' && options.primaryColorHex) || null;
+  const secondaryColorHex = (typeof options === 'object' && options.secondaryColorHex) || null;
+  const keywordDriven = typeof options === 'object' && !!options.keywordDriven;
+  const keywordStyleConfig = (typeof options === 'object' && options.keywordStyleConfig) || null;
+  const activeHighlightEnabled = typeof options === 'object' ? options.activeHighlightEnabled !== false : true;
+  const outlineSize = (typeof options === 'object' && options.outlineSize) || 0;
+  const shadowSize = (typeof options === 'object' && options.shadowSize) || 0;
+  const textOpacity = (typeof options === 'object' && options.textOpacity != null) ? options.textOpacity : 100;
+  const baseFontFamily = (typeof options === 'object' && options.baseFontFamily) || null;
+  const baseFontWeight = (typeof options === 'object' && options.baseFontWeight) || null;
+
   const resolvedOptions = {
     textCase, animationMode, popScale, primaryColor, secondaryColor,
     posOverrideTag, enableKeywordHighlighting, keywordHighColor, keywordMediumColor,
-    shadowColor, shadowOffsetX, shadowOffsetY
+    shadowColor, shadowOffsetX, shadowOffsetY,
+    primaryColorHex, secondaryColorHex, keywordDriven, keywordStyleConfig,
+    activeHighlightEnabled, outlineSize, shadowSize, textOpacity,
+    baseFontFamily, baseFontWeight
   };
 
   if (animationMode === 'typewriter') {

@@ -2,7 +2,7 @@
  * Center Preview Workspace Component for Caption Studio
  */
 import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from '../state.js';
-import { getCSSPreviewFromConfig, applyCaseTransform } from '../../../shared/captionConfig.js';
+import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, applyOpacityToColor } from '../../../shared/captionConfig.js';
 
 // Dynamic Google Font Loader
 const loadedFonts = new Set();
@@ -205,10 +205,63 @@ export function syncVideoSubtitles() {
   const keywordColorHigh = appState.keywordColorHigh || '#EF4444';
   const keywordColorMedium = appState.keywordColorMedium || '#FB923C';
 
+  // Keyword-driven presets (e.g. WAYLES) derive a word's entire appearance
+  // from resolveWordStyleMetadata instead of the active/inactive model below
+  // — the exact same function the ASS exporter calls, so the two always
+  // agree. Existing presets are untouched: they never set keywordDriven.
+  const keywordDriven = !!cssConfig.keywordDriven;
+  const keywordStyleConfig = cssConfig.keywordStyleConfig;
+  const activeHighlightEnabled = cssConfig.activeHighlightEnabled;
+
   const wordElements = activePhrase.words.map((w, idx) => {
     const isWordActive = currentTime >= w.start && currentTime <= w.end;
     const isPastWord = currentTime > w.end;
     const wordText = applyCaseTransform(w.word || w.text || '', appState.textCase, idx === 0);
+
+    const wordElement = document.createElement('span');
+
+    if (keywordDriven) {
+      const metadata = resolveWordStyleMetadata(w, {
+        keywordStyleConfig,
+        keywordsEnabled,
+        activeHighlightEnabled,
+        isWordActive,
+        mode,
+        activeHighlightColorHex: activeHighlight,
+        inactiveColorHex: inactiveColor,
+        baseFontFamily: cssConfig.profile?.fontFamily,
+        baseFontWeight: cssConfig.profile?.fontWeight
+      });
+
+      const extraClasses = ['word-unit'];
+      if (metadata.animation === 'pop') extraClasses.push('anim-pop-active');
+      wordElement.className = extraClasses.join(' ');
+
+      // Global Text Opacity is already baked into activeHighlight/inactiveColor
+      // above, so it's a no-op (opacity=100 short-circuits) for non-keyword
+      // words here. A keyword word's tier color is raw/unadjusted, so it needs
+      // both the global opacity and the dedicated Keyword Opacity applied
+      // fresh — composed exactly like the ASS exporter composes them.
+      const wordOpacity = metadata.isKeyword
+        ? (appState.textOpacity ?? 100) * (keywordStyleConfig.opacity ?? 100) / 100
+        : 100;
+      wordElement.style.color = applyOpacityToColor(metadata.colorHex, wordOpacity);
+      if (metadata.fontFamily) wordElement.style.fontFamily = metadata.fontFamily;
+      if (metadata.fontWeight) wordElement.style.fontWeight = metadata.fontWeight;
+      if (metadata.fontScale && metadata.fontScale !== 1) {
+        wordElement.style.transform = `scale(${metadata.fontScale})`;
+      }
+      if (metadata.shadow) wordElement.style.textShadow = metadata.shadow.css;
+      if (metadata.outline) wordElement.style.webkitTextStroke = metadata.outline.css;
+      wordElement.textContent = wordText;
+
+      if (!breakIndices.has(idx) && idx !== activePhrase.words.length - 1) {
+        wordElement.style.marginRight = `${wordSpacingPx}px`;
+      }
+
+      return { wordElement, isLineBreak: breakIndices.has(idx - 1) };
+    }
+
     const isActiveKeyword = keywordsEnabled && w.isKeyword && isWordActive;
     const keywordColor = w.importance === 'high' ? keywordColorHigh : keywordColorMedium;
 
@@ -235,7 +288,6 @@ export function syncVideoSubtitles() {
       color = isWordActive ? (isActiveKeyword ? keywordColor : activeHighlight) : inactiveColor;
     }
 
-    const wordElement = document.createElement('span');
     wordElement.className = extraClasses.join(' ');
     wordElement.style.color = color;
     if (keywordsEnabled && w.isKeyword) {
