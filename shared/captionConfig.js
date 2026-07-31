@@ -40,6 +40,7 @@ export const CREATOR_PROFILES = {
       secondaryHex: '#FFFFFF',     // Inactive White
       outlineHex: '#000000',       // Black Outline
       backHex: 'transparent',
+      shadowHex: '#000000',
       assPrimary: '&H0000FFFF',    // Yellow
       assSecondary: '&H00FFFFFF',  // White
       assOutline: '&H00000000',    // Black
@@ -52,8 +53,7 @@ export const CREATOR_PROFILES = {
     wordSpacing: '0.2em',
     lineSpacing: '1.25',
     phraseSpacing: '0 4px',
-    cssTextStroke: '2px #000000',
-    cssTextShadow: '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0px 3px 4px rgba(0,0,0,0.8)',
+    useNativeStroke: true,
     cssBackground: 'transparent',
     cssBorderRadius: '0',
     cssHighlightColor: '#FEF08A',
@@ -71,6 +71,7 @@ export const CREATOR_PROFILES = {
       secondaryHex: '#FFFFFF',
       outlineHex: '#000000',
       backHex: 'transparent',
+      shadowHex: '#000000',
       assPrimary: '&H00FFFFFF',    // Active White
       assSecondary: '&H50FFFFFF',  // Semi-transparent White
       assOutline: '&H00000000',    // Black
@@ -83,8 +84,7 @@ export const CREATOR_PROFILES = {
     wordSpacing: '0.2em',
     lineSpacing: '1.25',
     phraseSpacing: '0 4px',
-    cssTextStroke: '1.5px #000000',
-    cssTextShadow: '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0px 2px 3px rgba(0,0,0,0.7)',
+    useNativeStroke: true,
     cssBackground: 'transparent',
     cssBorderRadius: '0',
     cssHighlightColor: '#FFFFFF',
@@ -102,6 +102,7 @@ export const CREATOR_PROFILES = {
       secondaryHex: '#FFFFFF',
       outlineHex: '#000000',
       backHex: 'rgba(0, 0, 0, 0.75)',
+      shadowHex: '#000000',
       assPrimary: '&H0000FFFF',    // Active Yellow
       assSecondary: '&H00FFFFFF',  // Inactive White
       assOutline: '&H00000000',    // Black Outline
@@ -114,8 +115,7 @@ export const CREATOR_PROFILES = {
     wordSpacing: '0.25em',
     lineSpacing: '1.3',
     phraseSpacing: '6px 12px',
-    cssTextStroke: 'none',
-    cssTextShadow: '0 4px 6px rgba(0,0,0,0.2)',
+    useNativeStroke: false,
     cssBackground: 'rgba(0, 0, 0, 0.75)',
     cssBorderRadius: '6px',
     cssHighlightColor: '#FEF08A',
@@ -133,6 +133,7 @@ export const CREATOR_PROFILES = {
       secondaryHex: '#FFFFFF',
       outlineHex: '#3F003F',
       backHex: '#FF00FF',
+      shadowHex: '#818CF8',
       assPrimary: '&H00FFFF00',    // Active Cyan
       assSecondary: '&H00F88C81',  // Inactive Soft Blue-Purple
       assOutline: '&H003F003F',    // Dark Purple
@@ -145,8 +146,7 @@ export const CREATOR_PROFILES = {
     wordSpacing: '0.2em',
     lineSpacing: '1.2',
     phraseSpacing: '0 4px',
-    cssTextStroke: 'none',
-    cssTextShadow: '0px 0px 10px rgba(129, 140, 248, 0.8), -2px -2px 0 #3f003f, 2px -2px 0 #3f003f, -2px 2px 0 #3f003f, 2px 2px 0 #3f003f',
+    useNativeStroke: false,
     cssBackground: 'transparent',
     cssBorderRadius: '0',
     cssHighlightColor: '#38BDF8',
@@ -247,6 +247,115 @@ export function hexToASSColor(hex, defaultHex = '#FFFFFF') {
   return `&H${a}${b.toUpperCase()}${g.toUpperCase()}${r.toUpperCase()}`;
 }
 
+// Matches the existing word-spacing/box-padding ASS<->CSS px conversion
+// factor, reused here so outline/shadow size and offset sliders resolve to
+// the same effective size in both the CSS preview and the ASS export.
+const ASS_TO_CSS_SCALE = 1.5;
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Converts a 0-100 opacity percentage into an ASS alpha byte (2 hex digits).
+ * ASS alpha is inverted vs CSS: 00 = fully opaque, FF = fully transparent.
+ */
+export function opacityToAssAlpha(opacityPercent = 100) {
+  const clamped = Math.max(0, Math.min(100, parseFloat(opacityPercent)));
+  const assAlphaNum = Math.round((100 - clamped) / 100 * 255);
+  return assAlphaNum.toString(16).padStart(2, '0').toUpperCase();
+}
+
+/**
+ * Overwrites the alpha byte of an already-resolved &HAABBGGRR ASS color
+ * string, preserving its BGR channels. Lets text/background opacity apply on
+ * top of a color that's already been through hexToASSColor.
+ */
+function withAssAlpha(assColorStr, alphaHex) {
+  if (!assColorStr) return assColorStr;
+  const clean = assColorStr.replace(/^&H/i, '').replace(/&$/, '').padStart(8, '0');
+  const bgr = clean.substring(2, 8);
+  return `&H${alphaHex}${bgr}`;
+}
+
+/**
+ * Applies an opacity percentage to a CSS color (#hex or rgb()/rgba()),
+ * multiplying into any alpha the color already carries. At 100% opacity the
+ * input is returned completely untouched, so this is a no-op for every
+ * existing preset/override until a caller actually moves an opacity slider
+ * away from its default.
+ */
+export function applyOpacityToColor(color, opacityPercent = 100) {
+  const clamped = Math.max(0, Math.min(100, parseFloat(opacityPercent)));
+  if (!color || typeof color !== 'string' || clamped >= 100) return color;
+  if (color === 'transparent' || color === 'none') return color;
+
+  const alpha = clamped / 100;
+
+  const rgbaMatch = color.match(/^rgba?\(([^)]+)\)$/i);
+  if (rgbaMatch) {
+    const parts = rgbaMatch[1].split(',').map((s) => s.trim());
+    const [r, g, b] = parts;
+    const existingAlpha = parts[3] !== undefined ? parseFloat(parts[3]) : 1;
+    return `rgba(${r}, ${g}, ${b}, ${round2(existingAlpha * alpha)})`;
+  }
+
+  const hexMatch = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hexMatch) {
+    let clean = hexMatch[1];
+    if (clean.length === 3) clean = clean.split('').map((c) => c + c).join('');
+    const r = parseInt(clean.substring(0, 2), 16);
+    const g = parseInt(clean.substring(2, 4), 16);
+    const b = parseInt(clean.substring(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${round2(alpha)})`;
+  }
+
+  return color;
+}
+
+/**
+ * Resolves outline width, shadow color/size/offset, and text/background
+ * opacity from client params + the active preset — the single place both
+ * getASSStyleFromConfig and getCSSPreviewFromConfig read these from, so a
+ * slider always produces the same effective value in both renderers.
+ *
+ * @param {object} params - Client style params.
+ * @param {object} profile - The resolved creator profile.
+ * @param {boolean} isBoxed - Whether the caption currently renders as a box
+ *   (see resolveBoxState) — box mode repurposes the ASS Outline field for
+ *   padding, so a distinct text-outline width only applies when unboxed.
+ */
+function resolveShadowOutlineParams(params, profile, isBoxed) {
+  const outlineSizeAss = isBoxed
+    ? null
+    : (params.outlineSize != null ? parseInt(params.outlineSize, 10) : profile.outlineSize);
+
+  const shadowSizeAss = params.shadowSize != null ? parseInt(params.shadowSize, 10) : profile.shadowSize;
+  const shadowColorHex = params.shadowColor || profile.colors.shadowHex || '#000000';
+
+  // Undefined offsets default to a symmetric diagonal offset of shadowSizeAss
+  // in both axes — exactly what ASS's native Shadow field already does with
+  // no override tags, so an untouched caption needs no \xshad/\yshad emitted.
+  const hasCustomOffsetX = params.shadowOffsetX != null;
+  const hasCustomOffsetY = params.shadowOffsetY != null;
+  const shadowOffsetXAss = hasCustomOffsetX ? parseFloat(params.shadowOffsetX) : shadowSizeAss;
+  const shadowOffsetYAss = hasCustomOffsetY ? parseFloat(params.shadowOffsetY) : shadowSizeAss;
+
+  const textOpacity = params.textOpacity != null ? Math.max(0, Math.min(100, parseFloat(params.textOpacity))) : 100;
+  const backgroundOpacity = params.backgroundOpacity != null ? Math.max(0, Math.min(100, parseFloat(params.backgroundOpacity))) : null;
+
+  return {
+    outlineSizeAss,
+    shadowSizeAss,
+    shadowColorHex,
+    shadowOffsetXAss,
+    shadowOffsetYAss,
+    hasCustomShadowOffset: hasCustomOffsetX || hasCustomOffsetY,
+    textOpacity,
+    backgroundOpacity
+  };
+}
+
 /**
  * Maps input style parameters to resolved ASS style parameters.
  * Supports custom color overrides, wordSpacing, popScale, and animation settings.
@@ -281,11 +390,11 @@ export function getASSStyleFromConfig(params = {}) {
     : profile.defaultAnimationMode || 'karaoke';
 
   // Custom Color Overrides or Profile Defaults
-  const primaryColor = params.activeWordColor
+  let primaryColor = params.activeWordColor
     ? hexToASSColor(params.activeWordColor, profile.colors.primaryHex)
     : profile.colors.assPrimary;
 
-  const secondaryColor = params.inactiveWordColor
+  let secondaryColor = params.inactiveWordColor
     ? hexToASSColor(params.inactiveWordColor, profile.colors.secondaryHex)
     : profile.colors.assSecondary;
 
@@ -293,14 +402,14 @@ export function getASSStyleFromConfig(params = {}) {
   // keyword words. Disabled by default resolution stays the same regardless —
   // callers gate on enableKeywordHighlighting before applying these.
   const enableKeywordHighlighting = params.enableKeywordHighlighting !== false && params.enableKeywordHighlighting !== 'false';
-  const keywordHighColor = hexToASSColor(params.keywordColorHigh || '#EF4444', '#EF4444');
-  const keywordMediumColor = hexToASSColor(params.keywordColorMedium || '#FB923C', '#FB923C');
+  let keywordHighColor = hexToASSColor(params.keywordColorHigh || '#EF4444', '#EF4444');
+  let keywordMediumColor = hexToASSColor(params.keywordColorMedium || '#FB923C', '#FB923C');
 
-  const outlineColor = params.outlineColor 
-    ? hexToASSColor(params.outlineColor, profile.colors.outlineHex) 
+  let outlineColor = params.outlineColor
+    ? hexToASSColor(params.outlineColor, profile.colors.outlineHex)
     : profile.colors.assOutline;
 
-  const backColor = params.backgroundColor
+  let backColor = params.backgroundColor
     ? hexToASSColor(params.backgroundColor, profile.colors.backHex)
     : profile.colors.assBack;
 
@@ -316,10 +425,39 @@ export function getASSStyleFromConfig(params = {}) {
   // doesn't box by default; the box padding then falls back to a sensible default.
   const { isBoxed, boxPaddingPx } = resolveBoxState(params, profile);
   const borderStyle = isBoxed ? 3 : profile.borderStyle;
+
+  // Outline width, shadow color/size/offset, and opacity — resolved once,
+  // shared with getCSSPreviewFromConfig so a slider always produces the same
+  // effective value in both the ASS export and the CSS preview.
+  const shadowParams = resolveShadowOutlineParams(params, profile, isBoxed);
+
   // Outline field doubles as box padding under BorderStyle 3; otherwise it's real text-outline width.
   const outlineSize = isBoxed
     ? Math.round(boxPaddingPx * 1.5) // scaled to ASS canvas pixels, matching word spacing's scale factor
-    : (params.outlineSize !== undefined ? parseInt(params.outlineSize, 10) : profile.outlineSize);
+    : shadowParams.outlineSizeAss;
+
+  // Text opacity fades the glyph fill, outline, and keyword colors uniformly
+  // (matching the CSS preview's per-word/text-layer opacity); background
+  // opacity is independent so a boxed caption's fill can fade on its own.
+  const textOpacityAlpha = opacityToAssAlpha(shadowParams.textOpacity);
+  primaryColor = withAssAlpha(primaryColor, textOpacityAlpha);
+  secondaryColor = withAssAlpha(secondaryColor, textOpacityAlpha);
+  outlineColor = withAssAlpha(outlineColor, textOpacityAlpha);
+  keywordHighColor = withAssAlpha(keywordHighColor, textOpacityAlpha);
+  keywordMediumColor = withAssAlpha(keywordMediumColor, textOpacityAlpha);
+
+  if (shadowParams.backgroundOpacity != null) {
+    backColor = withAssAlpha(backColor, opacityToAssAlpha(shadowParams.backgroundOpacity));
+  }
+
+  // ASS has no dedicated shadow-color style column (the Shadow column is only
+  // a depth/blur number) — shadow color is instead set per-Dialogue-event via
+  // the \4a\4c override tags (see assWriter.js), so it stays independent of
+  // BackColour (which the box-fill uses under BorderStyle 3).
+  const shadowColor = withAssAlpha(
+    hexToASSColor(shadowParams.shadowColorHex, profile.colors.shadowHex || '#000000'),
+    textOpacityAlpha
+  );
 
   // ASS only supports a boolean Bold flag (no numeric weight) — derive it from
   // the same fontWeight the CSS preview uses so both sides agree on bold-ness,
@@ -334,9 +472,14 @@ export function getASSStyleFromConfig(params = {}) {
     secondaryColor,
     outlineColor,
     backColor,
+    shadowColor,
+    // Only emitted as inline \xshad\yshad override tags when explicitly set;
+    // otherwise ASS's native symmetric Shadow-depth offset already applies.
+    shadowOffsetX: shadowParams.hasCustomShadowOffset ? Math.round(shadowParams.shadowOffsetXAss) : null,
+    shadowOffsetY: shadowParams.hasCustomShadowOffset ? Math.round(shadowParams.shadowOffsetYAss) : null,
     bold,
     outlineSize,
-    shadowSize: params.shadowSize !== undefined ? parseInt(params.shadowSize, 10) : profile.shadowSize,
+    shadowSize: shadowParams.shadowSizeAss,
     alignment: 2,
     marginV,
     borderStyle,
@@ -405,14 +548,9 @@ export function getCSSPreviewFromConfig(params = {}) {
     : 'none';
 
   // Custom Colors or Fallbacks
-  const highlightColor = params.activeWordColor || profile.cssHighlightColor || profile.colors.primaryHex;
-  const inactiveColor = params.inactiveWordColor || profile.cssInactiveColor || profile.colors.secondaryHex;
-  const outlineColor = params.outlineColor || profile.colors.outlineHex || '#000000';
-  const backgroundColor = params.backgroundColor || profile.cssBackground || 'transparent';
-
-  // Text Stroke / Shadow Overrides if outlineColor specified
-  const cssTextStroke = params.outlineColor ? `2px ${params.outlineColor}` : profile.cssTextStroke;
-  const cssBackground = params.backgroundColor ? params.backgroundColor : profile.cssBackground;
+  const outlineColorBase = params.outlineColor || profile.colors.outlineHex || '#000000';
+  const backgroundColorBase = params.backgroundColor || profile.cssBackground || 'transparent';
+  const cssBackgroundBase = params.backgroundColor ? params.backgroundColor : profile.cssBackground;
 
   const numericWordSpacing = parseFloat(params.wordSpacing !== undefined ? params.wordSpacing : 4);
   const popScale = parseFloat(params.popScale || 118);
@@ -424,8 +562,60 @@ export function getCSSPreviewFromConfig(params = {}) {
 
   // AI Keyword Highlighting resolved colors (mirrors getASSStyleFromConfig).
   const enableKeywordHighlighting = params.enableKeywordHighlighting !== false && params.enableKeywordHighlighting !== 'false';
-  const keywordColorHigh = params.keywordColorHigh || '#EF4444';
-  const keywordColorMedium = params.keywordColorMedium || '#FB923C';
+
+  // Outline width, shadow color/size/offset, and opacity — resolved once,
+  // shared with getASSStyleFromConfig so a slider always produces the same
+  // effective value in both renderers.
+  const shadowParams = resolveShadowOutlineParams(params, profile, isBoxed);
+  const textOpacity = shadowParams.textOpacity;
+
+  // Box mode repurposes the outline slider for padding (matching ASS, where
+  // the same Outline field is hijacked under BorderStyle 3), so no text
+  // outline width applies while boxed.
+  const outlineSizeCss = shadowParams.outlineSizeAss != null ? shadowParams.outlineSizeAss / ASS_TO_CSS_SCALE : 0;
+  const shadowBlurCss = shadowParams.shadowSizeAss / ASS_TO_CSS_SCALE;
+  const shadowOffsetXCss = shadowParams.shadowOffsetXAss / ASS_TO_CSS_SCALE;
+  const shadowOffsetYCss = shadowParams.shadowOffsetYAss / ASS_TO_CSS_SCALE;
+
+  const outlineColorForLayers = applyOpacityToColor(outlineColorBase, textOpacity);
+  const shadowColorForLayer = applyOpacityToColor(shadowParams.shadowColorHex, textOpacity);
+
+  // A preset only draws a real -webkit-text-stroke when it authored
+  // useNativeStroke: true; the 4 offset copies below simulate the outline via
+  // text-shadow for every preset whenever outlineSizeCss > 0 (the sole outline
+  // mechanism for presets that opt out of the native stroke), so outline
+  // width/color always come from one place regardless of technique.
+  const cssTextStroke = (profile.useNativeStroke && outlineSizeCss > 0)
+    ? `${round2(outlineSizeCss)}px ${outlineColorForLayers}`
+    : 'none';
+
+  const shadowLayers = [];
+  if (outlineSizeCss > 0) {
+    const w = round2(outlineSizeCss);
+    shadowLayers.push(`-${w}px -${w}px 0 ${outlineColorForLayers}`);
+    shadowLayers.push(`${w}px -${w}px 0 ${outlineColorForLayers}`);
+    shadowLayers.push(`-${w}px ${w}px 0 ${outlineColorForLayers}`);
+    shadowLayers.push(`${w}px ${w}px 0 ${outlineColorForLayers}`);
+  }
+  if (shadowParams.shadowSizeAss > 0) {
+    shadowLayers.push(`${round2(shadowOffsetXCss)}px ${round2(shadowOffsetYCss)}px ${round2(shadowBlurCss)}px ${shadowColorForLayer}`);
+  }
+  const cssTextShadow = shadowLayers.length ? shadowLayers.join(', ') : 'none';
+
+  const highlightColor = applyOpacityToColor(params.activeWordColor || profile.cssHighlightColor || profile.colors.primaryHex, textOpacity);
+  const inactiveColor = applyOpacityToColor(params.inactiveWordColor || profile.cssInactiveColor || profile.colors.secondaryHex, textOpacity);
+  const keywordColorHigh = applyOpacityToColor(params.keywordColorHigh || '#EF4444', textOpacity);
+  const keywordColorMedium = applyOpacityToColor(params.keywordColorMedium || '#FB923C', textOpacity);
+
+  // Background opacity is independent of text opacity: only applied when the
+  // slider is explicitly touched, so every preset's own baked box alpha (or
+  // lack thereof) is preserved until then.
+  const backgroundColor = shadowParams.backgroundOpacity != null
+    ? applyOpacityToColor(backgroundColorBase, shadowParams.backgroundOpacity)
+    : backgroundColorBase;
+  const cssBackground = shadowParams.backgroundOpacity != null
+    ? applyOpacityToColor(cssBackgroundBase, shadowParams.backgroundOpacity)
+    : cssBackgroundBase;
 
   const overlay = isManualPosition
     ? {
@@ -466,7 +656,7 @@ export function getCSSPreviewFromConfig(params = {}) {
       fontWeight: profile.fontWeight,
       color: inactiveColor,
       background: cssBackground,
-      textShadow: profile.cssTextShadow,
+      textShadow: cssTextShadow,
       webkitTextStroke: cssTextStroke,
       padding: cssPadding,
       borderRadius: profile.cssBorderRadius,
@@ -476,7 +666,7 @@ export function getCSSPreviewFromConfig(params = {}) {
     },
     highlightColor,
     inactiveColor,
-    outlineColor,
+    outlineColor: outlineColorBase,
     backgroundColor,
     wordSpacing: `${numericWordSpacing}px`
   };

@@ -58,7 +58,10 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
     posOverrideTag: resolvedStyle.posOverrideTag || null,
     enableKeywordHighlighting: resolvedStyle.enableKeywordHighlighting !== false,
     keywordHighColor: resolvedStyle.keywordHighColor,
-    keywordMediumColor: resolvedStyle.keywordMediumColor
+    keywordMediumColor: resolvedStyle.keywordMediumColor,
+    shadowColor: resolvedStyle.shadowColor,
+    shadowOffsetX: resolvedStyle.shadowOffsetX,
+    shadowOffsetY: resolvedStyle.shadowOffsetY
   };
   
   phrases.forEach((phrase) => {

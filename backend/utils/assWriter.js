@@ -88,6 +88,31 @@ function toInlineColorTags(assColor, index) {
 }
 
 /**
+ * Builds the one-time inline override block (placed at the very start of a
+ * Dialogue event's text) that sets the shadow color and, if explicitly
+ * customized, the shadow's X/Y offset. ASS has no dedicated shadow-color
+ * style column — shadow color is the \4a\4c override tags, which is why this
+ * has to be inline rather than baked into [V4+ Styles] like Outline/Shadow
+ * depth are. Override tags persist for the rest of that Dialogue event's
+ * text once set, so this only needs to be emitted once per event, not per word.
+ */
+function buildShadowOverrideTag(options) {
+  const { shadowColor, shadowOffsetX, shadowOffsetY } = options;
+  let tag = '';
+
+  if (shadowColor) {
+    const clean = shadowColor.replace(/^&H/i, '').replace(/&$/, '').padStart(8, '0');
+    const alpha = clean.substring(0, 2);
+    const bgr = clean.substring(2, 8);
+    tag += `\\4a&H${alpha}&\\4c&H${bgr}&`;
+  }
+  if (shadowOffsetX != null) tag += `\\xshad${shadowOffsetX}`;
+  if (shadowOffsetY != null) tag += `\\yshad${shadowOffsetY}`;
+
+  return tag ? `{${tag}}` : '';
+}
+
+/**
  * Builds the inline weight/style override tags for a keyword word, based on
  * its importance. Mirrors the frontend preview's fontWeight/fontStyle rule
  * exactly: high importance -> bold, medium importance -> italic. Applied
@@ -109,7 +134,7 @@ function toKeywordStyleTags(word, enableKeywordHighlighting) {
  */
 function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, options) {
   const { animationMode, popScale, primaryColor, secondaryColor, enableKeywordHighlighting, keywordHighColor, keywordMediumColor } = options;
-  let payload = '';
+  let payload = buildShadowOverrideTag(options);
 
   wordTexts.forEach((wordText, idx) => {
     const isLineBreak = breakIndices.has(idx - 1);
@@ -189,7 +214,7 @@ function generateTypewriterDialogueLine(phrase, options) {
   const startStr = formatASSTimestamp(phrase.start);
   const endStr = formatASSTimestamp(phrase.end);
 
-  let textPayload = '';
+  let textPayload = buildShadowOverrideTag(options);
   let lastTime = phrase.start;
 
   phrase.words.forEach((w, idx) => {
@@ -242,10 +267,14 @@ export function generateASSDialogueLine(phrase, options = {}) {
   const enableKeywordHighlighting = typeof options === 'object' && options.enableKeywordHighlighting !== false;
   const keywordHighColor = (typeof options === 'object' && options.keywordHighColor) || DEFAULT_PRIMARY_COLOR;
   const keywordMediumColor = (typeof options === 'object' && options.keywordMediumColor) || DEFAULT_PRIMARY_COLOR;
+  const shadowColor = (typeof options === 'object' && options.shadowColor) || null;
+  const shadowOffsetX = (typeof options === 'object' && options.shadowOffsetX != null) ? options.shadowOffsetX : null;
+  const shadowOffsetY = (typeof options === 'object' && options.shadowOffsetY != null) ? options.shadowOffsetY : null;
 
   const resolvedOptions = {
     textCase, animationMode, popScale, primaryColor, secondaryColor,
-    posOverrideTag, enableKeywordHighlighting, keywordHighColor, keywordMediumColor
+    posOverrideTag, enableKeywordHighlighting, keywordHighColor, keywordMediumColor,
+    shadowColor, shadowOffsetX, shadowOffsetY
   };
 
   if (animationMode === 'typewriter') {
