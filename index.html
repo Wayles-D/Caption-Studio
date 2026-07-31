@@ -51,10 +51,13 @@
                 Import Video
             </button>
 
-            <button type="button" id="btn-toolbar-export" class="btn-toolbar-pri">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Export MP4
-            </button>
+            <div class="toolbar-export-group">
+                <button type="button" id="btn-toolbar-export" class="btn-toolbar-pri">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Generate Video
+                </button>
+                <p class="field-hint toolbar-export-hint">Generate a new video with your latest caption edits before downloading.</p>
+            </div>
 
             <!-- Theme Toggle -->
             <label class="theme-toggle-label" title="Toggle Light / Dark mode">
@@ -197,7 +200,61 @@
                                     <label id="label-color-background">Box</label>
                                     <button type="button" class="color-swatch-trigger" id="color-background" data-color-key="backgroundColor" aria-haspopup="true" aria-labelledby="label-color-background"></button>
                                 </div>
+                                <div class="color-picker-item">
+                                    <label id="label-color-shadow">Shadow</label>
+                                    <button type="button" class="color-swatch-trigger" id="color-shadow" data-color-key="shadowColor" aria-haspopup="true" aria-labelledby="label-color-shadow"></button>
+                                </div>
                             </div>
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Outline Width</span>
+                                <span class="group-value-badge" id="val-outline-size">6px</span>
+                            </div>
+                            <input type="range" id="input-outline-size" min="0" max="20" value="6" class="slider-control">
+                            <p class="field-hint">Set to 0 to disable the outline completely. Has no effect while a Box color is active.</p>
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Shadow Intensity</span>
+                                <span class="group-value-badge" id="val-shadow-size">0px</span>
+                            </div>
+                            <input type="range" id="input-shadow-size" min="0" max="20" value="0" class="slider-control">
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Shadow Offset X</span>
+                                <span class="group-value-badge" id="val-shadow-offset-x">0px</span>
+                            </div>
+                            <input type="range" id="input-shadow-offset-x" min="-20" max="20" value="0" class="slider-control">
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Shadow Offset Y</span>
+                                <span class="group-value-badge" id="val-shadow-offset-y">0px</span>
+                            </div>
+                            <input type="range" id="input-shadow-offset-y" min="-20" max="20" value="0" class="slider-control">
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Text Opacity</span>
+                                <span class="group-value-badge" id="val-text-opacity">100%</span>
+                            </div>
+                            <input type="range" id="input-text-opacity" min="0" max="100" value="100" class="slider-control">
+                        </div>
+
+                        <div class="settings-group">
+                            <div class="label-justify">
+                                <span class="group-label">Background Opacity</span>
+                                <span class="group-value-badge" id="val-background-opacity">100%</span>
+                            </div>
+                            <input type="range" id="input-background-opacity" min="0" max="100" value="100" class="slider-control">
+                            <p class="field-hint">Only visible when a Box color is active.</p>
                         </div>
                     </div>
                 </div>

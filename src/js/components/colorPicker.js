@@ -21,6 +21,7 @@ const PICKER_FIELDS = [
   { key: 'inactiveWordColor', triggerId: 'color-inactive-word', label: 'Inactive Word Color' },
   { key: 'outlineColor', triggerId: 'color-outline', label: 'Outline Color' },
   { key: 'backgroundColor', triggerId: 'color-background', label: 'Background Color' },
+  { key: 'shadowColor', triggerId: 'color-shadow', label: 'Shadow Color' },
   { key: 'keywordColorHigh', triggerId: 'color-keyword-high', label: 'High Importance Keyword Color' },
   { key: 'keywordColorMedium', triggerId: 'color-keyword-medium', label: 'Medium Importance Keyword Color' }
 ];
