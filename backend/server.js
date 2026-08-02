@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import uploadRouter from './routes/uploadRoute.js';
 import { cleanupJobAssets, runPeriodicCleanup } from './utils/cleanup.js';
-import { downloadFonts } from './scripts/download-fonts.js';
+import { FONT_REGISTRY } from '../shared/fontRegistry.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,6 +71,12 @@ app.use('/output', express.static(outputDir));
 
 // Serve subtitles directory static files (allows clients to download compiled ASS overlays)
 app.use('/subtitles', express.static(subtitlesDir));
+
+// Serve the bundled font files so the browser preview can self-host the exact
+// same fonts (via @font-face) that FFmpeg/libass burns into the exported
+// video — see shared/fontRegistry.js, the single source of truth both sides
+// resolve font files/names from.
+app.use('/fonts', express.static(fontsDir));
 
 // Route Mounting
 app.use('/api/upload', uploadRouter);
@@ -150,11 +156,18 @@ if (process.env.NODE_ENV !== 'test') {
     console.log('[Cleanup Daemon] Running startup cleanup check...');
     runPeriodicCleanup();
 
-    // Boot font library (download missing fonts in the background)
-    try {
-      await downloadFonts();
-    } catch (err) {
-      console.error('[Fonts] Font download failed (non-fatal):', err.message);
+    // All fonts are bundled with the project (backend/fonts/, registered in
+    // shared/fontRegistry.js) — no network fetch at boot, so rendering never
+    // depends on GitHub/CDN availability. If a font is ever missing from
+    // disk, run `node backend/scripts/download-fonts.js` manually to
+    // re-fetch the curated set (dev/setup convenience only, not a runtime path).
+    const missingFonts = Object.values(FONT_REGISTRY)
+      .flatMap((entry) => Object.values(entry.faces))
+      .filter((face) => !fs.existsSync(path.join(fontsDir, face.file)));
+    if (missingFonts.length > 0) {
+      console.warn(`[Fonts] ${missingFonts.length} registered font file(s) missing from ${fontsDir} — export will fall back to the registry's default font for those. Run backend/scripts/download-fonts.js to restore them.`);
+    } else {
+      console.log(`[Fonts] All ${Object.keys(FONT_REGISTRY).length} registered font families present in ${fontsDir}.`);
     }
   });
 }

@@ -580,6 +580,8 @@ input:checked + .theme-slider::before {
 .bg-black-preview { color: #FFF; background: #000; padding: 2px; border-radius: 2px; }
 .gradient-glow-preview { color: #38BDF8; text-shadow: 0 0 6px rgba(56,189,248,0.8); }
 .signature-v1-preview { color: #FFD60A; font-family: 'Poppins', sans-serif; text-shadow: 1px 1px 3px rgba(0,0,0,0.6); }
+.wayles-poppins-preview { color: #FFFFFF; font-family: 'Poppins', sans-serif; font-weight: 700; text-shadow: 1px 1px 3px rgba(0,0,0,0.6); }
+.wayles-pen-preview { color: #FFFFFF; font-family: 'PP Editorial New', serif; font-style: italic; text-shadow: 1px 1px 3px rgba(0,0,0,0.6); }
 
 /* Custom Color Picker: swatch triggers + popover */
 .color-picker-grid {

@@ -3,20 +3,66 @@
  */
 import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from '../state.js';
 import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, applyOpacityToColor } from '../../../shared/captionConfig.js';
+import { resolveFontFace } from '../../../shared/fontRegistry.js';
 
-// Dynamic Google Font Loader
-const loadedFonts = new Set();
-export function loadGoogleFont(fontName) {
-  if (!fontName || loadedFonts.has(fontName)) return;
-  loadedFonts.add(fontName);
+// Self-hosted local font loader: fonts are bundled with the project (see
+// backend/fonts/ + shared/fontRegistry.js) and served statically by the
+// backend, instead of fetched from Google Fonts. This guarantees the preview
+// renders with the EXACT same font file FFmpeg/libass burns into the
+// exported video (see backend/utils/ffmpeg.js's `fontsdir` option) — no
+// dependency on the OS or an external CDN either way.
+const loadedFontFaces = new Set();
+let localFontStyleEl = null;
 
-  const cleanFont = fontName.replace(/['"]/g, '').split(',')[0].trim();
-  const fontUrl = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(cleanFont).replace(/%20/g, '+')}:wght@400;600;700;800;900&display=swap`;
+function ensureLocalFontStyleEl() {
+  if (!localFontStyleEl) {
+    localFontStyleEl = document.createElement('style');
+    localFontStyleEl.id = 'caption-studio-local-fonts';
+    document.head.appendChild(localFontStyleEl);
+  }
+  return localFontStyleEl;
+}
 
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = fontUrl;
-  document.head.appendChild(link);
+/**
+ * Registers an @font-face rule for one resolved font face (regular/italic/
+ * bold/...), resolved through the exact same Font Registry the ASS exporter
+ * uses, so a requested display name always maps to the identical bundled
+ * file on both sides.
+ *
+ * @param {string} displayName - Font family as selected in the UI.
+ * @param {string} [face='regular'] - Registry face key.
+ */
+export function loadLocalFontFace(displayName, face = 'regular') {
+  if (!displayName) return;
+  const resolved = resolveFontFace(displayName, face);
+  const cacheKey = `${resolved.familyName}::${resolved.file}`;
+  if (loadedFontFaces.has(cacheKey)) return;
+  loadedFontFaces.add(cacheKey);
+
+  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const fontUrl = `${apiBaseUrl}/fonts/${encodeURIComponent(resolved.file)}`;
+  const weightDescriptor = resolved.bold ? '700' : '400';
+  const styleDescriptor = resolved.italic ? 'italic' : 'normal';
+
+  const rule = `@font-face { font-family: '${resolved.familyName}'; src: url('${fontUrl}'); font-weight: ${weightDescriptor}; font-style: ${styleDescriptor}; font-display: swap; }`;
+  ensureLocalFontStyleEl().appendChild(document.createTextNode(rule));
+}
+
+/**
+ * Loads whichever font faces the current preset's keyword tiers need (the
+ * base font is loaded separately in applyCSSPreviewStyles). Reads the same
+ * user-override-or-preset-default precedence resolveKeywordStyleConfig uses,
+ * so the exact face actually rendered is always the one loaded.
+ */
+function loadKeywordDrivenFontFaces(cssConfig) {
+  const keywordStyle = cssConfig.profile?.keywordStyle;
+  if (!cssConfig.keywordDriven || !keywordStyle) return;
+
+  const highFont = appState.keywordPrimaryFont || keywordStyle.high?.fontFamily;
+  if (highFont) loadLocalFontFace(highFont, keywordStyle.high?.face || 'regular');
+
+  const mediumFont = appState.keywordMediumFont || keywordStyle.medium?.fontFamily;
+  if (mediumFont) loadLocalFontFace(mediumFont, keywordStyle.medium?.face || 'regular');
 }
 
 export function initPreviewWorkspace() {
@@ -145,9 +191,10 @@ export function applyCSSPreviewStyles() {
 
   if (!subtitlesOverlay || !captionsText) return;
 
-  loadGoogleFont(appState.fontFamily);
-
   const cssConfig = getCSSPreviewFromConfig(getStyleParams());
+
+  loadLocalFontFace(appState.fontFamily, 'regular');
+  loadKeywordDrivenFontFaces(cssConfig);
 
   // Apply Overlay Styles
   Object.assign(subtitlesOverlay.style, cssConfig.overlay);
@@ -248,6 +295,7 @@ export function syncVideoSubtitles() {
       wordElement.style.color = applyOpacityToColor(metadata.colorHex, wordOpacity);
       if (metadata.fontFamily) wordElement.style.fontFamily = metadata.fontFamily;
       if (metadata.fontWeight) wordElement.style.fontWeight = metadata.fontWeight;
+      wordElement.style.fontStyle = metadata.italic ? 'italic' : 'normal';
       if (metadata.fontScale && metadata.fontScale !== 1) {
         wordElement.style.transform = `scale(${metadata.fontScale})`;
       }

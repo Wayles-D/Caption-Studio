@@ -2,39 +2,52 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import { fileURLToPath } from 'url';
+import { FONT_REGISTRY } from '../../shared/fontRegistry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Define curated creator fonts downloadable from Google Fonts GitHub OFL repo
-const FONT_LIST = [
-  { name: 'Inter.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf' },
-  { name: 'Outfit.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/outfit/Outfit%5Bwght%5D.ttf' },
-  { name: 'PlusJakartaSans.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/plusjakartasans/PlusJakartaSans%5Bwght%5D.ttf' },
-  { name: 'Manrope.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/manrope/Manrope%5Bwght%5D.ttf' },
-  { name: 'Anton.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf' },
-  { name: 'BebasNeue.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf' },
-  { name: 'LeagueSpartan.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/leaguespartan/LeagueSpartan%5Bwght%5D.ttf' },
-  { name: 'ArchivoBlack.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/archivoblack/ArchivoBlack-Regular.ttf' },
-  { name: 'BricolageGrotesque.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/bricolagegrotesque/BricolageGrotesque%5Bopsz%2Cwght%5D.ttf' },
-  { name: 'Poppins.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf' },
-  { name: 'SpaceGrotesk.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf' },
-  { name: 'DMSans.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/dmsans/DMSans%5Bopsz%2Cwdth%2Cwght%5D.ttf' },
-  { name: 'IBMPlexSans.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/ibmplexsans/IBMPlexSans-Regular.ttf' },
-  { name: 'SourceSans3.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/sourcesans3/SourceSans3%5Bwght%5D.ttf' },
-  { name: 'InstrumentSans.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/instrumentsans/InstrumentSans%5Bwdth%2Cwght%5D.ttf' },
-  { name: 'Montserrat.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf' },
-  { name: 'LilitaOne.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/lilitaone/LilitaOne-Regular.ttf' },
-  { name: 'Lexend.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/lexend/Lexend%5Bwght%5D.ttf' },
-  { name: 'Rubik.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/rubik/Rubik%5Bwght%5D.ttf' },
-  { name: 'Kanit.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/kanit/Kanit-Bold.ttf' },
-  { name: 'Syne.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/syne/Syne%5Bwght%5D.ttf' },
-  { name: 'Jost.ttf', url: 'https://github.com/google/fonts/raw/main/ofl/jost/Jost%5Bwght%5D.ttf' }
-];
+/**
+ * Manual recovery/setup script — NOT run automatically at server boot.
+ * All fonts are bundled with the project (committed under backend/fonts/),
+ * so normal operation never needs this. It exists only to re-fetch a
+ * Google Fonts (OFL-licensed) file if it's ever accidentally deleted from
+ * disk, without hand-maintaining a second, separately-drifting font list —
+ * the file names below are read directly from shared/fontRegistry.js, the
+ * single source of truth.
+ *
+ * Known source URL per bundled file, keyed by exactly the `file` value used
+ * in the registry. Files with no entry here aren't Google-Fonts-sourced
+ * (e.g. PP Editorial New, a BEFonts-licensed family) and must be manually
+ * re-placed into backend/fonts/ — this script only warns about those, it
+ * cannot fetch them.
+ */
+const KNOWN_SOURCE_URLS = {
+  'Poppins-Regular.ttf': 'https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Regular.ttf',
+  'Poppins-Medium.ttf': 'https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Medium.ttf',
+  'Poppins-SemiBold.ttf': 'https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-SemiBold.ttf',
+  'Poppins-Bold.ttf': 'https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf',
+  'Poppins-Italic.ttf': 'https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Italic.ttf',
+  'Montserrat.ttf': 'https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf',
+  'BebasNeue-Regular.ttf': 'https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf',
+  'Inter.ttf': 'https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf',
+  'Outfit.ttf': 'https://github.com/google/fonts/raw/main/ofl/outfit/Outfit%5Bwght%5D.ttf',
+  'PlusJakartaSans.ttf': 'https://github.com/google/fonts/raw/main/ofl/plusjakartasans/PlusJakartaSans%5Bwght%5D.ttf',
+  'SpaceGrotesk.ttf': 'https://github.com/google/fonts/raw/main/ofl/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf',
+  'Anton-Regular.ttf': 'https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf',
+  'LeagueSpartan.ttf': 'https://github.com/google/fonts/raw/main/ofl/leaguespartan/LeagueSpartan%5Bwght%5D.ttf',
+  'ArchivoBlack-Regular.ttf': 'https://github.com/google/fonts/raw/main/ofl/archivoblack/ArchivoBlack-Regular.ttf',
+  'LilitaOne-Regular.ttf': 'https://github.com/google/fonts/raw/main/ofl/lilitaone/LilitaOne-Regular.ttf',
+  'Lexend.ttf': 'https://github.com/google/fonts/raw/main/ofl/lexend/Lexend%5Bwght%5D.ttf',
+  'Rubik.ttf': 'https://github.com/google/fonts/raw/main/ofl/rubik/Rubik%5Bwght%5D.ttf',
+  'Caveat.ttf': 'https://github.com/google/fonts/raw/main/ofl/caveat/Caveat%5Bwght%5D.ttf',
+  'Kalam-Regular.ttf': 'https://github.com/google/fonts/raw/main/ofl/kalam/Kalam-Regular.ttf',
+  'Pacifico-Regular.ttf': 'https://github.com/google/fonts/raw/main/ofl/pacifico/Pacifico-Regular.ttf',
+  'GreatVibes-Regular.ttf': 'https://github.com/google/fonts/raw/main/ofl/greatvibes/GreatVibes-Regular.ttf'
+};
 
 const FONTS_DIR = path.join(__dirname, '../fonts');
 
-// Helper function to download file with redirect support
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
@@ -42,23 +55,17 @@ function downloadFile(url, dest) {
     function get(requestUrl) {
       https.get(requestUrl, (response) => {
         if (response.statusCode === 301 || response.statusCode === 302) {
-          // Follow redirect
           get(response.headers.location);
           return;
         }
-
         if (response.statusCode !== 200) {
           file.close();
           fs.unlink(dest, () => {});
           reject(new Error(`Failed to download ${requestUrl}: HTTP Status ${response.statusCode}`));
           return;
         }
-
         response.pipe(file);
-
-        file.on('finish', () => {
-          file.close(resolve);
-        });
+        file.on('finish', () => file.close(resolve));
       }).on('error', (err) => {
         file.close();
         fs.unlink(dest, () => {});
@@ -70,31 +77,45 @@ function downloadFile(url, dest) {
   });
 }
 
+function listRegisteredFiles() {
+  const files = new Set();
+  Object.values(FONT_REGISTRY).forEach((entry) => {
+    Object.values(entry.faces).forEach((face) => files.add(face.file));
+  });
+  return Array.from(files);
+}
+
 export async function downloadFonts() {
   if (!fs.existsSync(FONTS_DIR)) {
     fs.mkdirSync(FONTS_DIR, { recursive: true });
   }
 
-  console.log(`[FontDownloader] Target fonts directory: ${FONTS_DIR}`);
-  console.log(`[FontDownloader] Fetching fonts library files (${FONT_LIST.length} total)...`);
+  const registeredFiles = listRegisteredFiles();
+  const missing = registeredFiles.filter((file) => !fs.existsSync(path.join(FONTS_DIR, file)));
 
-  const downloadPromises = FONT_LIST.map(async (font) => {
-    const fontPath = path.join(FONTS_DIR, font.name);
-    if (fs.existsSync(fontPath)) {
-      // Font already exists
+  if (missing.length === 0) {
+    console.log('[FontDownloader] All registered font files already present — nothing to do.');
+    return;
+  }
+
+  console.log(`[FontDownloader] Target fonts directory: ${FONTS_DIR}`);
+  console.log(`[FontDownloader] ${missing.length} registered font file(s) missing.`);
+
+  await Promise.all(missing.map(async (file) => {
+    const url = KNOWN_SOURCE_URLS[file];
+    if (!url) {
+      console.warn(`[FontDownloader] No known source URL for "${file}" (likely not Google-Fonts-sourced) — place it manually into ${FONTS_DIR}.`);
       return;
     }
-
     try {
-      console.log(`[FontDownloader] Downloading: ${font.name}`);
-      await downloadFile(font.url, fontPath);
-      console.log(`[FontDownloader] Download completed: ${font.name}`);
+      console.log(`[FontDownloader] Downloading: ${file}`);
+      await downloadFile(url, path.join(FONTS_DIR, file));
+      console.log(`[FontDownloader] Download completed: ${file}`);
     } catch (error) {
-      console.error(`[FontDownloader] Error downloading ${font.name}: ${error.message}`);
+      console.error(`[FontDownloader] Error downloading ${file}: ${error.message}`);
     }
-  });
+  }));
 
-  await Promise.all(downloadPromises);
   console.log('[FontDownloader] Font library check completed.');
 }
 

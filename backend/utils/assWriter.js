@@ -151,6 +151,7 @@ function buildKeywordDrivenWordBlock(word, wordText, metadata, baselineOutlineSi
   }
   const fontWeightNum = parseInt(metadata.fontWeight, 10) || 0;
   openTag += fontWeightNum >= 600 ? '\\b1' : '\\b0';
+  openTag += metadata.italic ? '\\i1' : '\\i0';
 
   if (metadata.fontScale && metadata.fontScale !== 1) {
     const scalePct = Math.round(metadata.fontScale * 100);

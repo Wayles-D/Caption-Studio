@@ -3,6 +3,7 @@
  * Single source of truth for creator profiles, animation modes, font scaling, positions, colors, and styling rules.
  * Shared across both Frontend workspace preview and Backend ASS subtitle generator.
  */
+import { resolveFontFace } from './fontRegistry.js';
 
 export const ANIMATION_MODES = {
   karaoke: {
@@ -219,6 +220,135 @@ export const CREATOR_PROFILES = {
         outlineByDefault: false
       }
     }
+  },
+  // WAYLES Poppins: a single-family variant of the keyword-driven WAYLES
+  // model — normal words use Poppins Regular, medium keywords swap to the
+  // bundled Poppins Italic face, high keywords swap to the bundled Poppins
+  // Bold face. All three faces share one family ("Poppins"), so the ASS
+  // Bold/Italic flags select the right one within it — no font-swap tag needed
+  // beyond what resolveKeywordStyleConfig/resolveWordStyleMetadata already do.
+  'wayles-poppins': {
+    id: 'wayles-poppins',
+    name: 'WAYLES Poppins',
+    fontFamily: 'Poppins',
+    fontWeight: '400',
+    fontSize: 14,
+    defaultAnimationMode: 'karaoke',
+    colors: {
+      primaryHex: '#FFFFFF',
+      secondaryHex: '#FFFFFF',
+      outlineHex: '#000000',
+      backHex: 'transparent',
+      shadowHex: '#000000',
+      assPrimary: '&H00FFFFFF',
+      assSecondary: '&H00FFFFFF',
+      assOutline: '&H00000000',
+      assBack: '&H00000000'
+    },
+    outlineSize: 0,
+    shadowSize: 0,
+    borderStyle: 1,
+    boxPaddingPx: 0,
+    wordSpacing: '0.2em',
+    lineSpacing: '1.25',
+    phraseSpacing: '0 4px',
+    useNativeStroke: false,
+    cssBackground: 'transparent',
+    cssBorderRadius: '0',
+    cssHighlightColor: '#FFFFFF',
+    cssInactiveColor: '#FFFFFF',
+    keywordDriven: true,
+    disableActiveHighlightByDefault: true,
+    autoFontFamilyOnSelect: 'Poppins',
+    keywordStyle: {
+      high: {
+        fontFamily: 'Poppins',
+        face: 'bold',
+        fontWeight: '700',
+        fontScale: 1,
+        colorMode: 'always',
+        defaultColorHex: '#FFFFFF',
+        animation: 'none',
+        shadowByDefault: false,
+        outlineByDefault: false
+      },
+      medium: {
+        fontFamily: 'Poppins',
+        face: 'italic',
+        fontWeight: '400',
+        fontScale: 1,
+        colorMode: 'always',
+        defaultColorHex: '#FFFFFF',
+        animation: 'none',
+        shadowByDefault: false,
+        outlineByDefault: false
+      }
+    }
+  },
+  // WAYLES PEN: same keyword-driven model as WAYLES Poppins, using the
+  // bundled PP Editorial New family instead. Its medium tier swaps to the
+  // bundled PP Editorial New Italic face (same family, Italic flag selects
+  // it). Its high tier requests the 'bold' face; PP Editorial New has no
+  // true Bold weight bundled, so the registry resolves that face to the
+  // Ultrabold file/family instead (see shared/fontRegistry.js) — the
+  // closest available heavier weight, not a silent fallback to Poppins.
+  'wayles-pen': {
+    id: 'wayles-pen',
+    name: 'WAYLES PEN',
+    fontFamily: 'PP Editorial New',
+    fontWeight: '400',
+    fontSize: 14,
+    defaultAnimationMode: 'karaoke',
+    colors: {
+      primaryHex: '#FFFFFF',
+      secondaryHex: '#FFFFFF',
+      outlineHex: '#000000',
+      backHex: 'transparent',
+      shadowHex: '#000000',
+      assPrimary: '&H00FFFFFF',
+      assSecondary: '&H00FFFFFF',
+      assOutline: '&H00000000',
+      assBack: '&H00000000'
+    },
+    outlineSize: 0,
+    shadowSize: 0,
+    borderStyle: 1,
+    boxPaddingPx: 0,
+    wordSpacing: '0.2em',
+    lineSpacing: '1.25',
+    phraseSpacing: '0 4px',
+    useNativeStroke: false,
+    cssBackground: 'transparent',
+    cssBorderRadius: '0',
+    cssHighlightColor: '#FFFFFF',
+    cssInactiveColor: '#FFFFFF',
+    keywordDriven: true,
+    disableActiveHighlightByDefault: true,
+    autoFontFamilyOnSelect: 'PP Editorial New',
+    keywordStyle: {
+      high: {
+        fontFamily: 'PP Editorial New',
+        face: 'bold',
+        fontWeight: '700',
+        fontScale: 1,
+        colorMode: 'always',
+        defaultColorHex: '#FFFFFF',
+        animation: 'none',
+        shadowByDefault: false,
+        outlineByDefault: false
+      },
+      medium: {
+        fontFamily: 'PP Editorial New',
+        face: 'italic',
+        fontWeight: '400',
+        fontScale: 1,
+        colorMode: 'always',
+        defaultColorHex: '#FFFFFF',
+        animation: 'none',
+        shadowByDefault: false,
+        outlineByDefault: false
+      }
+    }
   }
 };
 
@@ -426,6 +556,7 @@ function resolveShadowOutlineParams(params, profile, isBoxed) {
 
 const DEFAULT_KEYWORD_TIER = {
   fontFamily: null,
+  face: 'regular', // which registered face of fontFamily to use — see shared/fontRegistry.js
   fontWeight: null,
   fontScale: 1,
   colorMode: 'onlyWhenActive', // legacy presets only show the keyword color while the word is the active one
@@ -450,8 +581,16 @@ export function resolveKeywordStyleConfig(params, profile) {
   const presetHigh = { ...DEFAULT_KEYWORD_TIER, ...(profile.keywordStyle?.high || {}) };
   const presetMedium = { ...DEFAULT_KEYWORD_TIER, ...(profile.keywordStyle?.medium || {}) };
 
+  // Font resolved exclusively through the Font Registry: the preset's own
+  // authored `face` (e.g. 'bold'/'italic') always applies — it's the tier's
+  // stylistic role — while WHICH font family fills that role can still be
+  // swapped via the Keyword Style editor's font pickers.
+  const highFontRequest = params.keywordPrimaryFont || presetHigh.fontFamily;
+  const resolvedHighFont = highFontRequest ? resolveFontFace(highFontRequest, presetHigh.face) : null;
+
   const high = {
-    fontFamily: params.keywordPrimaryFont || presetHigh.fontFamily,
+    fontFamily: resolvedHighFont ? resolvedHighFont.familyName : null,
+    fontItalic: resolvedHighFont ? resolvedHighFont.italic : false,
     fontWeight: params.keywordPrimaryWeight || presetHigh.fontWeight,
     fontScale: params.keywordPrimaryScale != null ? parseFloat(params.keywordPrimaryScale) : presetHigh.fontScale,
     colorHex: params.keywordColorHigh || presetHigh.defaultColorHex || '#EF4444',
@@ -461,8 +600,12 @@ export function resolveKeywordStyleConfig(params, profile) {
     hasOutline: params.keywordOutlineEnabled != null ? (params.keywordOutlineEnabled !== false && params.keywordOutlineEnabled !== 'false') : presetHigh.outlineByDefault
   };
 
+  const mediumFontRequest = params.keywordMediumFont || presetMedium.fontFamily;
+  const resolvedMediumFont = mediumFontRequest ? resolveFontFace(mediumFontRequest, presetMedium.face) : null;
+
   const medium = {
-    fontFamily: params.keywordMediumFont || presetMedium.fontFamily,
+    fontFamily: resolvedMediumFont ? resolvedMediumFont.familyName : null,
+    fontItalic: resolvedMediumFont ? resolvedMediumFont.italic : false,
     fontWeight: params.keywordMediumWeight || presetMedium.fontWeight,
     fontScale: params.keywordMediumScale != null ? parseFloat(params.keywordMediumScale) : presetMedium.fontScale,
     colorHex: params.keywordColorMedium || presetMedium.defaultColorHex || '#FB923C',
@@ -550,6 +693,7 @@ export function resolveWordStyleMetadata(word, context) {
       importance: null,
       fontFamily: baseFontFamily || null,
       fontWeight: baseFontWeight || null,
+      italic: false,
       fontScale: 1,
       colorHex: baseColorHex,
       shadow: null,
@@ -565,6 +709,7 @@ export function resolveWordStyleMetadata(word, context) {
     importance,
     fontFamily: tier.fontFamily || baseFontFamily || null,
     fontWeight: tier.fontWeight || baseFontWeight || null,
+    italic: !!tier.fontItalic,
     fontScale: tier.fontScale || 1,
     colorHex: showTierColor ? tier.colorHex : baseColorHex,
     shadow: tier.hasShadow ? buildKeywordShadowMetadata() : null,
@@ -581,10 +726,12 @@ export function resolveWordStyleMetadata(word, context) {
  * @returns {object} Resolved ASS parameters.
  */
 export function getASSStyleFromConfig(params = {}) {
-  let fontName = 'Montserrat SemiBold';
-  if (params.fontFamily) {
-    fontName = params.fontFamily.replace(/['"\r\n]/g, '').split(',')[0].trim();
-  }
+  // Resolved exclusively through the Font Registry — never a hardcoded name,
+  // never a font that isn't actually bundled in backend/fonts/. An
+  // unrecognized/missing requested font transparently falls back to the
+  // registry's default (Poppins) rather than failing or guessing.
+  const baseFontFace = resolveFontFace(params.fontFamily, 'regular');
+  const fontName = baseFontFace.familyName;
 
   const feSize = parseInt(params.fontSize || '14', 10);
   const fontSize = Math.round(feSize * 5.14);
@@ -760,7 +907,11 @@ function resolveBoxState(params, profile) {
  * @returns {object} Object with overlay, text, highlight, and spacing colors.
  */
 export function getCSSPreviewFromConfig(params = {}) {
-  const fontName = params.fontFamily ? params.fontFamily.replace(/['"]/g, '').split(',')[0].trim() : 'Montserrat';
+  // Resolved exclusively through the Font Registry, mirroring
+  // getASSStyleFromConfig exactly — same font, same fallback behavior, so
+  // preview and export can never disagree on which font is showing.
+  const baseFontFace = resolveFontFace(params.fontFamily, 'regular');
+  const fontName = baseFontFace.familyName;
   const feSize = parseInt(params.fontSize || '14', 10);
   
   const isManualPosition = params.position === 'manual';
@@ -896,7 +1047,11 @@ export function getCSSPreviewFromConfig(params = {}) {
     activeHighlightEnabled,
     overlay,
     text: {
-      fontFamily: `'${fontName}', sans-serif`,
+      // No fallback list appended: ASS only supports a single font family
+      // name, and the preview must match the export exactly for WYSIWYG, so
+      // CSS deliberately doesn't lean on a browser-level fallback either —
+      // resolveFontFace() above already guarantees a real, bundled font.
+      fontFamily: `'${fontName}'`,
       fontSize: `${feSize}px`,
       fontWeight: profile.fontWeight,
       color: inactiveColor,
