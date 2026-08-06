@@ -296,8 +296,8 @@ export const CREATOR_PROFILES = {
     id: 'wayles-pen',
     name: 'WAYLES PEN',
     fontFamily: 'PP Editorial New',
-    fontWeight: '400',
-    fontSize: 14,
+    fontWeight: '700',
+    fontSize: 20,
     defaultAnimationMode: 'karaoke',
     colors: {
       primaryHex: '#FFFFFF',
