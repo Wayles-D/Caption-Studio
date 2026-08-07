@@ -60,8 +60,8 @@ export const FONT_REGISTRY = {
     displayName: 'PP Editorial New',
     category: FONT_CATEGORY.SERIF,
     faces: {
-      regular: { file: 'PPEditorialNew-Regular-BF644b214ff145f.otf', familyName: 'PP Editorial New' },
-      italic: { file: 'PPEditorialNew-Italic-BF644b214fb0c0a.otf', familyName: 'PP Editorial New', italic: true },
+      regular: { file: 'PPEditorialNew-Ultrabold-BF644b21500840c.otf', familyName: 'PP Editorial New' },
+      italic: { file: 'PPEditorialNew-UltraboldItalic-BF644b214faef01.otf', familyName: 'PP Editorial New', italic: true },
       // No true Bold face is bundled for this family (only Ultrabold/Ultralight
       // weights exist) — Ultrabold is the closest heavier weight and, per its
       // own metadata, is a DISTINCT family ("PP Editorial New Ultrabold"), not
