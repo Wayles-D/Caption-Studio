@@ -445,10 +445,14 @@ export function hexToASSColor(hex, defaultHex = '#FFFFFF') {
   return `&H${a}${b.toUpperCase()}${g.toUpperCase()}${r.toUpperCase()}`;
 }
 
-// Matches the existing word-spacing/box-padding ASS<->CSS px conversion
-// factor, reused here so outline/shadow size and offset sliders resolve to
-// the same effective size in both the CSS preview and the ASS export.
-const ASS_TO_CSS_SCALE = 1.5;
+// getASSStyleFromConfig scales a CSS font-size (px) up to its ASS canvas-unit
+// equivalent by this factor (see fontSize below). Outline width and shadow
+// size/offset are drawn relative to the glyph, so they convert through this
+// same ratio — using a canvas-position-based ratio there instead previously
+// left the CSS preview's outline/shadow several times thicker relative to the
+// font than the exported video's, occasionally thick enough for the outline
+// to fully eclipse the text fill.
+const FONT_SIZE_ASS_SCALE = 5.14;
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -554,6 +558,53 @@ function resolveShadowOutlineParams(params, profile, isBoxed) {
   };
 }
 
+/**
+ * Resolves which shadow system the caption currently renders with. Only one
+ * is ever active at a time — selecting one is mutually exclusive with the
+ * other (see sidebarInspector.js's mode toggle). Absent/unrecognized values
+ * fall back to 'individual', matching every pre-existing project/preset that
+ * predates this control and only ever authored the individual shadow sliders.
+ *
+ * @param {object} params - Client style params.
+ * @returns {'none'|'individual'|'unified'}
+ */
+export function resolveShadowMode(params) {
+  return params.shadowMode === 'unified' || params.shadowMode === 'none'
+    ? params.shadowMode
+    : 'individual';
+}
+
+// Subtle centered shadow with a small blur, per the Unified Shadow spec.
+const UNIFIED_SHADOW_DEFAULTS = {
+  colorHex: '#000000',
+  opacity: 45,
+  blurAss: 6,
+  offsetXAss: 0,
+  offsetYAss: 4
+};
+
+/**
+ * Resolves the Unified Caption Shadow's own controls (color/opacity/blur/
+ * offset) — independent of the individual-shadow sliders above, since the two
+ * systems are mutually exclusive and each keeps its own settings so switching
+ * modes back and forth doesn't clobber either one's configuration.
+ *
+ * @param {object} params - Client style params.
+ */
+export function resolveUnifiedShadowParams(params) {
+  const opacity = params.unifiedShadowOpacity != null
+    ? Math.max(0, Math.min(100, parseFloat(params.unifiedShadowOpacity)))
+    : UNIFIED_SHADOW_DEFAULTS.opacity;
+
+  return {
+    colorHex: params.unifiedShadowColor || UNIFIED_SHADOW_DEFAULTS.colorHex,
+    opacity,
+    blurAss: params.unifiedShadowBlur != null ? parseFloat(params.unifiedShadowBlur) : UNIFIED_SHADOW_DEFAULTS.blurAss,
+    offsetXAss: params.unifiedShadowOffsetX != null ? parseFloat(params.unifiedShadowOffsetX) : UNIFIED_SHADOW_DEFAULTS.offsetXAss,
+    offsetYAss: params.unifiedShadowOffsetY != null ? parseFloat(params.unifiedShadowOffsetY) : UNIFIED_SHADOW_DEFAULTS.offsetYAss
+  };
+}
+
 const DEFAULT_KEYWORD_TIER = {
   fontFamily: null,
   face: 'regular', // which registered face of fontFamily to use — see shared/fontRegistry.js
@@ -637,7 +688,8 @@ export function resolveActiveHighlightEnabled(params, profile) {
 // toggles — self-contained so the toggle always has a visible effect
 // regardless of the caption's own (possibly zero) global outline/shadow
 // sliders. Defined once here in both CSS px and ASS canvas units (via
-// ASS_TO_CSS_SCALE) so the two renderers can never drift apart.
+// FONT_SIZE_ASS_SCALE, since these are glyph-relative like the base
+// outline/shadow) so the two renderers can never drift apart.
 const KEYWORD_SHADOW_ASS_DEPTH = 3;
 const KEYWORD_SHADOW_COLOR_HEX = '#000000';
 const KEYWORD_SHADOW_CSS_ALPHA = 0.45;
@@ -645,8 +697,8 @@ const KEYWORD_OUTLINE_ASS_WIDTH = 3;
 const KEYWORD_OUTLINE_COLOR_HEX = '#000000';
 
 function buildKeywordShadowMetadata() {
-  const offsetCss = round2(KEYWORD_SHADOW_ASS_DEPTH / ASS_TO_CSS_SCALE);
-  const blurCss = round2((KEYWORD_SHADOW_ASS_DEPTH * 1.3) / ASS_TO_CSS_SCALE);
+  const offsetCss = round2(KEYWORD_SHADOW_ASS_DEPTH / FONT_SIZE_ASS_SCALE);
+  const blurCss = round2((KEYWORD_SHADOW_ASS_DEPTH * 1.3) / FONT_SIZE_ASS_SCALE);
   return {
     assDepth: KEYWORD_SHADOW_ASS_DEPTH,
     colorHex: KEYWORD_SHADOW_COLOR_HEX,
@@ -658,7 +710,7 @@ function buildKeywordOutlineMetadata() {
   return {
     assWidth: KEYWORD_OUTLINE_ASS_WIDTH,
     colorHex: KEYWORD_OUTLINE_COLOR_HEX,
-    css: `${round2(KEYWORD_OUTLINE_ASS_WIDTH / ASS_TO_CSS_SCALE)}px ${KEYWORD_OUTLINE_COLOR_HEX}`
+    css: `${round2(KEYWORD_OUTLINE_ASS_WIDTH / FONT_SIZE_ASS_SCALE)}px ${KEYWORD_OUTLINE_COLOR_HEX}`
   };
 }
 
@@ -734,7 +786,7 @@ export function getASSStyleFromConfig(params = {}) {
   const fontName = baseFontFace.familyName;
 
   const feSize = parseInt(params.fontSize || '14', 10);
-  const fontSize = Math.round(feSize * 5.14);
+  const fontSize = Math.round(feSize * FONT_SIZE_ASS_SCALE);
 
   const posKey = params.position === 'manual' ? 'manual' : (params.position && CAPTION_POSITIONS[params.position] ? params.position : 'bottom');
   const marginV = posKey === 'manual' ? CAPTION_POSITIONS.bottom.marginV : CAPTION_POSITIONS[posKey].marginV;
@@ -802,6 +854,22 @@ export function getASSStyleFromConfig(params = {}) {
   // effective value in both the ASS export and the CSS preview.
   const shadowParams = resolveShadowOutlineParams(params, profile, isBoxed);
 
+  // Only one shadow system renders at a time. The Individual shadow's own
+  // tags/Style-Shadow-depth are only emitted in 'individual' mode below; the
+  // Unified shadow is a wholly separate offscreen-composited layer the caller
+  // (subtitleService/ffmpeg) builds from unifiedShadow, so it never touches
+  // this per-glyph ASS Shadow field at all — the two can never stack.
+  const shadowMode = resolveShadowMode(params);
+  const unifiedShadowParams = resolveUnifiedShadowParams(params);
+  const unifiedShadow = {
+    colorHex: unifiedShadowParams.colorHex,
+    assColor: withAssAlpha(hexToASSColor(unifiedShadowParams.colorHex), opacityToAssAlpha(unifiedShadowParams.opacity)),
+    opacity: unifiedShadowParams.opacity,
+    blurAss: unifiedShadowParams.blurAss,
+    offsetXAss: unifiedShadowParams.offsetXAss,
+    offsetYAss: unifiedShadowParams.offsetYAss
+  };
+
   // Outline field doubles as box padding under BorderStyle 3; otherwise it's real text-outline width.
   const outlineSize = isBoxed
     ? Math.round(boxPaddingPx * 1.5) // scaled to ASS canvas pixels, matching word spacing's scale factor
@@ -852,13 +920,14 @@ export function getASSStyleFromConfig(params = {}) {
     outlineColor,
     backColor,
     shadowColor,
-    // Only emitted as inline \xshad\yshad override tags when explicitly set;
-    // otherwise ASS's native symmetric Shadow-depth offset already applies.
-    shadowOffsetX: shadowParams.hasCustomShadowOffset ? Math.round(shadowParams.shadowOffsetXAss) : null,
-    shadowOffsetY: shadowParams.hasCustomShadowOffset ? Math.round(shadowParams.shadowOffsetYAss) : null,
+    // Only emitted as inline \xshad\yshad override tags when explicitly set,
+    // and only in 'individual' mode — 'none'/'unified' suppress this system
+    // entirely so it can never stack with the Unified shadow layer.
+    shadowOffsetX: (shadowMode === 'individual' && shadowParams.hasCustomShadowOffset) ? Math.round(shadowParams.shadowOffsetXAss) : null,
+    shadowOffsetY: (shadowMode === 'individual' && shadowParams.hasCustomShadowOffset) ? Math.round(shadowParams.shadowOffsetYAss) : null,
     bold,
     outlineSize,
-    shadowSize: shadowParams.shadowSizeAss,
+    shadowSize: shadowMode === 'individual' ? shadowParams.shadowSizeAss : 0,
     alignment: 2,
     marginV,
     borderStyle,
@@ -873,6 +942,9 @@ export function getASSStyleFromConfig(params = {}) {
     keywordStyleConfig,
     activeHighlightEnabled,
     textOpacity: shadowParams.textOpacity,
+    shadowMode,
+    unifiedShadow,
+    fontSizeAss: fontSize,
     profile
   };
 }
@@ -959,10 +1031,10 @@ export function getCSSPreviewFromConfig(params = {}) {
   // Box mode repurposes the outline slider for padding (matching ASS, where
   // the same Outline field is hijacked under BorderStyle 3), so no text
   // outline width applies while boxed.
-  const outlineSizeCss = shadowParams.outlineSizeAss != null ? shadowParams.outlineSizeAss / ASS_TO_CSS_SCALE : 0;
-  const shadowBlurCss = shadowParams.shadowSizeAss / ASS_TO_CSS_SCALE;
-  const shadowOffsetXCss = shadowParams.shadowOffsetXAss / ASS_TO_CSS_SCALE;
-  const shadowOffsetYCss = shadowParams.shadowOffsetYAss / ASS_TO_CSS_SCALE;
+  const outlineSizeCss = shadowParams.outlineSizeAss != null ? shadowParams.outlineSizeAss / FONT_SIZE_ASS_SCALE : 0;
+  const shadowBlurCss = shadowParams.shadowSizeAss / FONT_SIZE_ASS_SCALE;
+  const shadowOffsetXCss = shadowParams.shadowOffsetXAss / FONT_SIZE_ASS_SCALE;
+  const shadowOffsetYCss = shadowParams.shadowOffsetYAss / FONT_SIZE_ASS_SCALE;
 
   const outlineColorForLayers = applyOpacityToColor(outlineColorBase, textOpacity);
   const shadowColorForLayer = applyOpacityToColor(shadowParams.shadowColorHex, textOpacity);
@@ -976,18 +1048,41 @@ export function getCSSPreviewFromConfig(params = {}) {
     ? `${round2(outlineSizeCss)}px ${outlineColorForLayers}`
     : 'none';
 
+  // Only one shadow system renders at a time (see resolveShadowMode) — the
+  // Individual shadow's own text-shadow layer below only appears in
+  // 'individual' mode; the Unified shadow is a wholly separate `filter:
+  // drop-shadow(...)` layer (see unifiedShadowFilter) so the two never stack.
+  const shadowMode = resolveShadowMode(params);
+
   const shadowLayers = [];
-  if (outlineSizeCss > 0) {
+  if (!profile.useNativeStroke && outlineSizeCss > 0) {
     const w = round2(outlineSizeCss);
     shadowLayers.push(`-${w}px -${w}px 0 ${outlineColorForLayers}`);
     shadowLayers.push(`${w}px -${w}px 0 ${outlineColorForLayers}`);
     shadowLayers.push(`-${w}px ${w}px 0 ${outlineColorForLayers}`);
     shadowLayers.push(`${w}px ${w}px 0 ${outlineColorForLayers}`);
   }
-  if (shadowParams.shadowSizeAss > 0) {
+  if (shadowMode === 'individual' && shadowParams.shadowSizeAss > 0) {
     shadowLayers.push(`${round2(shadowOffsetXCss)}px ${round2(shadowOffsetYCss)}px ${round2(shadowBlurCss)}px ${shadowColorForLayer}`);
   }
   const cssTextShadow = shadowLayers.length ? shadowLayers.join(', ') : 'none';
+
+  // Unified Caption Shadow: a single blurred/offset duplicate of the whole
+  // rendered caption (glyphs + outline together), composited as one
+  // continuous silhouette behind it — exactly what CSS's `filter:
+  // drop-shadow()` produces natively, unlike `text-shadow` which draws an
+  // independent copy per DOM word/span (visible gaps between words at larger
+  // blur radii). Applied as a `filter` on the same element as the outline/
+  // fill, so it wraps the true rendered shape (see preview.js).
+  let unifiedShadowFilter = 'none';
+  if (shadowMode === 'unified') {
+    const uni = resolveUnifiedShadowParams(params);
+    const dxCss = round2(uni.offsetXAss / FONT_SIZE_ASS_SCALE);
+    const dyCss = round2(uni.offsetYAss / FONT_SIZE_ASS_SCALE);
+    const blurCss = round2(uni.blurAss / FONT_SIZE_ASS_SCALE);
+    const shadowColor = applyOpacityToColor(uni.colorHex, uni.opacity * textOpacity / 100);
+    unifiedShadowFilter = `drop-shadow(${dxCss}px ${dyCss}px ${blurCss}px ${shadowColor})`;
+  }
 
   const highlightColor = applyOpacityToColor(params.activeWordColor || profile.cssHighlightColor || profile.colors.primaryHex, textOpacity);
   const inactiveColor = applyOpacityToColor(params.inactiveWordColor || profile.cssInactiveColor || profile.colors.secondaryHex, textOpacity);
@@ -1058,6 +1153,7 @@ export function getCSSPreviewFromConfig(params = {}) {
       background: cssBackground,
       textShadow: cssTextShadow,
       webkitTextStroke: cssTextStroke,
+      filter: unifiedShadowFilter,
       padding: cssPadding,
       borderRadius: profile.cssBorderRadius,
       textTransform,
@@ -1068,6 +1164,7 @@ export function getCSSPreviewFromConfig(params = {}) {
     inactiveColor,
     outlineColor: outlineColorBase,
     backgroundColor,
+    shadowMode,
     wordSpacing: `${numericWordSpacing}px`
   };
 }

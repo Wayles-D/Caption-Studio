@@ -97,12 +97,32 @@ export function extractAudio(inputPath, outputPath, options = {}) {
 }
 
 /**
- * Burns an ASS subtitle file into a video file using FFmpeg and libass.
- * 
+ * Burns an ASS subtitle file into a video file using FFmpeg and libass. When
+ * options.shadowAssPath is provided (Unified Caption Shadow mode — see
+ * subtitleService.generateUnifiedShadowSubtitle), also composites that
+ * silhouette track as a single blurred/offset layer beneath the real
+ * captions, rather than approximating it with per-glyph shadows:
+ *
+ *   1. Render the shadow-only ASS track onto a fully transparent canvas
+ *      (`geq` on a `format=yuva420p` clip derived from the input video, so it
+ *      inherits the real dimensions/framerate/duration without needing to
+ *      probe them) — `ass=...:alpha=1` is required for libass to actually
+ *      preserve/output the resulting alpha here (it's a no-op without it).
+ *   2. Gaussian-approximate blur (`boxblur`, alpha included) that whole
+ *      rasterized layer as ONE image, so adjacent glyphs/words merge into a
+ *      single continuous silhouette instead of a shadow behind every
+ *      individual character.
+ *   3. Overlay that blurred layer onto the source video, offset by the
+ *      configured distance (expressed as fractions of the ASS design canvas
+ *      via `main_w`/`main_h` filter expressions, so it scales correctly at
+ *      any output resolution without needing that resolution numerically).
+ *   4. Burn the real foreground caption track on top, unchanged.
+ *
  * @param {string} inputVideoPath - Absolute path to the input video file.
  * @param {string} assPath - Absolute path to the ASS subtitles file.
  * @param {string} outputPath - Absolute path where the rendered video will be saved.
- * @param {object} options - Options containing callbacks like onSpawn.
+ * @param {object} options - Options containing callbacks like onSpawn, and
+ *   optionally { shadowAssPath, unifiedShadow: { blurAss, offsetXAss, offsetYAss } }.
  * @returns {Promise<string>} Resolves with the outputPath if successful.
  */
 export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {}) {
@@ -113,7 +133,7 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {})
 
     // Use relative paths to avoid Windows colons (drive letters) and spaces in parent paths
     const relativeAssPath = path.relative(process.cwd(), assPath).replace(/\\/g, '/');
-    
+
     // Resolve local fonts directory for libass font discovery
     const fontsDir = path.join(path.dirname(assPath), '..', 'fonts');
     const relativeFontsDir = path.relative(process.cwd(), fontsDir).replace(/\\/g, '/');
@@ -121,21 +141,59 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {})
     // Set up filter argument with fontsdir to point libass at our bundled font library
     const assFilter = `ass='${relativeAssPath}':fontsdir='${relativeFontsDir}'`;
 
-    // OPTIMIZED FFmpeg parameters:
-    // -c:v libx264: Explicitly specify libx264 video encoder
-    // -preset ultrafast: Use fastest encoding speed preset to minimize RAM/CPU footprints on Render
-    // -crf 23: Balance visual quality compression ratio
-    // -c:a copy: Directly copy audio streams without re-encoding to save RAM/CPU
-    const args = [
-      '-y',
-      '-i', inputVideoPath,
-      '-vf', assFilter,
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
-      '-c:a', 'copy',
-      outputPath
-    ];
+    let args;
+
+    if (options.shadowAssPath) {
+      const relativeShadowAssPath = path.relative(process.cwd(), options.shadowAssPath).replace(/\\/g, '/');
+      const shadowAssFilter = `ass='${relativeShadowAssPath}':fontsdir='${relativeFontsDir}':alpha=1`;
+
+      const unified = options.unifiedShadow || {};
+      const blurAss = unified.blurAss ?? 6;
+      const offsetXAss = unified.offsetXAss ?? 0;
+      const offsetYAss = unified.offsetYAss ?? 4;
+
+      // PlayResX/PlayResY (see assWriter.js) is the design canvas both ASS
+      // tracks position/size themselves against; boxblur's radius and
+      // overlay's offset are expressed as expressions of the ACTUAL decoded
+      // frame size (`h`/`main_w`/`main_h`) scaled by that same ratio, so the
+      // result is correct at whatever resolution the source video actually is.
+      const filterComplex = [
+        `[0:v]format=yuva420p,geq=r=0:g=0:b=0:a=0[shadow_base]`,
+        `[shadow_base]${shadowAssFilter}[shadow_text]`,
+        `[shadow_text]boxblur=luma_radius='h/1920*${blurAss}':luma_power=2:chroma_radius='h/1920*${blurAss}':chroma_power=2:alpha_radius='h/1920*${blurAss}':alpha_power=2[shadow_blurred]`,
+        `[0:v][shadow_blurred]overlay=x='main_w/1080*${offsetXAss}':y='main_h/1920*${offsetYAss}':format=auto[with_shadow]`,
+        `[with_shadow]${assFilter}[outv]`
+      ].join(';');
+
+      args = [
+        '-y',
+        '-i', inputVideoPath,
+        '-filter_complex', filterComplex,
+        '-map', '[outv]',
+        '-map', '0:a?',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
+        '-c:a', 'copy',
+        outputPath
+      ];
+    } else {
+      // OPTIMIZED FFmpeg parameters:
+      // -c:v libx264: Explicitly specify libx264 video encoder
+      // -preset ultrafast: Use fastest encoding speed preset to minimize RAM/CPU footprints on Render
+      // -crf 23: Balance visual quality compression ratio
+      // -c:a copy: Directly copy audio streams without re-encoding to save RAM/CPU
+      args = [
+        '-y',
+        '-i', inputVideoPath,
+        '-vf', assFilter,
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
+        '-c:a', 'copy',
+        outputPath
+      ];
+    }
 
     console.log(`Executing FFmpeg Subtitle Burn command: ${ffmpegPath} ${args.join(' ')}`);
 

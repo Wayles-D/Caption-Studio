@@ -1,7 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import { groupWordsToPhrases, sanitizePhraseTimings } from '../utils/phraseGrouper.js';
-import { generateASSHeader, generateASSDialogueLine, resolveASSStyle } from '../utils/assWriter.js';
+import {
+  generateASSHeader, generateASSDialogueLine, resolveASSStyle,
+  generateUnifiedShadowASSHeader, generateUnifiedShadowDialogueLine
+} from '../utils/assWriter.js';
 
 /**
  * Service to orchestrate advanced subtitle (.ass) creation from raw Whisper transcript inputs.
@@ -97,4 +100,63 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
   console.log(`[SubtitleService] Successfully wrote subtitle structure to ${subtitlePath}`);
 
   return subtitlePath;
+}
+
+/**
+ * Generates the Unified Caption Shadow's own silhouette .ass track — a
+ * separate flat-colored, no-outline/no-native-shadow rendering of the same
+ * phrases, positioned identically to the real captions. burnSubtitles then
+ * composites this track onto an offscreen transparent layer, blurs and
+ * offsets THAT layer as a single image, and overlays it beneath the real
+ * caption burn — which is what makes it read as one continuous shadow shape
+ * instead of a shadow behind every individual character.
+ *
+ * Only ever called when resolveShadowMode(...) === 'unified' (see
+ * uploadController.js); returns null otherwise so callers can skip the
+ * extra compositing pass entirely for the 'individual'/'none' modes.
+ *
+ * @param {string} transcriptPath - Absolute path to the saved Whisper JSON transcript.
+ * @param {string} shadowSubtitlePath - Absolute path where the shadow .ass file will be written.
+ * @param {object} options - Same shape as generateSubtitleFromTranscript's options ({ words, styles }).
+ * @returns {Promise<string|null>} Resolves with shadowSubtitlePath, or null if shadow mode isn't 'unified'.
+ */
+export async function generateUnifiedShadowSubtitle(transcriptPath, shadowSubtitlePath, options = {}) {
+  const resolvedStyle = resolveASSStyle(options.styles || {});
+  if (resolvedStyle.shadowMode !== 'unified') {
+    return null;
+  }
+
+  let whisperData;
+  if (options.words && Array.isArray(options.words)) {
+    whisperData = { words: options.words };
+  } else {
+    if (!fs.existsSync(transcriptPath)) {
+      throw new Error(`Transcript file not found at: ${transcriptPath}`);
+    }
+    whisperData = JSON.parse(fs.readFileSync(transcriptPath, 'utf8'));
+  }
+
+  const rawPhrases = groupWordsToPhrases(whisperData);
+  if (rawPhrases.length === 0) {
+    return null;
+  }
+  const phrases = sanitizePhraseTimings(rawPhrases);
+
+  const shadowHeader = generateUnifiedShadowASSHeader(resolvedStyle);
+  const dialogueOptions = {
+    textCase: options.styles?.textCase || 'uppercase',
+    posOverrideTag: resolvedStyle.posOverrideTag || null
+  };
+  const dialogueLines = phrases.map((phrase) => generateUnifiedShadowDialogueLine(phrase, dialogueOptions));
+
+  const assOutputContent = [shadowHeader, dialogueLines.join('\n')].join('\n');
+
+  const parentFolder = path.dirname(shadowSubtitlePath);
+  if (!fs.existsSync(parentFolder)) {
+    fs.mkdirSync(parentFolder, { recursive: true });
+  }
+  fs.writeFileSync(shadowSubtitlePath, assOutputContent, 'utf8');
+  console.log(`[SubtitleService] Successfully wrote Unified Shadow subtitle track to ${shadowSubtitlePath}`);
+
+  return shadowSubtitlePath;
 }

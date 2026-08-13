@@ -2,7 +2,7 @@
  * Left Sidebar Inspector UI Component for Caption Studio
  */
 import { appState, updateState, subscribe, getStyleParams } from '../state.js';
-import { getCSSPreviewFromConfig, CREATOR_PROFILES } from '../../../shared/captionConfig.js';
+import { getCSSPreviewFromConfig, CREATOR_PROFILES, resolveUnifiedShadowParams } from '../../../shared/captionConfig.js';
 import { initColorPicker, syncColorSwatches } from './colorPicker.js';
 
 const COLOR_FALLBACK_MAP = {
@@ -11,6 +11,7 @@ const COLOR_FALLBACK_MAP = {
   outlineColor: (cssConfig) => cssConfig.outlineColor || '#000000',
   backgroundColor: (cssConfig) => (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') ? cssConfig.backgroundColor : '#000000',
   shadowColor: () => getCurrentProfile().colors.shadowHex || '#000000',
+  unifiedShadowColor: () => resolveUnifiedShadowParams({}).colorHex,
   keywordColorHigh: (cssConfig) => cssConfig.keywordColorHigh || '#EF4444',
   keywordColorMedium: (cssConfig) => cssConfig.keywordColorMedium || '#FB923C'
 };
@@ -53,6 +54,14 @@ function getFallbackKeywordTier(tier) {
 
 function getFallbackActiveHighlightEnabled() {
   return !getCurrentProfile().disableActiveHighlightByDefault;
+}
+
+// Unified Shadow sliders are null by default too, meaning "use the built-in
+// subtle-centered-shadow default" — same override-or-fallback pattern as the
+// Individual shadow's own sliders above, just backed by a fixed default
+// rather than a per-preset one (Unified Shadow isn't preset-specific).
+function getFallbackUnifiedShadow() {
+  return resolveUnifiedShadowParams({});
 }
 
 export function initSidebarInspector() {
@@ -140,6 +149,55 @@ export function initSidebarInspector() {
   const valTextOpacity = document.getElementById('val-text-opacity');
   const inputBackgroundOpacity = document.getElementById('input-background-opacity');
   const valBackgroundOpacity = document.getElementById('val-background-opacity');
+
+  // 4c. Shadow Mode (None / Individual / Unified) & the Unified shadow's own controls
+  const shadowModeRadios = document.getElementsByName('shadow-mode');
+  const inputUnifiedShadowOpacity = document.getElementById('input-unified-shadow-opacity');
+  const valUnifiedShadowOpacity = document.getElementById('val-unified-shadow-opacity');
+  const inputUnifiedShadowBlur = document.getElementById('input-unified-shadow-blur');
+  const valUnifiedShadowBlur = document.getElementById('val-unified-shadow-blur');
+  const inputUnifiedShadowOffsetX = document.getElementById('input-unified-shadow-offset-x');
+  const valUnifiedShadowOffsetX = document.getElementById('val-unified-shadow-offset-x');
+  const inputUnifiedShadowOffsetY = document.getElementById('input-unified-shadow-offset-y');
+  const valUnifiedShadowOffsetY = document.getElementById('val-unified-shadow-offset-y');
+
+  shadowModeRadios.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      updateState({ shadowMode: e.target.value });
+    });
+  });
+
+  if (inputUnifiedShadowOpacity) {
+    inputUnifiedShadowOpacity.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (valUnifiedShadowOpacity) valUnifiedShadowOpacity.textContent = `${val}%`;
+      updateState({ unifiedShadowOpacity: val });
+    });
+  }
+
+  if (inputUnifiedShadowBlur) {
+    inputUnifiedShadowBlur.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (valUnifiedShadowBlur) valUnifiedShadowBlur.textContent = `${val}px`;
+      updateState({ unifiedShadowBlur: val });
+    });
+  }
+
+  if (inputUnifiedShadowOffsetX) {
+    inputUnifiedShadowOffsetX.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (valUnifiedShadowOffsetX) valUnifiedShadowOffsetX.textContent = `${val}px`;
+      updateState({ unifiedShadowOffsetX: val });
+    });
+  }
+
+  if (inputUnifiedShadowOffsetY) {
+    inputUnifiedShadowOffsetY.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (valUnifiedShadowOffsetY) valUnifiedShadowOffsetY.textContent = `${val}px`;
+      updateState({ unifiedShadowOffsetY: val });
+    });
+  }
 
   if (inputOutlineSize) {
     inputOutlineSize.addEventListener('input', (e) => {
@@ -406,6 +464,47 @@ function syncSidebarUI() {
   const backgroundOpacity = appState.backgroundOpacity ?? 100;
   if (inputBackgroundOpacity) inputBackgroundOpacity.value = backgroundOpacity;
   if (valBackgroundOpacity) valBackgroundOpacity.textContent = `${backgroundOpacity}%`;
+
+  // Shadow Mode + Unified Shadow controls
+  const shadowMode = appState.shadowMode || 'individual';
+  const shadowModeRadios = document.getElementsByName('shadow-mode');
+  shadowModeRadios.forEach(r => { r.checked = r.value === shadowMode; });
+
+  const individualShadowControls = document.getElementById('individual-shadow-controls');
+  if (individualShadowControls) individualShadowControls.hidden = shadowMode !== 'individual';
+  // `.hidden` alone doesn't work here: .color-picker-item's own `display:
+  // flex` in style.css overrides the [hidden] UA default (author styles always
+  // beat UA styles), so the display value has to be set explicitly instead.
+  const shadowColorItem = document.getElementById('shadow-color-item');
+  if (shadowColorItem) shadowColorItem.style.display = shadowMode !== 'individual' ? 'none' : '';
+  const unifiedShadowControls = document.getElementById('unified-shadow-controls');
+  if (unifiedShadowControls) unifiedShadowControls.hidden = shadowMode !== 'unified';
+
+  const fallbackUnified = getFallbackUnifiedShadow();
+
+  const inputUnifiedShadowOpacity = document.getElementById('input-unified-shadow-opacity');
+  const valUnifiedShadowOpacity = document.getElementById('val-unified-shadow-opacity');
+  const unifiedShadowOpacity = appState.unifiedShadowOpacity ?? fallbackUnified.opacity;
+  if (inputUnifiedShadowOpacity) inputUnifiedShadowOpacity.value = unifiedShadowOpacity;
+  if (valUnifiedShadowOpacity) valUnifiedShadowOpacity.textContent = `${unifiedShadowOpacity}%`;
+
+  const inputUnifiedShadowBlur = document.getElementById('input-unified-shadow-blur');
+  const valUnifiedShadowBlur = document.getElementById('val-unified-shadow-blur');
+  const unifiedShadowBlur = appState.unifiedShadowBlur ?? fallbackUnified.blurAss;
+  if (inputUnifiedShadowBlur) inputUnifiedShadowBlur.value = unifiedShadowBlur;
+  if (valUnifiedShadowBlur) valUnifiedShadowBlur.textContent = `${unifiedShadowBlur}px`;
+
+  const inputUnifiedShadowOffsetX = document.getElementById('input-unified-shadow-offset-x');
+  const valUnifiedShadowOffsetX = document.getElementById('val-unified-shadow-offset-x');
+  const unifiedShadowOffsetX = appState.unifiedShadowOffsetX ?? fallbackUnified.offsetXAss;
+  if (inputUnifiedShadowOffsetX) inputUnifiedShadowOffsetX.value = unifiedShadowOffsetX;
+  if (valUnifiedShadowOffsetX) valUnifiedShadowOffsetX.textContent = `${unifiedShadowOffsetX}px`;
+
+  const inputUnifiedShadowOffsetY = document.getElementById('input-unified-shadow-offset-y');
+  const valUnifiedShadowOffsetY = document.getElementById('val-unified-shadow-offset-y');
+  const unifiedShadowOffsetY = appState.unifiedShadowOffsetY ?? fallbackUnified.offsetYAss;
+  if (inputUnifiedShadowOffsetY) inputUnifiedShadowOffsetY.value = unifiedShadowOffsetY;
+  if (valUnifiedShadowOffsetY) valUnifiedShadowOffsetY.textContent = `${unifiedShadowOffsetY}px`;
 
   // Animation Mode
   const animModeRadios = document.getElementsByName('anim-mode');

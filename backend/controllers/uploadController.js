@@ -3,7 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { extractAudio, burnSubtitles } from '../utils/ffmpeg.js';
 import { transcribeAudio } from '../services/whisperService.js';
-import { generateSubtitleFromTranscript } from '../services/subtitleService.js';
+import { generateSubtitleFromTranscript, generateUnifiedShadowSubtitle } from '../services/subtitleService.js';
+import { resolveASSStyle } from '../utils/assWriter.js';
 import { analyzeKeywords } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
@@ -176,13 +177,21 @@ export async function uploadAndExtractAudio(req, res, next) {
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Started`);
     const subtitleStart = Date.now();
     await generateSubtitleFromTranscript(transcriptPath, subtitlePath, { styles: req.body });
+    // Only written when Style & Colors > Shadow Mode is 'unified' — a
+    // separate silhouette track burnSubtitles composites as one blurred/
+    // offset layer beneath the real captions (see ffmpeg.js).
+    const shadowSubtitlePath = path.join(subtitlesDir, `${baseName}.shadow.ass`);
+    await generateUnifiedShadowSubtitle(transcriptPath, shadowSubtitlePath, { styles: req.body });
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Completed (Duration: ${Date.now() - subtitleStart}ms)`);
 
     // 6. Burn subtitles into original uploaded video to create the final captioned video
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Started`);
     const renderStart = Date.now();
+    const resolvedStyle = resolveASSStyle(req.body || {});
     await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
-      onSpawn: (proc) => { activeProc = proc; }
+      onSpawn: (proc) => { activeProc = proc; },
+      shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
+      unifiedShadow: resolvedStyle.unifiedShadow
     });
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Completed (Duration: ${Date.now() - renderStart}ms)`);
     activeProc = null;
@@ -337,13 +346,18 @@ export async function regenerateCaptions(req, res, next) {
     console.log(`[Regenerate] [${baseName}] Stage: Subtitle Regeneration Started`);
     const subtitleStart = Date.now();
     await generateSubtitleFromTranscript(transcriptPath, subtitlePath, { words, styles });
+    const shadowSubtitlePath = path.join(subtitlesDir, `${baseName}.shadow.ass`);
+    await generateUnifiedShadowSubtitle(transcriptPath, shadowSubtitlePath, { words, styles });
     console.log(`[Regenerate] [${baseName}] Stage: Subtitle Regeneration Completed (Duration: ${Date.now() - subtitleStart}ms)`);
 
     // 3. Re-burn subtitles into original video
     console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Started`);
     const renderStart = Date.now();
+    const resolvedStyle = resolveASSStyle(styles || {});
     await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
-      onSpawn: (proc) => { activeProc = proc; }
+      onSpawn: (proc) => { activeProc = proc; },
+      shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
+      unifiedShadow: resolvedStyle.unifiedShadow
     });
     console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Completed (Duration: ${Date.now() - renderStart}ms)`);
     activeProc = null;

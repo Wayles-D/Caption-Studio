@@ -212,7 +212,7 @@
                                     <label id="label-color-background">Box</label>
                                     <button type="button" class="color-swatch-trigger" id="color-background" data-color-key="backgroundColor" aria-haspopup="true" aria-labelledby="label-color-background"></button>
                                 </div>
-                                <div class="color-picker-item">
+                                <div class="color-picker-item" id="shadow-color-item">
                                     <label id="label-color-shadow">Shadow</label>
                                     <button type="button" class="color-swatch-trigger" id="color-shadow" data-color-key="shadowColor" aria-haspopup="true" aria-labelledby="label-color-shadow"></button>
                                 </div>
@@ -229,27 +229,92 @@
                         </div>
 
                         <div class="settings-group">
-                            <div class="label-justify">
-                                <span class="group-label">Shadow Intensity</span>
-                                <span class="group-value-badge" id="val-shadow-size">0px</span>
+                            <label class="group-label">Shadow Mode</label>
+                            <div class="radio-toggle-grid">
+                                <label class="radio-tab">
+                                    <input type="radio" name="shadow-mode" value="none">
+                                    <span>None</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="shadow-mode" value="individual" checked>
+                                    <span>Individual</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="shadow-mode" value="unified">
+                                    <span>Unified</span>
+                                </label>
                             </div>
-                            <input type="range" id="input-shadow-size" min="0" max="20" value="0" class="slider-control">
+                            <p class="field-hint">Individual gives each character its own shadow. Unified renders one continuous shadow behind the whole caption.</p>
                         </div>
 
-                        <div class="settings-group">
-                            <div class="label-justify">
-                                <span class="group-label">Shadow Offset X</span>
-                                <span class="group-value-badge" id="val-shadow-offset-x">0px</span>
+                        <div id="individual-shadow-controls">
+                            <div class="settings-group">
+                                <div class="label-justify">
+                                    <span class="group-label">Shadow Intensity</span>
+                                    <span class="group-value-badge" id="val-shadow-size">0px</span>
+                                </div>
+                                <input type="range" id="input-shadow-size" min="0" max="20" value="0" class="slider-control">
                             </div>
-                            <input type="range" id="input-shadow-offset-x" min="-20" max="20" value="0" class="slider-control">
+
+                            <div class="settings-group">
+                                <div class="label-justify">
+                                    <span class="group-label">Shadow Offset X</span>
+                                    <span class="group-value-badge" id="val-shadow-offset-x">0px</span>
+                                </div>
+                                <input type="range" id="input-shadow-offset-x" min="-20" max="20" value="0" class="slider-control">
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="label-justify">
+                                    <span class="group-label">Shadow Offset Y</span>
+                                    <span class="group-value-badge" id="val-shadow-offset-y">0px</span>
+                                </div>
+                                <input type="range" id="input-shadow-offset-y" min="-20" max="20" value="0" class="slider-control">
+                            </div>
                         </div>
 
-                        <div class="settings-group">
-                            <div class="label-justify">
-                                <span class="group-label">Shadow Offset Y</span>
-                                <span class="group-value-badge" id="val-shadow-offset-y">0px</span>
+                        <div id="unified-shadow-controls" hidden>
+                            <div class="settings-group">
+                                <label class="group-label">Unified Shadow Color</label>
+                                <div class="color-picker-grid">
+                                    <div class="color-picker-item">
+                                        <label id="label-color-unified-shadow">Shadow</label>
+                                        <button type="button" class="color-swatch-trigger" id="color-unified-shadow" data-color-key="unifiedShadowColor" aria-haspopup="true" aria-labelledby="label-color-unified-shadow"></button>
+                                    </div>
+                                </div>
                             </div>
-                            <input type="range" id="input-shadow-offset-y" min="-20" max="20" value="0" class="slider-control">
+
+                            <div class="settings-group">
+                                <div class="label-justify">
+                                    <span class="group-label">Shadow Opacity</span>
+                                    <span class="group-value-badge" id="val-unified-shadow-opacity">45%</span>
+                                </div>
+                                <input type="range" id="input-unified-shadow-opacity" min="0" max="100" value="45" class="slider-control">
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="label-justify">
+                                    <span class="group-label">Shadow Blur</span>
+                                    <span class="group-value-badge" id="val-unified-shadow-blur">6px</span>
+                                </div>
+                                <input type="range" id="input-unified-shadow-blur" min="0" max="30" value="6" class="slider-control">
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="label-justify">
+                                    <span class="group-label">Shadow Offset X</span>
+                                    <span class="group-value-badge" id="val-unified-shadow-offset-x">0px</span>
+                                </div>
+                                <input type="range" id="input-unified-shadow-offset-x" min="-20" max="20" value="0" class="slider-control">
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="label-justify">
+                                    <span class="group-label">Shadow Offset Y</span>
+                                    <span class="group-value-badge" id="val-unified-shadow-offset-y">4px</span>
+                                </div>
+                                <input type="range" id="input-unified-shadow-offset-y" min="-20" max="20" value="4" class="slider-control">
+                            </div>
                         </div>
 
                         <div class="settings-group">

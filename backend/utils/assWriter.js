@@ -392,3 +392,77 @@ export function generateASSDialogueLine(phrase, options = {}) {
 export function resolveASSStyle(params = {}) {
   return getASSStyleFromConfig(params);
 }
+
+/**
+ * Builds the ASS header for the Unified Shadow's own silhouette track: a
+ * single flat-colored style with NO outline/native shadow of its own. The
+ * blur and offset that make it look like a shadow are applied afterward by
+ * ffmpeg to this track's rasterized output as a whole (see burnSubtitles'
+ * unifiedShadow filter graph) — not per-glyph by libass — which is what lets
+ * it merge into one continuous silhouette instead of a shadow behind every
+ * individual character.
+ *
+ * @param {object} resolvedStyle - Output of getASSStyleFromConfig.
+ */
+export function generateUnifiedShadowASSHeader(resolvedStyle = {}) {
+  const fontName = resolvedStyle.fontName || 'Montserrat SemiBold';
+  const fontSize = resolvedStyle.fontSizeAss || 72;
+  const color = resolvedStyle.unifiedShadow?.assColor || '&H8C000000';
+  const bold = resolvedStyle.bold !== undefined ? resolvedStyle.bold : -1;
+  const alignment = resolvedStyle.alignment || 2;
+  const marginV = resolvedStyle.marginV !== undefined ? resolvedStyle.marginV : 300;
+  const spacing = resolvedStyle.spacing !== undefined ? resolvedStyle.spacing : 0;
+
+  return [
+    '[Script Info]',
+    '; Caption Studio — Unified Shadow silhouette track (blurred/offset as a whole by ffmpeg, see burnSubtitles)',
+    'Title: Caption Studio Unified Shadow',
+    'ScriptType: v4.00+',
+    'WrapStyle: 0',
+    'PlayResX: 1080',
+    'PlayResY: 1920',
+    'ScaledBorderAndShadow: yes',
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    `Style: Shadow,${fontName},${fontSize},${color},${color},&H00000000,&H00000000,${bold},0,0,0,100,100,${spacing},0,1,0,0,${alignment},100,100,${marginV},1`,
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+  ].join('\n');
+}
+
+/**
+ * Renders one phrase as flat, single-color text with no per-word active/
+ * inactive/keyword coloring or animation — the Unified Shadow is one static
+ * silhouette of the whole phrase for its entire on-screen duration, not a
+ * per-word-timed highlight like the real caption track.
+ */
+function buildFlatPhraseText(phrase, textCase) {
+  const breakIndices = new Set(phrase.breakAfterIndices || []);
+  return phrase.words.map((w, idx) => {
+    const raw = (w.word || w.text || '').trim();
+    const wordText = applyCaseTransform(raw, textCase, idx === 0);
+    const isLineBreak = breakIndices.has(idx - 1);
+    const isFirstWord = idx === 0;
+    const prefixSpace = (isFirstWord || isLineBreak) ? '' : ' ';
+    const lineBreakTag = isLineBreak ? '\\N' : '';
+    return `${lineBreakTag}${prefixSpace}${wordText}`;
+  }).join('');
+}
+
+/**
+ * Builds one Unified Shadow Dialogue event for a phrase — visible for the
+ * phrase's entire on-screen duration, positioned identically to the real
+ * caption (same posOverrideTag), matching the CSS preview's single flat
+ * `filter: drop-shadow(...)` silhouette.
+ *
+ * @param {object} phrase - Unified phrase (start, end, words, breakAfterIndices).
+ * @param {object} options - { textCase, posOverrideTag }.
+ */
+export function generateUnifiedShadowDialogueLine(phrase, options = {}) {
+  const textCase = options.textCase || 'uppercase';
+  const posOverrideTag = options.posOverrideTag || '';
+  const text = buildFlatPhraseText(phrase, textCase);
+  return `Dialogue: 0,${formatASSTimestamp(phrase.start)},${formatASSTimestamp(phrase.end)},Shadow,,0,0,0,,${posOverrideTag}${text}`;
+}
