@@ -105,7 +105,12 @@ export function initPreviewWorkspace() {
   if (btnVideoPlay && previewVideo) {
     btnVideoPlay.addEventListener('click', () => {
       if (previewVideo.paused) {
-        previewVideo.play();
+        // play() returns a promise that rejects (AbortError) if the video's
+        // src changes or load() is called before it resolves — expected
+        // whenever a new upload/demo video replaces the current source
+        // while this one was mid-play, not a real failure. Left unhandled,
+        // that shows up as an "Uncaught (in promise) DOMException".
+        previewVideo.play().catch(() => {});
         if (playPoly) playPoly.setAttribute('points', '5,3 9,3 9,21 5,21 15,3 19,3 19,21 15,21'); // Pause icon representation
       } else {
         previewVideo.pause();

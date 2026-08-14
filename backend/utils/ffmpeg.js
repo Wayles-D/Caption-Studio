@@ -215,12 +215,30 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {})
       // result is correct at whatever resolution the source video actually is.
       // The shadow chain works at HALF the source resolution throughout (see
       // the doc comment above) — only the final overlay/burn runs full-size.
+      //
+      // Deliberately NOT using scale2ref here (an earlier revision did): it
+      // takes two inputs and produces two outputs that both fed the same
+      // downstream `overlay` — a "diamond" shape where one path (this whole
+      // shadow chain: downscale → ass render → blur) is far more expensive
+      // per-frame than the other (a bare passthrough of [0:v]). That specific
+      // topology is a known trigger for FFmpeg's frame scheduler to lose
+      // track of which input to service next under sustained load, surfacing
+      // as "Assertion best_input >= 0 failed at ffmpeg_filter.c" well into a
+      // long render — see the regression writeup. Scaling the shadow layer
+      // back up via a plain, single-input `scale=iw*2:ih*2` on itself (exact
+      // inverse of the iw/2:ih/2 downscale above, since real video dimensions
+      // are even) removes the second input entirely: [0:v] is still consumed
+      // twice below (once here, once as overlay's main), but that's an
+      // ordinary auto-split of a single input feeding two independent linear
+      // chains — not two outputs of one filter reconverging in a shared
+      // consumer — which is the ubiquitous, well-tested shape used by any
+      // basic ffmpeg watermark/overlay recipe.
       const filterComplex = [
         `[0:v]scale=iw/2:ih/2,format=yuva420p,colorchannelmixer=aa=0[shadow_base]`,
         `[shadow_base]${shadowAssFilter}[shadow_text]`,
         `[shadow_text]boxblur=luma_radius='h/960*${blurAss}':luma_power=1:chroma_radius='h/960*${blurAss}':chroma_power=1:alpha_radius='h/960*${blurAss}':alpha_power=1[shadow_blurred]`,
-        `[shadow_blurred][0:v]scale2ref=w=iw*2:h=ih*2[shadow_scaled][main_ref]`,
-        `[main_ref][shadow_scaled]overlay=x='main_w/1080*${offsetXAss}':y='main_h/1920*${offsetYAss}':format=yuv420[with_shadow]`,
+        `[shadow_blurred]scale=iw*2:ih*2[shadow_scaled]`,
+        `[0:v][shadow_scaled]overlay=x='main_w/1080*${offsetXAss}':y='main_h/1920*${offsetYAss}':format=yuv420[with_shadow]`,
         `[with_shadow]${assFilter}[outv]`
       ].join(';');
 
