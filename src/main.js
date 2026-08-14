@@ -7,6 +7,7 @@ import { initToolbar } from './js/components/toolbar.js';
 import { initSidebarInspector } from './js/components/sidebarInspector.js';
 import { initPreviewWorkspace, applyCSSPreviewStyles } from './js/components/preview.js';
 import { initRightInspector, renderTranscriptEditor, collectEditedWords } from './js/components/rightInspector.js';
+import { fetchJson, describeFetchError } from './js/utils/apiRequest.js';
 
 // DOM Elements
 const dropZone = document.getElementById('drop-zone');
@@ -121,17 +122,10 @@ async function handleFileSelected(file) {
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
   try {
-    const response = await fetch(`${apiBaseUrl}/api/upload`, {
+    const data = await fetchJson(`${apiBaseUrl}/api/upload`, {
       method: 'POST',
       body: formData
     });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.message || 'Server upload failed');
-    }
-
-    const data = await response.json();
     console.log('Upload success response:', data);
 
     updateState({
@@ -159,7 +153,7 @@ async function handleFileSelected(file) {
     stateProcessing.classList.remove('active');
     stateUpload.classList.add('active');
     updateState({ isProcessing: false }, { recordHistory: false });
-    showToast(`Error: ${err.message}`);
+    showToast(`Upload failed: ${describeFetchError(err)}`);
   }
 }
 
@@ -211,7 +205,7 @@ async function triggerRegeneration() {
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
   try {
-    const response = await fetch(`${apiBaseUrl}/api/upload/regenerate`, {
+    const result = await fetchJson(`${apiBaseUrl}/api/upload/regenerate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -220,13 +214,6 @@ async function triggerRegeneration() {
         styles: getStyleParams()
       })
     });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.message || 'Regeneration failed');
-    }
-
-    const result = await response.json();
     console.log('Regeneration result:', result);
 
     updateState({
@@ -244,7 +231,7 @@ async function triggerRegeneration() {
     stateProcessing.classList.remove("active");
     stateVideo.classList.add("active");
     updateState({ isProcessing: false }, { recordHistory: false });
-    showToast(`Render failed: ${err.message}`);
+    showToast(`Render failed: ${describeFetchError(err)}`);
   } finally {
     if (btnApplyRender) btnApplyRender.disabled = false;
   }

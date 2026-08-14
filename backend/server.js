@@ -21,6 +21,8 @@ const allowedOrigins = process.env.FRONTEND_URL
   ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
   : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5001'];
 
+console.log(`[CORS] Allowed origins: ${allowedOrigins.join(', ')}${process.env.FRONTEND_URL ? ' (from FRONTEND_URL env var)' : ' (FRONTEND_URL env var not set — using dev-only defaults)'}`);
+
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps, curl, or standard server-to-server calls)
@@ -28,6 +30,13 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
       return callback(null, true);
     } else {
+      // Logged server-side (not just thrown) so a rejected-origin mismatch
+      // shows up directly in Render logs instead of only as an opaque
+      // network/CORS failure in the browser — this is the single most useful
+      // signal for telling "FRONTEND_URL doesn't match the deployed frontend"
+      // apart from "the backend crashed mid-request" (see burnSubtitles'
+      // memory logging for the latter).
+      console.warn(`[CORS] Rejected request from origin "${origin}" — not in allowed list: [${allowedOrigins.join(', ')}]. If this is the current frontend deployment, update the FRONTEND_URL env var on the backend host.`);
       const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
       return callback(new Error(msg), false);
     }
@@ -120,6 +129,17 @@ app.use((err, req, res, next) => {
   // Handle file validation errors thrown in fileFilter
   if (err.message && err.message.includes('Invalid file type')) {
     return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+
+  // Handle the cors() middleware's own rejection (see the origin callback
+  // above) with a proper 403 instead of falling through to the generic 500
+  // below — the request never reached a route handler, so this is a client/
+  // config error, not a server fault.
+  if (err.message && err.message.includes('CORS policy')) {
+    return res.status(403).json({
       success: false,
       message: err.message
     });
