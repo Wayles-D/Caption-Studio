@@ -98,12 +98,19 @@ export function initSidebarInspector() {
   });
 
   // 3. Typography Inputs
+  const captionModeRadios = document.getElementsByName('caption-mode');
   const fontFamilySelect = document.getElementById('font-family-select');
   const inputFontSize = document.getElementById('input-font-size');
   const valFontSize = document.getElementById('val-font-size');
   const inputWordSpacing = document.getElementById('input-word-spacing');
   const valWordSpacing = document.getElementById('val-word-spacing');
   const textCaseRadios = document.getElementsByName('text-case');
+
+  captionModeRadios.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      updateState({ captionMode: e.target.value });
+    });
+  });
 
   if (fontFamilySelect) {
     fontFamilySelect.addEventListener('change', (e) => {
@@ -406,6 +413,11 @@ function syncSidebarUI() {
   presetBtns.forEach(btn => {
     btn.classList.toggle('active', btn.dataset.preset === appState.currentPreset);
   });
+
+  // Caption Mode
+  const captionModeRadios = document.getElementsByName('caption-mode');
+  const captionMode = appState.captionMode === 'word' ? 'word' : 'sentence';
+  captionModeRadios.forEach(r => { r.checked = r.value === captionMode; });
 
   // Font Family
   const fontFamilySelect = document.getElementById('font-family-select');

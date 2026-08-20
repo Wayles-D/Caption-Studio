@@ -89,15 +89,29 @@ function toInlineColorTags(assColor, index) {
 
 /**
  * Builds the one-time inline override block (placed at the very start of a
- * Dialogue event's text) that sets the shadow color and, if explicitly
- * customized, the shadow's X/Y offset. ASS has no dedicated shadow-color
- * style column — shadow color is the \4a\4c override tags, which is why this
- * has to be inline rather than baked into [V4+ Styles] like Outline/Shadow
- * depth are. Override tags persist for the rest of that Dialogue event's
- * text once set, so this only needs to be emitted once per event, not per word.
+ * Dialogue event's text) that sets the shadow color, the shadow's X/Y offset
+ * (if explicitly customized), and — for the Individual shadow — a Gaussian
+ * edge blur. ASS has no dedicated shadow-color style column — shadow color is
+ * the \4a\4c override tags, which is why this has to be inline rather than
+ * baked into [V4+ Styles] like Outline/Shadow depth are. Override tags
+ * persist for the rest of that Dialogue event's text once set, so this only
+ * needs to be emitted once per event, not per word.
+ *
+ * Blur: libass's native \blur tag Gaussian-blurs glyph EDGES only — the
+ * border/outline and the shadow — and explicitly never the primary fill, so
+ * the actual letters stay sharp while the shadow softens, matching the CSS
+ * preview's `text-shadow` blur radius (which is likewise a property of the
+ * shadow layer, not the glyph fill). \blur has no independent "shadow-only"
+ * mode in the ASS format — if an outline is also active it softens slightly
+ * too, an inherent, well-known characteristic of this technique (used
+ * throughout the ASS/karaoke-subtitling world for exactly this "soft shadow,
+ * crisp text" look), not a bug. `getASSStyleFromConfig` already zeroes
+ * `shadowSize` outside 'individual' mode, so this is naturally a no-op for
+ * 'none'/'unified' — the Unified shadow gets its blur from ffmpeg's own
+ * offscreen boxblur pass instead (see burnSubtitles), never from this tag.
  */
 function buildShadowOverrideTag(options) {
-  const { shadowColor, shadowOffsetX, shadowOffsetY } = options;
+  const { shadowColor, shadowOffsetX, shadowOffsetY, shadowSize } = options;
   let tag = '';
 
   if (shadowColor) {
@@ -108,6 +122,7 @@ function buildShadowOverrideTag(options) {
   }
   if (shadowOffsetX != null) tag += `\\xshad${shadowOffsetX}`;
   if (shadowOffsetY != null) tag += `\\yshad${shadowOffsetY}`;
+  if (shadowSize > 0) tag += `\\blur${shadowSize}`;
 
   return tag ? `{${tag}}` : '';
 }
@@ -243,6 +258,64 @@ function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, opt
 }
 
 /**
+ * Word Mode: one Dialogue event per WORD, timed to that word's own Whisper
+ * start/end (no new timing is generated or altered) — exactly one word
+ * visible at a time, matching the preview's renderWordModeCaption exactly.
+ * Reuses the same per-word tag builders the legacy/keyword-driven Sentence
+ * mode paths already use (toInlineColorTags, toKeywordStyleTags,
+ * buildKeywordDrivenWordBlock, resolveWordStyleMetadata) with the word
+ * always treated as "active" (isWordActive: true) since it's the only one
+ * on screen — there's no "inactive" word to contrast against. The shared
+ * shadow/blur override block is emitted once per event exactly like every
+ * other dialogue-generation path, so shadow color/offset/blur stay in sync.
+ */
+function generateWordModeDialogueEvents(phrase, options) {
+  const {
+    textCase, posOverrideTag, primaryColor, enableKeywordHighlighting, keywordHighColor, keywordMediumColor,
+    keywordDriven, keywordStyleConfig, activeHighlightEnabled, outlineSize, shadowSize,
+    primaryColorHex, textOpacity, baseFontFamily, baseFontWeight
+  } = options;
+
+  const events = [];
+
+  phrase.words.forEach((w) => {
+    if (w.end - w.start < 0.001) return; // skip degenerate zero-length words
+
+    const wordText = applyCaseTransform((w.word || w.text || '').trim(), textCase, true);
+    let payload = buildShadowOverrideTag(options);
+
+    if (keywordDriven) {
+      const metadata = resolveWordStyleMetadata(w, {
+        keywordStyleConfig,
+        keywordsEnabled: enableKeywordHighlighting,
+        activeHighlightEnabled,
+        isWordActive: true,
+        mode: 'karaoke',
+        activeHighlightColorHex: primaryColorHex,
+        inactiveColorHex: primaryColorHex,
+        baseFontFamily,
+        baseFontWeight
+      });
+      const combinedOpacity = metadata.isKeyword
+        ? (textOpacity ?? 100) * (keywordStyleConfig.opacity ?? 100) / 100
+        : (textOpacity ?? 100);
+      const wordAlphaHex = opacityToAssAlpha(combinedOpacity);
+      payload += buildKeywordDrivenWordBlock(w, wordText, metadata, outlineSize || 0, shadowSize || 0, wordAlphaHex);
+    } else {
+      const isKeyword = enableKeywordHighlighting && w.isKeyword;
+      const fillColor = isKeyword ? (w.importance === 'high' ? keywordHighColor : keywordMediumColor) : primaryColor;
+      const colorTags = toInlineColorTags(fillColor, 1);
+      const styleTags = toKeywordStyleTags(w, enableKeywordHighlighting);
+      payload += `{${colorTags}${styleTags}}${wordText}`;
+    }
+
+    events.push(`Dialogue: 0,${formatASSTimestamp(w.start)},${formatASSTimestamp(w.end)},Default,,0,0,0,,${posOverrideTag || ''}${payload}`);
+  });
+
+  return events.join('\n');
+}
+
+/**
  * Generates one Dialogue event per word-boundary time-slice within a phrase.
  * The full phrase is always visible; only the currently active word's color
  * (and scale, for 'pop') differs — no word is ever hidden or swept/revealed.
@@ -364,6 +437,7 @@ export function generateASSDialogueLine(phrase, options = {}) {
   const textOpacity = (typeof options === 'object' && options.textOpacity != null) ? options.textOpacity : 100;
   const baseFontFamily = (typeof options === 'object' && options.baseFontFamily) || null;
   const baseFontWeight = (typeof options === 'object' && options.baseFontWeight) || null;
+  const captionMode = (typeof options === 'object' && options.captionMode === 'word') ? 'word' : 'sentence';
 
   const resolvedOptions = {
     textCase, animationMode, popScale, primaryColor, secondaryColor,
@@ -373,6 +447,14 @@ export function generateASSDialogueLine(phrase, options = {}) {
     activeHighlightEnabled, outlineSize, shadowSize, textOpacity,
     baseFontFamily, baseFontWeight
   };
+
+  // Word Mode overrides every animation mode: exactly one word on screen at
+  // a time is a distinct rendering shape from all of karaoke/pop/instant/
+  // typewriter's "full phrase, differing emphasis" model, so it's checked
+  // first regardless of animationMode (see generateWordModeDialogueEvents).
+  if (captionMode === 'word') {
+    return generateWordModeDialogueEvents(phrase, resolvedOptions);
+  }
 
   if (animationMode === 'typewriter') {
     return generateTypewriterDialogueLine(phrase, resolvedOptions);
@@ -465,4 +547,28 @@ export function generateUnifiedShadowDialogueLine(phrase, options = {}) {
   const posOverrideTag = options.posOverrideTag || '';
   const text = buildFlatPhraseText(phrase, textCase);
   return `Dialogue: 0,${formatASSTimestamp(phrase.start)},${formatASSTimestamp(phrase.end)},Shadow,,0,0,0,,${posOverrideTag}${text}`;
+}
+
+/**
+ * Word Mode's Unified Shadow events: one silhouette event per WORD, timed to
+ * that word's own start/end — matching Word Mode's real caption track (only
+ * one word is ever on screen, so the "whole caption" the unified shadow
+ * silhouettes is just that one word for as long as it in turn is visible),
+ * instead of one event per whole phrase.
+ *
+ * @param {object} phrase - Unified phrase (words array with per-word start/end).
+ * @param {object} options - { textCase, posOverrideTag }.
+ * @returns {string} Newline-joined ASS Dialogue Event lines, one per word.
+ */
+export function generateUnifiedShadowWordDialogueEvents(phrase, options = {}) {
+  const textCase = options.textCase || 'uppercase';
+  const posOverrideTag = options.posOverrideTag || '';
+
+  return phrase.words
+    .filter((w) => w.end - w.start >= 0.001)
+    .map((w) => {
+      const wordText = applyCaseTransform((w.word || w.text || '').trim(), textCase, true);
+      return `Dialogue: 0,${formatASSTimestamp(w.start)},${formatASSTimestamp(w.end)},Shadow,,0,0,0,,${posOverrideTag}${wordText}`;
+    })
+    .join('\n');
 }

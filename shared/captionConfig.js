@@ -574,6 +574,22 @@ export function resolveShadowMode(params) {
     : 'individual';
 }
 
+/**
+ * Resolves the caption display mode: 'sentence' (existing behavior — the
+ * full phrase is shown, with per-word active/inactive highlighting) or
+ * 'word' (exactly one transcript word visible at a time, timed to that
+ * word's own Whisper start/end). Absent/unrecognized values fall back to
+ * 'sentence', matching every existing project/preset that predates this
+ * control. Both the CSS preview and the ASS exporter read this from the
+ * same place so they can never disagree on which mode is active.
+ *
+ * @param {object} params - Client style params.
+ * @returns {'sentence'|'word'}
+ */
+export function resolveCaptionMode(params) {
+  return params.captionMode === 'word' ? 'word' : 'sentence';
+}
+
 // Subtle centered shadow with a small blur, per the Unified Shadow spec.
 const UNIFIED_SHADOW_DEFAULTS = {
   colorHex: '#000000',
@@ -944,6 +960,7 @@ export function getASSStyleFromConfig(params = {}) {
     textOpacity: shadowParams.textOpacity,
     shadowMode,
     unifiedShadow,
+    captionMode: resolveCaptionMode(params),
     fontSizeAss: fontSize,
     profile
   };
@@ -1165,6 +1182,7 @@ export function getCSSPreviewFromConfig(params = {}) {
     outlineColor: outlineColorBase,
     backgroundColor,
     shadowMode,
+    captionMode: resolveCaptionMode(params),
     wordSpacing: `${numericWordSpacing}px`
   };
 }

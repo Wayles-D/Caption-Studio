@@ -41,6 +41,10 @@ export const initialStyleState = {
   unifiedShadowOffsetY: null,
   textOpacity: 100,
   backgroundOpacity: null,
+  // 'sentence' (existing default — full phrase, per-word highlighting) or
+  // 'word' (exactly one transcript word visible at a time) — see
+  // resolveCaptionMode in shared/captionConfig.js.
+  captionMode: "sentence",
   animationMode: "karaoke",
   textCase: "uppercase",
   position: "bottom",
@@ -231,6 +235,7 @@ export function getStyleParams() {
     unifiedShadowOffsetY: appState.unifiedShadowOffsetY,
     textOpacity: appState.textOpacity,
     backgroundOpacity: appState.backgroundOpacity,
+    captionMode: appState.captionMode,
     textCase: appState.textCase,
     position: appState.position,
     customPosX: appState.customPosX,

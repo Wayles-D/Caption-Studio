@@ -149,6 +149,42 @@ export const FONT_REGISTRY = {
     displayName: 'Great Vibes',
     category: FONT_CATEGORY.SCRIPT,
     faces: { regular: { file: 'GreatVibes-Regular.ttf', familyName: 'Great Vibes' } }
+  },
+
+  // Word Mode font curation: bold/tall single-word caption fonts. familyName
+  // below is each file's OWN name-table Family record (verified per-file via
+  // a binary 'name' table read — never assumed from the filename), per this
+  // module's rule that the resolved family must be what the file itself
+  // actually registers as.
+  goldnic: {
+    displayName: 'Goldnic',
+    category: FONT_CATEGORY.DISPLAY,
+    faces: { regular: { file: 'Goldnic-Regular.otf', familyName: 'Goldnic' } }
+  },
+  dominates: {
+    displayName: 'Dominates',
+    category: FONT_CATEGORY.DISPLAY,
+    faces: { regular: { file: 'Dominates-Regular.otf', familyName: 'Dominates' } }
+  },
+  pocity: {
+    displayName: 'Pocity',
+    category: FONT_CATEGORY.DISPLAY,
+    faces: { regular: { file: 'Pocity-Regular.otf', familyName: 'Pocity' } }
+  },
+  // NOTE: the only file added for this one is explicitly a TRIAL cut
+  // ("DrukWide-Bold-Trial.otf") — its own name-table Family record is "Druk
+  // Bold Trial" (Typographic Family "Druk Trial"), not "Druk Wide"; that's
+  // the actual family baked into the file, so it's what familyName must be
+  // (see the module-level rule above) even though the UI displayName below
+  // reads "Druk Wide" per the original request. Trial cuts from foundries
+  // are commonly restricted (limited weights/characters, evaluation-only
+  // licensing) — swap in the licensed Druk Wide Bold file when available by
+  // replacing the file and updating familyName/file below; no other code
+  // needs to change.
+  drukWide: {
+    displayName: 'Druk Wide',
+    category: FONT_CATEGORY.DISPLAY,
+    faces: { regular: { file: 'DrukWide-Bold-Trial.otf', familyName: 'Druk Bold Trial' } }
   }
 };
 

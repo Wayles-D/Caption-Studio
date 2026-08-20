@@ -250,6 +250,19 @@ export function syncVideoSubtitles() {
     return;
   }
 
+  // Word Mode: exactly one transcript word visible at a time, timed to its
+  // own Whisper start/end within the already-found active phrase — only
+  // reached once real phrase/word data exists (the demo fallback above is
+  // shared with Sentence mode and unchanged). Everything else (colors,
+  // opacity, shadow, blur, outline, font, position) still comes from the
+  // same cssConfig/container styling applyCSSPreviewStyles already applied,
+  // exactly like Sentence mode's word spans below — only the "how many
+  // words are shown at once, and which text unit drives timing" differs.
+  if (appState.captionMode === 'word') {
+    renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsText);
+    return;
+  }
+
   // Render active phrase words
   const breakIndices = new Set(activePhrase.breakAfterIndices || []);
 
@@ -364,6 +377,76 @@ export function syncVideoSubtitles() {
     fragment.append(wordElement);
   });
   captionsText.replaceChildren(fragment);
+}
+
+/**
+ * Word Mode's render step: finds the single word within the active phrase
+ * whose own [start, end] contains currentTime (Whisper's own timestamps,
+ * untouched) and renders ONLY that word — every other word (past or
+ * upcoming) is simply absent from the DOM, so it disappears instead of
+ * lingering. In a gap between two words (end of one before the next
+ * starts), no word qualifies and the caption is empty, matching the ASS
+ * exporter's per-word Dialogue events (see assWriter.js's
+ * generateWordModeDialogueEvents) exactly.
+ *
+ * The visible word always reads in the "active"/highlight color (mirroring
+ * what Sentence mode already calls the active word's color) since it's the
+ * one currently being spoken — there is no "inactive" word to contrast
+ * against with only one word on screen. Keyword-driven presets (e.g.
+ * WAYLES) and legacy keyword-color-swap presets both reuse the exact same
+ * resolveWordStyleMetadata/keyword logic Sentence mode already uses below,
+ * just with isWordActive always true.
+ */
+function renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsText) {
+  const activeWord = activePhrase.words.find(w => currentTime >= w.start && currentTime <= w.end);
+  if (!activeWord) {
+    captionsText.replaceChildren();
+    return;
+  }
+
+  const activeHighlight = cssConfig.highlightColor || '#FEF08A';
+  const keywordsEnabled = appState.enableKeywordHighlighting;
+  const wordText = applyCaseTransform(activeWord.word || activeWord.text || '', appState.textCase, true);
+
+  const wordElement = document.createElement('span');
+  wordElement.className = 'word-unit';
+
+  if (cssConfig.keywordDriven) {
+    const metadata = resolveWordStyleMetadata(activeWord, {
+      keywordStyleConfig: cssConfig.keywordStyleConfig,
+      keywordsEnabled,
+      activeHighlightEnabled: cssConfig.activeHighlightEnabled,
+      isWordActive: true,
+      mode: appState.animationMode,
+      activeHighlightColorHex: activeHighlight,
+      inactiveColorHex: activeHighlight,
+      baseFontFamily: cssConfig.profile?.fontFamily,
+      baseFontWeight: cssConfig.profile?.fontWeight
+    });
+
+    const wordOpacity = metadata.isKeyword
+      ? (appState.textOpacity ?? 100) * (cssConfig.keywordStyleConfig.opacity ?? 100) / 100
+      : 100;
+    wordElement.style.color = applyOpacityToColor(metadata.colorHex, wordOpacity);
+    if (metadata.fontFamily) wordElement.style.fontFamily = metadata.fontFamily;
+    if (metadata.fontWeight) wordElement.style.fontWeight = metadata.fontWeight;
+    wordElement.style.fontStyle = metadata.italic ? 'italic' : 'normal';
+    if (metadata.shadow) wordElement.style.textShadow = metadata.shadow.css;
+    if (metadata.outline) wordElement.style.webkitTextStroke = metadata.outline.css;
+  } else {
+    const isActiveKeyword = keywordsEnabled && activeWord.isKeyword;
+    const keywordColor = activeWord.importance === 'high'
+      ? (cssConfig.keywordColorHigh || '#EF4444')
+      : (cssConfig.keywordColorMedium || '#FB923C');
+    wordElement.style.color = isActiveKeyword ? keywordColor : activeHighlight;
+    if (isActiveKeyword) {
+      wordElement.style.fontWeight = activeWord.importance === 'high' ? '900' : '';
+      wordElement.style.fontStyle = activeWord.importance === 'medium' ? 'italic' : '';
+    }
+  }
+
+  wordElement.textContent = wordText;
+  captionsText.replaceChildren(wordElement);
 }
 
 function formatTime(seconds) {
