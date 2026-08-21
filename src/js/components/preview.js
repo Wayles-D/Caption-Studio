@@ -49,7 +49,7 @@ export function loadLocalFontFace(displayName, face = 'regular') {
 }
 
 /**
- * Loads whichever font faces the current preset's keyword tiers need (the
+ * Loads whichever font face the current preset's keyword tier needs (the
  * base font is loaded separately in applyCSSPreviewStyles). Reads the same
  * user-override-or-preset-default precedence resolveKeywordStyleConfig uses,
  * so the exact face actually rendered is always the one loaded.
@@ -58,11 +58,8 @@ function loadKeywordDrivenFontFaces(cssConfig) {
   const keywordStyle = cssConfig.profile?.keywordStyle;
   if (!cssConfig.keywordDriven || !keywordStyle) return;
 
-  const highFont = appState.keywordPrimaryFont || keywordStyle.high?.fontFamily;
-  if (highFont) loadLocalFontFace(highFont, keywordStyle.high?.face || 'regular');
-
-  const mediumFont = appState.keywordMediumFont || keywordStyle.medium?.fontFamily;
-  if (mediumFont) loadLocalFontFace(mediumFont, keywordStyle.medium?.face || 'regular');
+  const font = appState.keywordFont || keywordStyle.fontFamily;
+  if (font) loadLocalFontFace(font, keywordStyle.face || 'regular');
 }
 
 export function initPreviewWorkspace() {
@@ -278,8 +275,7 @@ export function syncVideoSubtitles() {
   const breakIndices = new Set(activePhrase.breakAfterIndices || []);
 
   const keywordsEnabled = appState.enableKeywordHighlighting;
-  const keywordColorHigh = appState.keywordColorHigh || '#EF4444';
-  const keywordColorMedium = appState.keywordColorMedium || '#FB923C';
+  const keywordColor = appState.keywordColor || '#EF4444';
 
   // Keyword-driven presets (e.g. WAYLES) derive a word's entire appearance
   // from resolveWordStyleMetadata instead of the active/inactive model below
@@ -340,7 +336,6 @@ export function syncVideoSubtitles() {
     }
 
     const isActiveKeyword = keywordsEnabled && w.isKeyword && isWordActive;
-    const keywordColor = w.importance === 'high' ? keywordColorHigh : keywordColorMedium;
 
     let color = inactiveColor;
     let extraClasses = ['word-unit'];
@@ -368,8 +363,7 @@ export function syncVideoSubtitles() {
     wordElement.className = extraClasses.join(' ');
     wordElement.style.color = color;
     if (keywordsEnabled && w.isKeyword) {
-      wordElement.style.fontWeight = w.importance === 'high' ? '900' : '';
-      wordElement.style.fontStyle = w.importance === 'medium' ? 'italic' : '';
+      wordElement.style.fontWeight = '900';
     }
     wordElement.textContent = wordText;
 
@@ -446,13 +440,10 @@ function renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsTex
     if (metadata.outline) wordElement.style.webkitTextStroke = metadata.outline.css;
   } else {
     const isActiveKeyword = keywordsEnabled && activeWord.isKeyword;
-    const keywordColor = activeWord.importance === 'high'
-      ? (cssConfig.keywordColorHigh || '#EF4444')
-      : (cssConfig.keywordColorMedium || '#FB923C');
+    const keywordColor = cssConfig.keywordColor || '#EF4444';
     wordElement.style.color = isActiveKeyword ? keywordColor : activeHighlight;
     if (isActiveKeyword) {
-      wordElement.style.fontWeight = activeWord.importance === 'high' ? '900' : '';
-      wordElement.style.fontStyle = activeWord.importance === 'medium' ? 'italic' : '';
+      wordElement.style.fontWeight = '900';
     }
   }
 

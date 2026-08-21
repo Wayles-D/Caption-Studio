@@ -4,7 +4,7 @@ const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 const SYSTEM_PROMPT = `You are a caption emphasis tagger for short-form video subtitles.
 You will receive a JSON transcript as a list of {"wordIndex": number, "word": string} entries, in speaking order.
-Your ONLY job is to identify which words deserve visual emphasis (keywords) when displayed as captions, and how important each one is.
+Your ONLY job is to identify which words deserve visual emphasis (keywords) when displayed as captions.
 
 Strict rules:
 - NEVER rewrite, summarize, reorder, correct, punctuate, or otherwise modify any word.
@@ -12,16 +12,16 @@ Strict rules:
 - Match every tag strictly by "wordIndex" from the input — never by matching text.
 - Only include words that ARE keywords in your output; omit everything else.
 - Favor concrete nouns, numbers, strong verbs, and emotionally/thematically significant words. Avoid tagging common filler words (the, a, is, and, etc.).
-- Respond with ONLY a JSON object of the exact shape: {"keywords":[{"wordIndex":<int>,"importance":"high"|"medium","confidence":<0-1 number>}]}
+- Respond with ONLY a JSON object of the exact shape: {"keywords":[{"wordIndex":<int>,"confidence":<0-1 number>}]}
 - No prose, no markdown, no explanation — JSON only.`;
 
 /**
  * Validates and normalizes the raw parsed LLM response into a safe array of
- * { wordIndex, importance, confidence } entries, dropping anything malformed.
+ * { wordIndex, confidence } entries, dropping anything malformed.
  *
  * @param {any} parsed - The parsed JSON response body.
  * @param {number} wordCount - Total number of words, used to bounds-check wordIndex.
- * @returns {Array<{wordIndex:number, importance:string, confidence:number}>}
+ * @returns {Array<{wordIndex:number, confidence:number}>}
  */
 function extractValidKeywordTags(parsed, wordCount) {
   if (!parsed || !Array.isArray(parsed.keywords)) return [];
@@ -31,14 +31,12 @@ function extractValidKeywordTags(parsed, wordCount) {
     if (!entry || typeof entry !== 'object') continue;
 
     const wordIndex = Number(entry.wordIndex);
-    const importance = entry.importance;
     const confidence = Number(entry.confidence);
 
     if (!Number.isInteger(wordIndex) || wordIndex < 0 || wordIndex >= wordCount) continue;
-    if (importance !== 'high' && importance !== 'medium') continue;
     if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) continue;
 
-    validTags.push({ wordIndex, importance, confidence });
+    validTags.push({ wordIndex, confidence });
   }
 
   return validTags;
@@ -53,7 +51,7 @@ function extractValidKeywordTags(parsed, wordCount) {
  * wrap this in their own try/catch for pipeline safety.
  *
  * @param {Array<{word:string, start:number, end:number}>} words - Flat Whisper word list.
- * @returns {Promise<Array<object>>} Words enriched with isKeyword/importance/confidence/source,
+ * @returns {Promise<Array<object>>} Words enriched with isKeyword/confidence/source,
  *   or the original words array if analysis could not be completed.
  */
 export async function analyzeKeywords(words) {
@@ -89,7 +87,6 @@ export async function analyzeKeywords(words) {
       return {
         ...w,
         isKeyword: !!tag,
-        importance: tag ? tag.importance : null,
         confidence: tag ? tag.confidence : null,
         source: 'auto'
       };

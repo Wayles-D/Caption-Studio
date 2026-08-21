@@ -23,8 +23,7 @@ const PICKER_FIELDS = [
   { key: 'backgroundColor', triggerId: 'color-background', label: 'Background Color' },
   { key: 'shadowColor', triggerId: 'color-shadow', label: 'Shadow Color' },
   { key: 'unifiedShadowColor', triggerId: 'color-unified-shadow', label: 'Unified Shadow Color' },
-  { key: 'keywordColorHigh', triggerId: 'color-keyword-high', label: 'High Importance Keyword Color' },
-  { key: 'keywordColorMedium', triggerId: 'color-keyword-medium', label: 'Medium Importance Keyword Color' }
+  { key: 'keywordColor', triggerId: 'color-keyword', label: 'Keyword Color' }
 ];
 
 let popoverEl = null;

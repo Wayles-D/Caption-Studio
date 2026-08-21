@@ -186,7 +186,7 @@ export const CREATOR_PROFILES = {
     cssBorderRadius: '0',
     cssHighlightColor: '#FFFFFF',
     cssInactiveColor: '#FFFFFF',
-    // This preset is driven by keyword importance rather than active-word
+    // This preset is driven by keyword styling rather than active-word
     // highlighting — see resolveWordStyleMetadata. Any future preset can opt
     // into the same generic renderer by setting keywordDriven + keywordStyle;
     // no changes to preview.js/assWriter.js are needed to add one.
@@ -198,34 +198,23 @@ export const CREATOR_PROFILES = {
     // moment it's picked, purely as a one-time convenience default; the user
     // can still override it afterward like any other font choice.
     autoFontFamilyOnSelect: 'Poppins',
+    // Single keyword tier — every AI-tagged keyword word renders identically,
+    // no medium/high importance split.
     keywordStyle: {
-      high: {
-        fontFamily: 'Poppins',
-        fontWeight: '700',
-        fontScale: 1.2,
-        colorMode: 'always',
-        defaultColorHex: '#FFD60A',
-        animation: 'pop',
-        shadowByDefault: true,
-        outlineByDefault: false
-      },
-      medium: {
-        fontFamily: "'Caveat', 'Kalam', cursive",
-        fontWeight: '600',
-        fontScale: 1.05,
-        colorMode: 'always',
-        defaultColorHex: '#FFFFFF',
-        animation: 'none',
-        shadowByDefault: false,
-        outlineByDefault: false
-      }
+      fontFamily: 'Poppins',
+      fontWeight: '700',
+      fontScale: 1.2,
+      colorMode: 'always',
+      defaultColorHex: '#FFD60A',
+      animation: 'pop',
+      shadowByDefault: true,
+      outlineByDefault: false
     }
   },
   // WAYLES Poppins: a single-family variant of the keyword-driven WAYLES
-  // model — normal words use Poppins Regular, medium keywords swap to the
-  // bundled Poppins Italic face, high keywords swap to the bundled Poppins
-  // Bold face. All three faces share one family ("Poppins"), so the ASS
-  // Bold/Italic flags select the right one within it — no font-swap tag needed
+  // model — normal words use Poppins Regular, keywords swap to the bundled
+  // Poppins Bold face. Both faces share one family ("Poppins"), so the ASS
+  // Bold flag selects the right one within it — no font-swap tag needed
   // beyond what resolveKeywordStyleConfig/resolveWordStyleMetadata already do.
   'wayles-poppins': {
     id: 'wayles-poppins',
@@ -261,37 +250,23 @@ export const CREATOR_PROFILES = {
     disableActiveHighlightByDefault: true,
     autoFontFamilyOnSelect: 'Poppins',
     keywordStyle: {
-      high: {
-        fontFamily: 'Poppins',
-        face: 'bold',
-        fontWeight: '700',
-        fontScale: 1,
-        colorMode: 'always',
-        defaultColorHex: '#FFFFFF',
-        animation: 'none',
-        shadowByDefault: false,
-        outlineByDefault: false
-      },
-      medium: {
-        fontFamily: 'Poppins',
-        face: 'italic',
-        fontWeight: '400',
-        fontScale: 1,
-        colorMode: 'always',
-        defaultColorHex: '#FFFFFF',
-        animation: 'none',
-        shadowByDefault: false,
-        outlineByDefault: false
-      }
+      fontFamily: 'Poppins',
+      face: 'bold',
+      fontWeight: '700',
+      fontScale: 1,
+      colorMode: 'always',
+      defaultColorHex: '#FFFFFF',
+      animation: 'none',
+      shadowByDefault: false,
+      outlineByDefault: false
     }
   },
   // WAYLES PEN: same keyword-driven model as WAYLES Poppins, using the
-  // bundled PP Editorial New family instead. Its medium tier swaps to the
-  // bundled PP Editorial New Italic face (same family, Italic flag selects
-  // it). Its high tier requests the 'bold' face; PP Editorial New has no
-  // true Bold weight bundled, so the registry resolves that face to the
-  // Ultrabold file/family instead (see shared/fontRegistry.js) — the
-  // closest available heavier weight, not a silent fallback to Poppins.
+  // bundled PP Editorial New family instead. Its keyword tier requests the
+  // 'bold' face; PP Editorial New has no true Bold weight bundled, so the
+  // registry resolves that face to the Ultrabold file/family instead (see
+  // shared/fontRegistry.js) — the closest available heavier weight, not a
+  // silent fallback to Poppins.
   'wayles-pen': {
     id: 'wayles-pen',
     name: 'WAYLES PEN',
@@ -326,34 +301,20 @@ export const CREATOR_PROFILES = {
     disableActiveHighlightByDefault: true,
     autoFontFamilyOnSelect: 'PP Editorial New',
     keywordStyle: {
-      high: {
-        fontFamily: 'PP Editorial New',
-        face: 'bold',
-        fontWeight: '700',
-        fontScale: 1,
-        colorMode: 'always',
-        defaultColorHex: '#FFFFFF',
-        animation: 'none',
-        shadowByDefault: false,
-        outlineByDefault: false
-      },
-      medium: {
-        fontFamily: 'PP Editorial New',
-        face: 'italic',
-        fontWeight: '400',
-        fontScale: 1,
-        colorMode: 'always',
-        defaultColorHex: '#FFFFFF',
-        animation: 'none',
-        shadowByDefault: false,
-        outlineByDefault: false
-      }
+      fontFamily: 'PP Editorial New',
+      face: 'bold',
+      fontWeight: '700',
+      fontScale: 1,
+      colorMode: 'always',
+      defaultColorHex: '#FFFFFF',
+      animation: 'none',
+      shadowByDefault: false,
+      outlineByDefault: false
     }
   },
   // Poppins + Editorial: normal words render in genuine Poppins Bold; any
-  // keyword (high OR medium importance alike — deliberately ONE keyword
-  // treatment, not WAYLES's two-tier high/italic-medium split) switches to PP
-  // Editorial New's Ultra Bold Italic face. Unlike the WAYLES-family presets
+  // keyword switches to PP Editorial New's Ultra Bold Italic face — a single
+  // keyword treatment, not a two-tier split. Unlike the WAYLES-family presets
   // above, disableActiveHighlightByDefault is NOT set: the base active/
   // inactive highlight system stays ON, so the currently-spoken word (not
   // just keywords) still gets the "pop" scale-up below — that's what gives
@@ -398,28 +359,15 @@ export const CREATOR_PROFILES = {
     keywordDriven: true,
     autoFontFamilyOnSelect: 'Poppins',
     keywordStyle: {
-      high: {
-        fontFamily: 'PP Editorial New',
-        face: 'ultraboldItalic',
-        fontWeight: '800',
-        fontScale: 1.22,
-        colorMode: 'always',
-        defaultColorHex: '#EF4444',
-        animation: 'pop',
-        shadowByDefault: false,
-        outlineByDefault: false
-      },
-      medium: {
-        fontFamily: 'PP Editorial New',
-        face: 'ultraboldItalic',
-        fontWeight: '800',
-        fontScale: 1.14,
-        colorMode: 'always',
-        defaultColorHex: '#FB923C',
-        animation: 'pop',
-        shadowByDefault: false,
-        outlineByDefault: false
-      }
+      fontFamily: 'PP Editorial New',
+      face: 'ultraboldItalic',
+      fontWeight: '800',
+      fontScale: 1.22,
+      colorMode: 'always',
+      defaultColorHex: '#EF4444',
+      animation: 'pop',
+      shadowByDefault: false,
+      outlineByDefault: false
     }
   }
 };
@@ -706,9 +654,9 @@ const DEFAULT_KEYWORD_TIER = {
 };
 
 /**
- * Resolves the "high"/"medium" keyword tiers a preset renders keyword words
- * with, merging the active preset's own `keywordStyle` authoring with any
- * client overrides (the "Keyword Style" editor section). Single place both
+ * Resolves the single keyword tier a preset renders keyword words with,
+ * merging the active preset's own `keywordStyle` authoring with any client
+ * overrides (the "Keyword Style" editor section). Single place both
  * getASSStyleFromConfig and getCSSPreviewFromConfig — and, per word,
  * resolveWordStyleMetadata — read this from, so a slider always produces the
  * same effective value in both renderers.
@@ -717,46 +665,30 @@ const DEFAULT_KEYWORD_TIER = {
  * @param {object} profile - The resolved creator profile.
  */
 export function resolveKeywordStyleConfig(params, profile) {
-  const presetHigh = { ...DEFAULT_KEYWORD_TIER, ...(profile.keywordStyle?.high || {}) };
-  const presetMedium = { ...DEFAULT_KEYWORD_TIER, ...(profile.keywordStyle?.medium || {}) };
+  const presetKeyword = { ...DEFAULT_KEYWORD_TIER, ...(profile.keywordStyle || {}) };
 
   // Font resolved exclusively through the Font Registry: the preset's own
   // authored `face` (e.g. 'bold'/'italic') always applies — it's the tier's
   // stylistic role — while WHICH font family fills that role can still be
-  // swapped via the Keyword Style editor's font pickers.
-  const highFontRequest = params.keywordPrimaryFont || presetHigh.fontFamily;
-  const resolvedHighFont = highFontRequest ? resolveFontFace(highFontRequest, presetHigh.face) : null;
+  // swapped via the Keyword Style editor's font picker.
+  const fontRequest = params.keywordFont || presetKeyword.fontFamily;
+  const resolvedFont = fontRequest ? resolveFontFace(fontRequest, presetKeyword.face) : null;
 
-  const high = {
-    fontFamily: resolvedHighFont ? resolvedHighFont.familyName : null,
-    fontItalic: resolvedHighFont ? resolvedHighFont.italic : false,
-    fontWeight: params.keywordPrimaryWeight || presetHigh.fontWeight,
-    fontScale: params.keywordPrimaryScale != null ? parseFloat(params.keywordPrimaryScale) : presetHigh.fontScale,
-    colorHex: params.keywordColorHigh || presetHigh.defaultColorHex || '#EF4444',
-    colorMode: presetHigh.colorMode,
-    animation: params.keywordPrimaryAnimation || presetHigh.animation,
-    hasShadow: params.keywordShadowEnabled != null ? (params.keywordShadowEnabled !== false && params.keywordShadowEnabled !== 'false') : presetHigh.shadowByDefault,
-    hasOutline: params.keywordOutlineEnabled != null ? (params.keywordOutlineEnabled !== false && params.keywordOutlineEnabled !== 'false') : presetHigh.outlineByDefault
-  };
-
-  const mediumFontRequest = params.keywordMediumFont || presetMedium.fontFamily;
-  const resolvedMediumFont = mediumFontRequest ? resolveFontFace(mediumFontRequest, presetMedium.face) : null;
-
-  const medium = {
-    fontFamily: resolvedMediumFont ? resolvedMediumFont.familyName : null,
-    fontItalic: resolvedMediumFont ? resolvedMediumFont.italic : false,
-    fontWeight: params.keywordMediumWeight || presetMedium.fontWeight,
-    fontScale: params.keywordMediumScale != null ? parseFloat(params.keywordMediumScale) : presetMedium.fontScale,
-    colorHex: params.keywordColorMedium || presetMedium.defaultColorHex || '#FB923C',
-    colorMode: presetMedium.colorMode,
-    animation: presetMedium.animation,
-    hasShadow: presetMedium.shadowByDefault,
-    hasOutline: presetMedium.outlineByDefault
+  const keyword = {
+    fontFamily: resolvedFont ? resolvedFont.familyName : null,
+    fontItalic: resolvedFont ? resolvedFont.italic : false,
+    fontWeight: params.keywordWeight || presetKeyword.fontWeight,
+    fontScale: params.keywordScale != null ? parseFloat(params.keywordScale) : presetKeyword.fontScale,
+    colorHex: params.keywordColor || presetKeyword.defaultColorHex || '#EF4444',
+    colorMode: presetKeyword.colorMode,
+    animation: params.keywordAnimation || presetKeyword.animation,
+    hasShadow: params.keywordShadowEnabled != null ? (params.keywordShadowEnabled !== false && params.keywordShadowEnabled !== 'false') : presetKeyword.shadowByDefault,
+    hasOutline: params.keywordOutlineEnabled != null ? (params.keywordOutlineEnabled !== false && params.keywordOutlineEnabled !== 'false') : presetKeyword.outlineByDefault
   };
 
   const opacity = params.keywordOpacity != null ? Math.max(0, Math.min(100, parseFloat(params.keywordOpacity))) : 100;
 
-  return { high, medium, opacity };
+  return { keyword, opacity };
 }
 
 /**
@@ -810,7 +742,7 @@ function buildKeywordOutlineMetadata() {
  * canvas units/BGR colors). A future preset only needs to supply its own
  * `keywordStyle` config on CREATOR_PROFILES — no renderer changes required.
  *
- * @param {object} word - The word unit (word/text, isKeyword, importance).
+ * @param {object} word - The word unit (word/text, isKeyword).
  * @param {object} context - { keywordStyleConfig, keywordsEnabled, activeHighlightEnabled, isWordActive, mode, activeHighlightColorHex, inactiveColorHex, baseFontFamily, baseFontWeight }.
  * @returns {object} Unit-neutral metadata (fontScale as a ratio, colors as hex/rgba, shadow/outline pre-computed for both renderers).
  *   fontFamily/fontWeight are always a concrete value (never null) so a
@@ -821,8 +753,7 @@ export function resolveWordStyleMetadata(word, context) {
   const { keywordStyleConfig, keywordsEnabled, activeHighlightEnabled, isWordActive, mode, activeHighlightColorHex, inactiveColorHex, baseFontFamily, baseFontWeight } = context;
 
   const isKeyword = !!(keywordsEnabled && word && word.isKeyword);
-  const importance = isKeyword ? word.importance : null;
-  const tier = importance === 'high' ? keywordStyleConfig.high : importance === 'medium' ? keywordStyleConfig.medium : null;
+  const tier = isKeyword ? keywordStyleConfig.keyword : null;
 
   const showActiveHighlight = !!activeHighlightEnabled && isWordActive;
   const baseColorHex = showActiveHighlight ? activeHighlightColorHex : inactiveColorHex;
@@ -830,7 +761,6 @@ export function resolveWordStyleMetadata(word, context) {
   if (!tier) {
     return {
       isKeyword: false,
-      importance: null,
       fontFamily: baseFontFamily || null,
       fontWeight: baseFontWeight || null,
       italic: false,
@@ -846,7 +776,6 @@ export function resolveWordStyleMetadata(word, context) {
 
   return {
     isKeyword: true,
-    importance,
     fontFamily: tier.fontFamily || baseFontFamily || null,
     fontWeight: tier.fontWeight || baseFontWeight || null,
     italic: !!tier.fontItalic,
@@ -909,12 +838,11 @@ export function getASSStyleFromConfig(params = {}) {
   const primaryColorHex = params.activeWordColor || profile.cssHighlightColor || profile.colors.primaryHex;
   const secondaryColorHex = params.inactiveWordColor || profile.cssInactiveColor || profile.colors.secondaryHex;
 
-  // AI Keyword Highlighting: dedicated colors for active high/medium importance
-  // keyword words. Disabled by default resolution stays the same regardless —
-  // callers gate on enableKeywordHighlighting before applying these.
+  // AI Keyword Highlighting: dedicated color for active keyword words.
+  // Disabled by default resolution stays the same regardless — callers gate
+  // on enableKeywordHighlighting before applying this.
   const enableKeywordHighlighting = params.enableKeywordHighlighting !== false && params.enableKeywordHighlighting !== 'false';
-  let keywordHighColor = hexToASSColor(params.keywordColorHigh || '#EF4444', '#EF4444');
-  let keywordMediumColor = hexToASSColor(params.keywordColorMedium || '#FB923C', '#FB923C');
+  let keywordColor = hexToASSColor(params.keywordColor || '#EF4444', '#EF4444');
 
   let outlineColor = params.outlineColor
     ? hexToASSColor(params.outlineColor, profile.colors.outlineHex)
@@ -970,8 +898,7 @@ export function getASSStyleFromConfig(params = {}) {
   primaryColor = withAssAlpha(primaryColor, textOpacityAlpha);
   secondaryColor = withAssAlpha(secondaryColor, textOpacityAlpha);
   outlineColor = withAssAlpha(outlineColor, textOpacityAlpha);
-  keywordHighColor = withAssAlpha(keywordHighColor, textOpacityAlpha);
-  keywordMediumColor = withAssAlpha(keywordMediumColor, textOpacityAlpha);
+  keywordColor = withAssAlpha(keywordColor, textOpacityAlpha);
 
   if (shadowParams.backgroundOpacity != null) {
     backColor = withAssAlpha(backColor, opacityToAssAlpha(shadowParams.backgroundOpacity));
@@ -1024,8 +951,7 @@ export function getASSStyleFromConfig(params = {}) {
     animationMode,
     posOverrideTag,
     enableKeywordHighlighting,
-    keywordHighColor,
-    keywordMediumColor,
+    keywordColor,
     keywordDriven: !!profile.keywordDriven,
     keywordStyleConfig,
     activeHighlightEnabled,
@@ -1175,8 +1101,7 @@ export function getCSSPreviewFromConfig(params = {}) {
 
   const highlightColor = applyOpacityToColor(params.activeWordColor || profile.cssHighlightColor || profile.colors.primaryHex, textOpacity);
   const inactiveColor = applyOpacityToColor(params.inactiveWordColor || profile.cssInactiveColor || profile.colors.secondaryHex, textOpacity);
-  const keywordColorHigh = applyOpacityToColor(params.keywordColorHigh || '#EF4444', textOpacity);
-  const keywordColorMedium = applyOpacityToColor(params.keywordColorMedium || '#FB923C', textOpacity);
+  const keywordColor = applyOpacityToColor(params.keywordColor || '#EF4444', textOpacity);
 
   // Background opacity is independent of text opacity: only applied when the
   // slider is explicitly touched, so every preset's own baked box alpha (or
@@ -1224,8 +1149,7 @@ export function getCSSPreviewFromConfig(params = {}) {
     popScale,
     wordSpacingPx: numericWordSpacing,
     enableKeywordHighlighting,
-    keywordColorHigh,
-    keywordColorMedium,
+    keywordColor,
     keywordDriven: !!profile.keywordDriven,
     keywordStyleConfig,
     activeHighlightEnabled,

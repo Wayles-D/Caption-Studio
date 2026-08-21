@@ -465,15 +465,11 @@
                         </div>
 
                         <div class="settings-group">
-                            <label class="group-label">Keyword Colors</label>
+                            <label class="group-label">Keyword Color</label>
                             <div class="color-picker-grid">
                                 <div class="color-picker-item">
-                                    <label id="label-color-keyword-high">High</label>
-                                    <button type="button" class="color-swatch-trigger" id="color-keyword-high" data-color-key="keywordColorHigh" aria-haspopup="true" aria-labelledby="label-color-keyword-high"></button>
-                                </div>
-                                <div class="color-picker-item">
-                                    <label id="label-color-keyword-medium">Medium</label>
-                                    <button type="button" class="color-swatch-trigger" id="color-keyword-medium" data-color-key="keywordColorMedium" aria-haspopup="true" aria-labelledby="label-color-keyword-medium"></button>
+                                    <label id="label-color-keyword">Color</label>
+                                    <button type="button" class="color-swatch-trigger" id="color-keyword" data-color-key="keywordColor" aria-haspopup="true" aria-labelledby="label-color-keyword"></button>
                                 </div>
                             </div>
                         </div>
@@ -502,8 +498,8 @@
                         </div>
 
                         <div class="settings-group">
-                            <label for="select-keyword-primary-font" class="group-label">Primary Font</label>
-                            <select id="select-keyword-primary-font" class="select-control">
+                            <label for="select-keyword-font" class="group-label">Keyword Font</label>
+                            <select id="select-keyword-font" class="select-control">
                                 <option value="">Preset Default</option>
                                 <option value="Poppins">Poppins</option>
                                 <option value="PP Editorial New">PP Editorial New</option>
@@ -516,21 +512,8 @@
                         </div>
 
                         <div class="settings-group">
-                            <label for="select-keyword-medium-font" class="group-label">Medium Font</label>
-                            <select id="select-keyword-medium-font" class="select-control">
-                                <option value="">Preset Default</option>
-                                <option value="Caveat">Caveat</option>
-                                <option value="Kalam">Kalam</option>
-                                <option value="Poppins">Poppins</option>
-                                <option value="PP Editorial New">PP Editorial New</option>
-                                <option value="Montserrat">Montserrat</option>
-                                <option value="Inter">Inter</option>
-                            </select>
-                        </div>
-
-                        <div class="settings-group">
-                            <label for="select-keyword-primary-weight" class="group-label">Primary Weight</label>
-                            <select id="select-keyword-primary-weight" class="select-control">
+                            <label for="select-keyword-weight" class="group-label">Keyword Weight</label>
+                            <select id="select-keyword-weight" class="select-control">
                                 <option value="">Preset Default</option>
                                 <option value="400">Regular (400)</option>
                                 <option value="600">Semi-Bold (600)</option>
@@ -541,35 +524,16 @@
                         </div>
 
                         <div class="settings-group">
-                            <label for="select-keyword-medium-weight" class="group-label">Medium Weight</label>
-                            <select id="select-keyword-medium-weight" class="select-control">
-                                <option value="">Preset Default</option>
-                                <option value="400">Regular (400)</option>
-                                <option value="600">Semi-Bold (600)</option>
-                                <option value="700">Bold (700)</option>
-                                <option value="800">Extra-Bold (800)</option>
-                            </select>
-                        </div>
-
-                        <div class="settings-group">
                             <div class="label-justify">
-                                <span class="group-label">Primary Scale</span>
-                                <span class="group-value-badge" id="val-keyword-primary-scale">120%</span>
+                                <span class="group-label">Keyword Scale</span>
+                                <span class="group-value-badge" id="val-keyword-scale">120%</span>
                             </div>
-                            <input type="range" id="input-keyword-primary-scale" min="100" max="150" value="120" class="slider-control">
+                            <input type="range" id="input-keyword-scale" min="100" max="150" value="120" class="slider-control">
                         </div>
 
                         <div class="settings-group">
-                            <div class="label-justify">
-                                <span class="group-label">Medium Scale</span>
-                                <span class="group-value-badge" id="val-keyword-medium-scale">105%</span>
-                            </div>
-                            <input type="range" id="input-keyword-medium-scale" min="100" max="150" value="105" class="slider-control">
-                        </div>
-
-                        <div class="settings-group">
-                            <label for="select-keyword-primary-animation" class="group-label">Primary Animation</label>
-                            <select id="select-keyword-primary-animation" class="select-control">
+                            <label for="select-keyword-animation" class="group-label">Keyword Animation</label>
+                            <select id="select-keyword-animation" class="select-control">
                                 <option value="pop">Pop</option>
                                 <option value="none">None</option>
                             </select>
@@ -578,7 +542,7 @@
                         <div class="settings-group">
                             <div class="label-justify">
                                 <span class="group-label">Keyword Shadow</span>
-                                <label class="theme-toggle-label" title="Toggle a soft shadow on high-importance keyword words">
+                                <label class="theme-toggle-label" title="Toggle a soft shadow on keyword words">
                                     <input type="checkbox" id="toggle-keyword-shadow">
                                     <span class="theme-slider"></span>
                                 </label>
@@ -588,7 +552,7 @@
                         <div class="settings-group">
                             <div class="label-justify">
                                 <span class="group-label">Keyword Outline</span>
-                                <label class="theme-toggle-label" title="Toggle an outline on high-importance keyword words">
+                                <label class="theme-toggle-label" title="Toggle an outline on keyword words">
                                     <input type="checkbox" id="toggle-keyword-outline">
                                     <span class="theme-slider"></span>
                                 </label>

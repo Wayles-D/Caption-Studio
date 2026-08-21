@@ -128,16 +128,13 @@ function buildShadowOverrideTag(options) {
 }
 
 /**
- * Builds the inline weight/style override tags for a keyword word, based on
- * its importance. Mirrors the frontend preview's fontWeight/fontStyle rule
- * exactly: high importance -> bold, medium importance -> italic. Applied
- * regardless of active/inactive state, and regardless of animation mode.
+ * Builds the inline weight override tag for a keyword word: bold. Mirrors the
+ * frontend preview's fontWeight rule exactly. Applied regardless of
+ * active/inactive state, and regardless of animation mode.
  */
 function toKeywordStyleTags(word, enableKeywordHighlighting) {
   if (!enableKeywordHighlighting || !word || !word.isKeyword) return '';
-  if (word.importance === 'high') return '\\b1';
-  if (word.importance === 'medium') return '\\i1';
-  return '';
+  return '\\b1';
 }
 
 /**
@@ -202,7 +199,7 @@ function buildKeywordDrivenWordBlock(word, wordText, metadata, baselineOutlineSi
  */
 function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, options) {
   const {
-    animationMode, popScale, primaryColor, secondaryColor, enableKeywordHighlighting, keywordHighColor, keywordMediumColor,
+    animationMode, popScale, primaryColor, secondaryColor, enableKeywordHighlighting, keywordColor,
     keywordDriven, keywordStyleConfig, activeHighlightEnabled, outlineSize, shadowSize,
     primaryColorHex, secondaryColorHex, textOpacity, baseFontFamily, baseFontWeight
   } = options;
@@ -243,7 +240,7 @@ function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, opt
 
     let fillColor = isActive ? primaryColor : secondaryColor;
     if (isActiveKeyword) {
-      fillColor = word.importance === 'high' ? keywordHighColor : keywordMediumColor;
+      fillColor = keywordColor;
     }
 
     const colorTags = toInlineColorTags(fillColor, 1);
@@ -271,7 +268,7 @@ function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, opt
  */
 function generateWordModeDialogueEvents(phrase, options) {
   const {
-    textCase, posOverrideTag, primaryColor, enableKeywordHighlighting, keywordHighColor, keywordMediumColor,
+    textCase, posOverrideTag, primaryColor, enableKeywordHighlighting, keywordColor,
     keywordDriven, keywordStyleConfig, activeHighlightEnabled, outlineSize, shadowSize,
     primaryColorHex, textOpacity, baseFontFamily, baseFontWeight
   } = options;
@@ -303,7 +300,7 @@ function generateWordModeDialogueEvents(phrase, options) {
       payload += buildKeywordDrivenWordBlock(w, wordText, metadata, outlineSize || 0, shadowSize || 0, wordAlphaHex);
     } else {
       const isKeyword = enableKeywordHighlighting && w.isKeyword;
-      const fillColor = isKeyword ? (w.importance === 'high' ? keywordHighColor : keywordMediumColor) : primaryColor;
+      const fillColor = isKeyword ? keywordColor : primaryColor;
       const colorTags = toInlineColorTags(fillColor, 1);
       const styleTags = toKeywordStyleTags(w, enableKeywordHighlighting);
       payload += `{${colorTags}${styleTags}}${wordText}`;
@@ -419,8 +416,7 @@ export function generateASSDialogueLine(phrase, options = {}) {
   const secondaryColor = (typeof options === 'object' && options.secondaryColor) || DEFAULT_SECONDARY_COLOR;
   const posOverrideTag = (typeof options === 'object' && options.posOverrideTag) || null;
   const enableKeywordHighlighting = typeof options === 'object' && options.enableKeywordHighlighting !== false;
-  const keywordHighColor = (typeof options === 'object' && options.keywordHighColor) || DEFAULT_PRIMARY_COLOR;
-  const keywordMediumColor = (typeof options === 'object' && options.keywordMediumColor) || DEFAULT_PRIMARY_COLOR;
+  const keywordColor = (typeof options === 'object' && options.keywordColor) || DEFAULT_PRIMARY_COLOR;
   const shadowColor = (typeof options === 'object' && options.shadowColor) || null;
   const shadowOffsetX = (typeof options === 'object' && options.shadowOffsetX != null) ? options.shadowOffsetX : null;
   const shadowOffsetY = (typeof options === 'object' && options.shadowOffsetY != null) ? options.shadowOffsetY : null;
@@ -441,7 +437,7 @@ export function generateASSDialogueLine(phrase, options = {}) {
 
   const resolvedOptions = {
     textCase, animationMode, popScale, primaryColor, secondaryColor,
-    posOverrideTag, enableKeywordHighlighting, keywordHighColor, keywordMediumColor,
+    posOverrideTag, enableKeywordHighlighting, keywordColor,
     shadowColor, shadowOffsetX, shadowOffsetY,
     primaryColorHex, secondaryColorHex, keywordDriven, keywordStyleConfig,
     activeHighlightEnabled, outlineSize, shadowSize, textOpacity,

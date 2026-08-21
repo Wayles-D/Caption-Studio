@@ -71,7 +71,6 @@ export function groupWordsToPhrases(whisperData) {
       end,
       wordIndex: i,
       isKeyword: !!w.isKeyword,
-      importance: w.importance || null,
       confidence: w.confidence ?? null,
       source: w.source || null
     });
