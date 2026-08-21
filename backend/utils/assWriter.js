@@ -1,4 +1,4 @@
-import { getASSStyleFromConfig, applyCaseTransform, resolveWordStyleMetadata, hexToASSColor, opacityToAssAlpha } from '../../shared/captionConfig.js';
+import { getASSStyleFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, hexToASSColor, opacityToAssAlpha } from '../../shared/captionConfig.js';
 
 /**
  * Formats a duration in seconds to the standard ASS timestamp format: H:MM:SS.cs
@@ -269,7 +269,7 @@ function buildStaticHighlightText(words, wordTexts, breakIndices, activeIdx, opt
 function generateWordModeDialogueEvents(phrase, options) {
   const {
     textCase, posOverrideTag, primaryColor, enableKeywordHighlighting, keywordColor,
-    keywordDriven, keywordStyleConfig, activeHighlightEnabled, outlineSize, shadowSize,
+    keywordDriven, keywordStyleConfig, keywordTextCase, activeHighlightEnabled, outlineSize, shadowSize,
     primaryColorHex, textOpacity, baseFontFamily, baseFontWeight
   } = options;
 
@@ -278,7 +278,8 @@ function generateWordModeDialogueEvents(phrase, options) {
   phrase.words.forEach((w) => {
     if (w.end - w.start < 0.001) return; // skip degenerate zero-length words
 
-    const wordText = applyCaseTransform((w.word || w.text || '').trim(), textCase, true);
+    const caseForWord = resolveWordTextCase(!!w.isKeyword, enableKeywordHighlighting, textCase, keywordTextCase);
+    const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, true);
     let payload = buildShadowOverrideTag(options);
 
     if (keywordDriven) {
@@ -323,12 +324,13 @@ function generateWordModeDialogueEvents(phrase, options) {
  * hard-swap highlight behavior in the preview; only the scale tag differs.
  */
 function generateStaticHighlightDialogueEvents(phrase, options) {
-  const { textCase, posOverrideTag } = options;
+  const { textCase, posOverrideTag, enableKeywordHighlighting, keywordTextCase } = options;
   const breakIndices = new Set(phrase.breakAfterIndices || []);
 
   const wordTexts = phrase.words.map((w, idx) => {
     const raw = (w.word || w.text || '').trim();
-    return applyCaseTransform(raw, textCase, idx === 0);
+    const caseForWord = resolveWordTextCase(!!w.isKeyword, enableKeywordHighlighting, textCase, keywordTextCase);
+    return applyCaseTransform(raw, caseForWord, idx === 0);
   });
 
   const clamp = (t) => Math.max(phrase.start, Math.min(phrase.end, t));
@@ -359,7 +361,7 @@ function generateStaticHighlightDialogueEvents(phrase, options) {
  * only mode where words are deliberately revealed/hidden over time.
  */
 function generateTypewriterDialogueLine(phrase, options) {
-  const { textCase, posOverrideTag, enableKeywordHighlighting } = options;
+  const { textCase, posOverrideTag, enableKeywordHighlighting, keywordTextCase } = options;
   const breakIndices = new Set(phrase.breakAfterIndices || []);
 
   const startStr = formatASSTimestamp(phrase.start);
@@ -372,7 +374,8 @@ function generateTypewriterDialogueLine(phrase, options) {
     const delay = Math.max(0, Math.round((w.start - lastTime) * 100));
     const duration = Math.max(1, Math.round((w.end - w.start) * 100));
 
-    const wordText = applyCaseTransform((w.word || w.text || '').trim(), textCase, idx === 0);
+    const caseForWord = resolveWordTextCase(!!w.isKeyword, enableKeywordHighlighting, textCase, keywordTextCase);
+    const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, idx === 0);
 
     const isFirstWord = idx === 0;
     const isLineBreak = breakIndices.has(idx - 1);
@@ -427,6 +430,7 @@ export function generateASSDialogueLine(phrase, options = {}) {
   const secondaryColorHex = (typeof options === 'object' && options.secondaryColorHex) || null;
   const keywordDriven = typeof options === 'object' && !!options.keywordDriven;
   const keywordStyleConfig = (typeof options === 'object' && options.keywordStyleConfig) || null;
+  const keywordTextCase = (typeof options === 'object' && options.keywordTextCase) || null;
   const activeHighlightEnabled = typeof options === 'object' ? options.activeHighlightEnabled !== false : true;
   const outlineSize = (typeof options === 'object' && options.outlineSize) || 0;
   const shadowSize = (typeof options === 'object' && options.shadowSize) || 0;
@@ -439,7 +443,7 @@ export function generateASSDialogueLine(phrase, options = {}) {
     textCase, animationMode, popScale, primaryColor, secondaryColor,
     posOverrideTag, enableKeywordHighlighting, keywordColor,
     shadowColor, shadowOffsetX, shadowOffsetY,
-    primaryColorHex, secondaryColorHex, keywordDriven, keywordStyleConfig,
+    primaryColorHex, secondaryColorHex, keywordDriven, keywordStyleConfig, keywordTextCase,
     activeHighlightEnabled, outlineSize, shadowSize, textOpacity,
     baseFontFamily, baseFontWeight
   };
@@ -516,11 +520,12 @@ export function generateUnifiedShadowASSHeader(resolvedStyle = {}) {
  * silhouette of the whole phrase for its entire on-screen duration, not a
  * per-word-timed highlight like the real caption track.
  */
-function buildFlatPhraseText(phrase, textCase) {
+function buildFlatPhraseText(phrase, textCase, enableKeywordHighlighting, keywordTextCase) {
   const breakIndices = new Set(phrase.breakAfterIndices || []);
   return phrase.words.map((w, idx) => {
     const raw = (w.word || w.text || '').trim();
-    const wordText = applyCaseTransform(raw, textCase, idx === 0);
+    const caseForWord = resolveWordTextCase(!!w.isKeyword, enableKeywordHighlighting, textCase, keywordTextCase);
+    const wordText = applyCaseTransform(raw, caseForWord, idx === 0);
     const isLineBreak = breakIndices.has(idx - 1);
     const isFirstWord = idx === 0;
     const prefixSpace = (isFirstWord || isLineBreak) ? '' : ' ';
@@ -536,12 +541,12 @@ function buildFlatPhraseText(phrase, textCase) {
  * `filter: drop-shadow(...)` silhouette.
  *
  * @param {object} phrase - Unified phrase (start, end, words, breakAfterIndices).
- * @param {object} options - { textCase, posOverrideTag }.
+ * @param {object} options - { textCase, posOverrideTag, enableKeywordHighlighting, keywordTextCase }.
  */
 export function generateUnifiedShadowDialogueLine(phrase, options = {}) {
   const textCase = options.textCase || 'uppercase';
   const posOverrideTag = options.posOverrideTag || '';
-  const text = buildFlatPhraseText(phrase, textCase);
+  const text = buildFlatPhraseText(phrase, textCase, options.enableKeywordHighlighting, options.keywordTextCase || null);
   return `Dialogue: 0,${formatASSTimestamp(phrase.start)},${formatASSTimestamp(phrase.end)},Shadow,,0,0,0,,${posOverrideTag}${text}`;
 }
 
@@ -553,7 +558,7 @@ export function generateUnifiedShadowDialogueLine(phrase, options = {}) {
  * instead of one event per whole phrase.
  *
  * @param {object} phrase - Unified phrase (words array with per-word start/end).
- * @param {object} options - { textCase, posOverrideTag }.
+ * @param {object} options - { textCase, posOverrideTag, enableKeywordHighlighting, keywordTextCase }.
  * @returns {string} Newline-joined ASS Dialogue Event lines, one per word.
  */
 export function generateUnifiedShadowWordDialogueEvents(phrase, options = {}) {
@@ -563,7 +568,8 @@ export function generateUnifiedShadowWordDialogueEvents(phrase, options = {}) {
   return phrase.words
     .filter((w) => w.end - w.start >= 0.001)
     .map((w) => {
-      const wordText = applyCaseTransform((w.word || w.text || '').trim(), textCase, true);
+      const caseForWord = resolveWordTextCase(!!w.isKeyword, options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
+      const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, true);
       return `Dialogue: 0,${formatASSTimestamp(w.start)},${formatASSTimestamp(w.end)},Shadow,,0,0,0,,${posOverrideTag}${wordText}`;
     })
     .join('\n');

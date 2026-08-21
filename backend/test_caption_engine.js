@@ -149,7 +149,7 @@ const mockEditedWords = [
 await generateSubtitleFromTranscript('', tempSubPath, {
   words: mockEditedWords,
   styles: {
-    preset: 'gradient-glow',
+    preset: 'caps-white',
     fontFamily: 'Bebas Neue',
     fontSize: '20',
     animationMode: 'pop',
@@ -201,7 +201,7 @@ console.log('✓ Fault-Tolerant Subtitle Timing Sanitation successfully verified
 // 6. Test Creator Profiles & WYSIWYG Single Source of Truth Alignment
 console.log('\n[Test 6] Creator Profiles & WYSIWYG Single Source of Truth Schema Alignment');
 const testStyles = {
-  preset: 'gradient-glow',
+  preset: 'caps-white',
   fontFamily: 'Outfit',
   fontSize: '18',
   position: 'top',

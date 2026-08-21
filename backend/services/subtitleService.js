@@ -70,6 +70,7 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
     shadowSize: resolvedStyle.shadowSize,
     keywordDriven: resolvedStyle.keywordDriven,
     keywordStyleConfig: resolvedStyle.keywordStyleConfig,
+    keywordTextCase: resolvedStyle.keywordTextCase,
     activeHighlightEnabled: resolvedStyle.activeHighlightEnabled,
     textOpacity: resolvedStyle.textOpacity,
     baseFontFamily: resolvedStyle.fontName,
@@ -145,7 +146,9 @@ export async function generateUnifiedShadowSubtitle(transcriptPath, shadowSubtit
   const shadowHeader = generateUnifiedShadowASSHeader(resolvedStyle);
   const dialogueOptions = {
     textCase: options.styles?.textCase || 'uppercase',
-    posOverrideTag: resolvedStyle.posOverrideTag || null
+    posOverrideTag: resolvedStyle.posOverrideTag || null,
+    enableKeywordHighlighting: resolvedStyle.enableKeywordHighlighting !== false,
+    keywordTextCase: resolvedStyle.keywordTextCase
   };
   // Word Mode's unified shadow silhouettes one word at a time (matching its
   // real caption track), instead of the whole phrase for its whole duration.

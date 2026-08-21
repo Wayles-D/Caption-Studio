@@ -2,7 +2,7 @@
  * Center Preview Workspace Component for Caption Studio
  */
 import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from '../state.js';
-import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, applyOpacityToColor } from '../../../shared/captionConfig.js';
+import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, applyOpacityToColor } from '../../../shared/captionConfig.js';
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
@@ -288,7 +288,8 @@ export function syncVideoSubtitles() {
   const wordElements = activePhrase.words.map((w, idx) => {
     const isWordActive = currentTime >= w.start && currentTime <= w.end;
     const isPastWord = currentTime > w.end;
-    const wordText = applyCaseTransform(w.word || w.text || '', appState.textCase, idx === 0);
+    const caseForWord = resolveWordTextCase(!!w.isKeyword, keywordsEnabled, appState.textCase, cssConfig.keywordTextCase);
+    const wordText = applyCaseTransform(w.word || w.text || '', caseForWord, idx === 0);
 
     const wordElement = document.createElement('span');
 
@@ -411,7 +412,8 @@ function renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsTex
 
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const keywordsEnabled = appState.enableKeywordHighlighting;
-  const wordText = applyCaseTransform(activeWord.word || activeWord.text || '', appState.textCase, true);
+  const caseForWord = resolveWordTextCase(!!activeWord.isKeyword, keywordsEnabled, appState.textCase, cssConfig.keywordTextCase);
+  const wordText = applyCaseTransform(activeWord.word || activeWord.text || '', caseForWord, true);
 
   const wordElement = document.createElement('span');
   wordElement.className = 'word-unit';

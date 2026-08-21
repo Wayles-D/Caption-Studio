@@ -122,37 +122,6 @@ export const CREATOR_PROFILES = {
     cssHighlightColor: '#FEF08A',
     cssInactiveColor: '#FFFFFF'
   },
-  'gradient-glow': {
-    id: 'gradient-glow',
-    name: 'Gradient Glow',
-    fontFamily: 'Bebas Neue',
-    fontWeight: '900',
-    fontSize: 16,
-    defaultAnimationMode: 'karaoke',
-    colors: {
-      primaryHex: '#38BDF8',
-      secondaryHex: '#FFFFFF',
-      outlineHex: '#3F003F',
-      backHex: '#FF00FF',
-      shadowHex: '#818CF8',
-      assPrimary: '&H00FFFF00',    // Active Cyan
-      assSecondary: '&H00F88C81',  // Inactive Soft Blue-Purple
-      assOutline: '&H003F003F',    // Dark Purple
-      assBack: '&H00FF00FF'       // Purple Glow
-    },
-    outlineSize: 7,
-    shadowSize: 3,
-    borderStyle: 1,
-    boxPaddingPx: 0,
-    wordSpacing: '0.2em',
-    lineSpacing: '1.2',
-    phraseSpacing: '0 4px',
-    useNativeStroke: false,
-    cssBackground: 'transparent',
-    cssBorderRadius: '0',
-    cssHighlightColor: '#38BDF8',
-    cssInactiveColor: '#818CF8'
-  },
   // Internal id kept generic (not the literal display name) so future
   // creator-style packs (e.g. a "V2") can be added as sibling presets without
   // renaming this one — see `name` below for the UI-facing label ("WAYLES").
@@ -358,6 +327,11 @@ export const CREATOR_PROFILES = {
     cssInactiveColor: '#FFFFFF',
     keywordDriven: true,
     autoFontFamilyOnSelect: 'Poppins',
+    // Keyword words always render lowercase on this preset, regardless of the
+    // caption's global text-case setting — see resolveWordTextCase, which
+    // both the CSS preview and the ASS exporter call per word so this can
+    // never drift between the two.
+    keywordTextCase: 'lowercase',
     keywordStyle: {
       fontFamily: 'PP Editorial New',
       face: 'ultraboldItalic',
@@ -422,6 +396,25 @@ export function applyCaseTransform(text, textCase, isSentenceStart = true) {
         ? text.charAt(0).toUpperCase() + text.slice(1).toLowerCase()
         : text.toLowerCase();
   }
+}
+
+/**
+ * Resolves which text-case a single word should use, letting a preset force
+ * its own casing for keyword words (e.g. Poppins + Editorial's keywords
+ * always render lowercase) regardless of the caption's global text-case
+ * setting. Single place both the CSS preview and the ASS exporter call this
+ * from, per word, so the override can never drift between the two.
+ *
+ * @param {boolean} isKeyword - Whether this word is a keyword.
+ * @param {boolean} keywordsEnabled - Whether AI keyword highlighting is on.
+ * @param {string} textCase - The caption's global text-case setting.
+ * @param {string|null} keywordTextCase - The active preset's own forced
+ *   keyword case override (profile.keywordTextCase), if any.
+ * @returns {string} The text-case to apply to this specific word.
+ */
+export function resolveWordTextCase(isKeyword, keywordsEnabled, textCase, keywordTextCase) {
+  if (keywordsEnabled && isKeyword && keywordTextCase) return keywordTextCase;
+  return textCase;
 }
 
 /**
@@ -954,6 +947,7 @@ export function getASSStyleFromConfig(params = {}) {
     keywordColor,
     keywordDriven: !!profile.keywordDriven,
     keywordStyleConfig,
+    keywordTextCase: profile.keywordTextCase || null,
     activeHighlightEnabled,
     textOpacity: shadowParams.textOpacity,
     shadowMode,
@@ -1152,6 +1146,7 @@ export function getCSSPreviewFromConfig(params = {}) {
     keywordColor,
     keywordDriven: !!profile.keywordDriven,
     keywordStyleConfig,
+    keywordTextCase: profile.keywordTextCase || null,
     activeHighlightEnabled,
     overlay,
     text: {
