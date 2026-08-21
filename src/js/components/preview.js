@@ -199,6 +199,17 @@ export function applyCSSPreviewStyles() {
   const cssConfig = getCSSPreviewFromConfig(getStyleParams());
 
   loadLocalFontFace(appState.fontFamily, 'regular');
+  // The ASS export selects a font's real Bold face via fontconfig whenever
+  // the resolved profile.fontWeight is heavy (see getASSStyleFromConfig's
+  // `fontWeightNum >= 600 ? -1 : 0`) — mirror that here so the preview
+  // registers that SAME real bold @font-face (e.g. Poppins-Bold.ttf) instead
+  // of leaving the browser to synthesize/thicken the Regular face, which can
+  // visibly differ from the genuine bold glyphs the export burns in. Safe
+  // no-op for fonts without a distinct bold file: resolveFontFace's own
+  // fallback just returns that font's 'regular' face again (already cached).
+  if ((parseInt(cssConfig.profile?.fontWeight, 10) || 0) >= 600) {
+    loadLocalFontFace(appState.fontFamily, 'bold');
+  }
   loadKeywordDrivenFontFaces(cssConfig);
 
   // Apply Overlay Styles

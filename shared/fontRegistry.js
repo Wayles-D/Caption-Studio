@@ -67,7 +67,19 @@ export const FONT_REGISTRY = {
       // own metadata, is a DISTINCT family ("PP Editorial New Ultrabold"), not
       // a Bold sub-style of "PP Editorial New", so it needs its own familyName
       // rather than a bold:true flag on the base family.
-      bold: { file: 'PPEditorialNew-Ultrabold-BF644b21500840c.otf', familyName: 'PP Editorial New Ultrabold' }
+      bold: { file: 'PPEditorialNew-Ultrabold-BF644b21500840c.otf', familyName: 'PP Editorial New Ultrabold' },
+      // Verified via the file's own 'name' table (nameID 1/2, not the
+      // typographic nameID 16/17): this file's Family is "PP Editorial New
+      // Ultrabold" with Subfamily "Italic" — the SAME Family the plain
+      // Ultrabold file above registers (Subfamily "Regular"), just a
+      // different style within it. Registering it that way (rather than
+      // reusing the unrelated 'italic' face's family above, which is a
+      // different family altogether and already used by WAYLES PEN's medium
+      // keyword tier — left untouched) lets libass/fontconfig resolve
+      // `\fn PP Editorial New Ultrabold \i1` to this exact file via normal
+      // family+style matching, for presets that need a genuine "Ultra Bold
+      // Italic" face distinct from the existing 'italic' face.
+      ultraboldItalic: { file: 'PPEditorialNew-UltraboldItalic-BF644b214faef01.otf', familyName: 'PP Editorial New Ultrabold', italic: true }
     }
   },
   montserrat: {

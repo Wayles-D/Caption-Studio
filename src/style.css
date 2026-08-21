@@ -582,6 +582,7 @@ input:checked + .theme-slider::before {
 .signature-v1-preview { color: #FFD60A; font-family: 'Poppins', sans-serif; text-shadow: 1px 1px 3px rgba(0,0,0,0.6); }
 .wayles-poppins-preview { color: #FFFFFF; font-family: 'Poppins', sans-serif; font-weight: 700; text-shadow: 1px 1px 3px rgba(0,0,0,0.6); }
 .wayles-pen-preview { color: #FFFFFF; font-family: 'PP Editorial New', serif; font-style: italic; text-shadow: 1px 1px 3px rgba(0,0,0,0.6); }
+.poppins-editorial-preview { color: #FFFFFF; font-family: 'Poppins', sans-serif; font-weight: 700; text-shadow: 1px 1px 3px rgba(0,0,0,0.6); }
 
 /* Custom Color Picker: swatch triggers + popover */
 .color-picker-grid {

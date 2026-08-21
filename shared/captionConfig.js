@@ -349,6 +349,78 @@ export const CREATOR_PROFILES = {
         outlineByDefault: false
       }
     }
+  },
+  // Poppins + Editorial: normal words render in genuine Poppins Bold; any
+  // keyword (high OR medium importance alike — deliberately ONE keyword
+  // treatment, not WAYLES's two-tier high/italic-medium split) switches to PP
+  // Editorial New's Ultra Bold Italic face. Unlike the WAYLES-family presets
+  // above, disableActiveHighlightByDefault is NOT set: the base active/
+  // inactive highlight system stays ON, so the currently-spoken word (not
+  // just keywords) still gets the "pop" scale-up below — that's what gives
+  // ordinary words their share of the layered/overlapping feel, with
+  // keywords popping further via their own larger fontScale on top of it.
+  // The overlap itself is just the existing `\fscx\fscy`/CSS `transform:
+  // scale()` pop mechanism (already WYSIWYG-proven, unchanged) scaled up
+  // enough that a popped glyph's rendered box visually encroaches into the
+  // previous word's trailing space — since that word is painted later in
+  // the text stream, it naturally renders on top of the overlap, with no
+  // new z-order/positioning system needed in either renderer.
+  'poppins-editorial': {
+    id: 'poppins-editorial',
+    name: 'Poppins + Editorial',
+    fontFamily: 'Poppins',
+    fontWeight: '700',
+    fontSize: 14,
+    defaultAnimationMode: 'pop',
+    colors: {
+      primaryHex: '#FFFFFF',
+      secondaryHex: '#FFFFFF',
+      outlineHex: '#000000',
+      backHex: 'transparent',
+      shadowHex: '#000000',
+      assPrimary: '&H00FFFFFF',
+      assSecondary: '&H00FFFFFF',
+      assOutline: '&H00000000',
+      assBack: '&H00000000'
+    },
+    outlineSize: 3,
+    shadowSize: 4,
+    borderStyle: 1,
+    boxPaddingPx: 0,
+    wordSpacing: '0.22em',
+    lineSpacing: '1.25',
+    phraseSpacing: '0 4px',
+    useNativeStroke: true,
+    cssBackground: 'transparent',
+    cssBorderRadius: '0',
+    cssHighlightColor: '#FFFFFF',
+    cssInactiveColor: '#FFFFFF',
+    keywordDriven: true,
+    autoFontFamilyOnSelect: 'Poppins',
+    keywordStyle: {
+      high: {
+        fontFamily: 'PP Editorial New',
+        face: 'ultraboldItalic',
+        fontWeight: '800',
+        fontScale: 1.22,
+        colorMode: 'always',
+        defaultColorHex: '#EF4444',
+        animation: 'pop',
+        shadowByDefault: false,
+        outlineByDefault: false
+      },
+      medium: {
+        fontFamily: 'PP Editorial New',
+        face: 'ultraboldItalic',
+        fontWeight: '800',
+        fontScale: 1.14,
+        colorMode: 'always',
+        defaultColorHex: '#FB923C',
+        animation: 'pop',
+        shadowByDefault: false,
+        outlineByDefault: false
+      }
+    }
   }
 };
 
