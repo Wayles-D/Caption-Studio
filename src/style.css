@@ -2,34 +2,47 @@
    Caption Studio — Modern 3-Column Desktop Editor CSS Design System
    ========================================================================== */
 
-/* 1. Design System Tokens & CSS Variables */
+/* 1. Design System Tokens & CSS Variables
+   Warm charcoal-and-terracotta theme. All UI chrome colors are defined once
+   here — do not hardcode hex values inline in components. (This palette is
+   for the app's own UI chrome only; caption/text styling in the video
+   preview is a separate, user-configurable system — see captionConfig.js.) */
 :root {
-  --bg-app: #080C14;
-  --bg-toolbar: rgba(15, 23, 42, 0.85);
-  --bg-sidebar: #0F172A;
-  --bg-card: rgba(30, 41, 59, 0.65);
-  --bg-card-hover: rgba(30, 41, 59, 0.9);
-  --bg-input: rgba(15, 23, 42, 0.7);
-  
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-color-hover: rgba(255, 255, 255, 0.18);
-  --accent-color: #38BDF8;
-  --accent-glow: rgba(56, 189, 248, 0.25);
-  --accent-gradient: linear-gradient(135deg, #38BDF8 0%, #818CF8 100%);
-  
-  --text-primary: #F8FAFC;
-  --text-secondary: #94A3B8;
-  --text-muted: #64748B;
-  
+  --bg-app: #1A1613;
+  --bg-toolbar: rgba(33, 28, 23, 0.85);
+  --bg-sidebar: #211C17;
+  --bg-card: #2A241E;
+  --bg-card-hover: #332C24;
+  --bg-input: #2A241E;
+
+  --border-color: #3A332B;
+  --border-color-hover: #4A4136;
+  --accent-color: #D97757;
+  --accent-hover: #C2653F;
+  --accent-glow: rgba(217, 119, 87, 0.25);
+  --accent-gradient: #D97757;
+  --text-on-accent: #1A1613;
+  --accent-wash-bg: #3A2A20;
+  --accent-wash-text: #E8A587;
+
+  /* Status — kept separate from the brand accent; reserved for "ready/live"
+     type indicators only ("Ready" tag, "LIVE WYSIWYG" dot). */
+  --status: #8FA876;
+  --status-wash-bg: rgba(143, 168, 118, 0.12);
+
+  --text-primary: #F0EAE1;
+  --text-secondary: #B8AC9C;
+  --text-muted: #8A7F70;
+
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-phone: 28px;
-  
+
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-glow: 0 0 20px rgba(56, 189, 248, 0.15);
-  
+  --shadow-glow: 0 0 20px rgba(217, 119, 87, 0.15);
+
   --font-main: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-geist: 'Geist', 'Inter', sans-serif;
 }
@@ -42,11 +55,19 @@ body.light-theme {
   --bg-card: #F8FAFC;
   --bg-card-hover: #F1F5F9;
   --bg-input: #E2E8F0;
-  
+
   --border-color: rgba(0, 0, 0, 0.08);
   --border-color-hover: rgba(0, 0, 0, 0.18);
-  --accent-color: #0284C7;
-  
+  --accent-color: #D97757;
+  --accent-hover: #C2653F;
+  --accent-gradient: #D97757;
+  --text-on-accent: #FFFFFF;
+  --accent-wash-bg: #F3E0D6;
+  --accent-wash-text: #B85C3D;
+
+  --status: #6B8552;
+  --status-wash-bg: rgba(107, 133, 82, 0.12);
+
   --text-primary: #0F172A;
   --text-secondary: #475569;
   --text-muted: #94A3B8;
@@ -110,7 +131,7 @@ html, body {
   font-size: 10px;
   font-weight: 800;
   background: var(--accent-gradient);
-  color: #0F172A;
+  color: var(--text-on-accent);
   padding: 2px 6px;
   border-radius: 4px;
   text-transform: uppercase;
@@ -190,9 +211,9 @@ html, body {
 }
 
 .btn-toolbar-sec {
-  background: var(--bg-card);
+  background: transparent;
   border: 1px solid var(--border-color);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
   padding: 6px 12px;
@@ -212,7 +233,7 @@ html, body {
 .btn-toolbar-pri {
   background: var(--accent-gradient);
   border: none;
-  color: #0F172A;
+  color: var(--text-on-accent);
   font-size: 12px;
   font-weight: 700;
   padding: 6px 14px;
@@ -226,7 +247,7 @@ html, body {
 }
 
 .btn-toolbar-pri:hover {
-  opacity: 0.92;
+  background: var(--accent-hover);
   transform: translateY(-1px);
 }
 
@@ -316,11 +337,11 @@ input:checked + .theme-slider::before {
 .live-indicator {
   font-size: 10px;
   font-weight: 700;
-  color: #10B981;
+  color: var(--status);
   display: flex;
   align-items: center;
   gap: 5px;
-  background: rgba(16, 185, 129, 0.1);
+  background: var(--status-wash-bg);
   padding: 3px 8px;
   border-radius: 12px;
 }
@@ -329,8 +350,8 @@ input:checked + .theme-slider::before {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: #10B981;
-  box-shadow: 0 0 8px #10B981;
+  background-color: var(--status);
+  box-shadow: 0 0 8px var(--status);
   animation: pulse 1.8s infinite;
 }
 
@@ -461,8 +482,8 @@ input:checked + .theme-slider::before {
 .group-value-badge {
   font-size: 11px;
   font-weight: 700;
-  color: var(--accent-color);
-  background: rgba(56, 189, 248, 0.1);
+  color: var(--accent-wash-text);
+  background: var(--accent-wash-bg);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -501,7 +522,7 @@ input:checked + .theme-slider::before {
   height: 16px;
   border-radius: 50%;
   background: var(--accent-color);
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 10px rgba(217, 119, 87, 0.5);
   cursor: pointer;
   transition: transform 0.15s ease;
 }
@@ -565,7 +586,7 @@ input:checked + .theme-slider::before {
 
 .preset-btn.active, .preset-btn:hover {
   border-color: var(--accent-color);
-  background: rgba(56, 189, 248, 0.08);
+  background: rgba(217, 119, 87, 0.08);
 }
 
 .preset-preview {
@@ -794,7 +815,7 @@ input:checked + .theme-slider::before {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: rgba(56, 189, 248, 0.1);
+  background: rgba(217, 119, 87, 0.1);
   color: var(--accent-color);
   display: flex;
   align-items: center;
@@ -814,15 +835,16 @@ input:checked + .theme-slider::before {
 .btn-upload {
   background: var(--accent-gradient);
   border: none;
-  color: #0F172A;
+  color: var(--text-on-accent);
   font-weight: 700;
   padding: 10px 20px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: transform 0.15s ease;
+  transition: transform 0.15s ease, background 0.15s ease;
 }
 
 .btn-upload:hover {
+  background: var(--accent-hover);
   transform: scale(1.04);
 }
 
@@ -896,7 +918,7 @@ input:checked + .theme-slider::before {
 .btn-play-toggle {
   background: var(--accent-color);
   border: none;
-  color: #0F172A;
+  color: var(--text-on-accent);
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -904,10 +926,11 @@ input:checked + .theme-slider::before {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: transform 0.15s ease;
+  transition: transform 0.15s ease, background 0.15s ease;
 }
 
 .btn-play-toggle:hover {
+  background: var(--accent-hover);
   transform: scale(1.1);
 }
 
@@ -993,8 +1016,8 @@ input:checked + .theme-slider::before {
 .status-badge {
   font-size: 10px;
   font-weight: 700;
-  background: rgba(56, 189, 248, 0.1);
-  color: var(--accent-color);
+  background: var(--status-wash-bg);
+  color: var(--status);
   padding: 2px 8px;
   border-radius: 10px;
 }
@@ -1086,11 +1109,16 @@ input:checked + .theme-slider::before {
   height: 38px;
   background: var(--accent-gradient);
   border: none;
-  color: #0F172A;
+  color: var(--text-on-accent);
   font-weight: 700;
   font-size: 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-apply-full:hover {
+  background: var(--accent-hover);
 }
 
 /* Toast Floating Notification */
@@ -1098,9 +1126,9 @@ input:checked + .theme-slider::before {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  background: #0F172A;
+  background: var(--bg-card);
   border: 1px solid var(--accent-color);
-  color: #FFFFFF;
+  color: var(--text-primary);
   padding: 10px 18px;
   border-radius: var(--radius-md);
   font-size: 13px;
