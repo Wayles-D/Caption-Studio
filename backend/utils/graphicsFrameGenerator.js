@@ -23,17 +23,20 @@ import fs from 'fs';
 import path from 'path';
 import { createCanvas } from '@napi-rs/canvas';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
-import { canDrawCaptionFrame, drawCaptionFrameForExport } from '../../shared/captionGraphics.js';
+import { canDrawCaptionFrame, isGraphicsRendererDefaultForPreset, drawCaptionFrameForExport } from '../../shared/captionGraphics.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
 /**
- * Whether the graphics renderer can handle this phrase/style combination —
- * delegates entirely to the shared canDrawCaptionFrame so the backend can
- * never diverge from the preview on which presets/modes are supported yet.
+ * Whether a job with this style should render via the graphics pipeline
+ * instead of ASS — delegates entirely to the shared
+ * isGraphicsRendererDefaultForPreset, the SAME check the frontend preview
+ * uses to decide when to switch off the CSS/DOM renderer, so export can
+ * never go live for a preset the preview hasn't (see
+ * shared/captionGraphics.js's GRAPHICS_RENDERER_DEFAULT_PRESETS).
  */
 export function canGenerateGraphicsFrames(params) {
   const cssConfig = getCSSPreviewFromConfig(params);
-  return canDrawCaptionFrame(cssConfig);
+  return isGraphicsRendererDefaultForPreset(cssConfig);
 }
 
 /**

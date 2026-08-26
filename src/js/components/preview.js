@@ -5,7 +5,7 @@ import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from
 import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, applyOpacityToColor } from '../../../shared/captionConfig.js';
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
 import { resolveRollingStackFrame, chunkRawText } from '../../../shared/rollingStack.js';
-import { canDrawCaptionFrame, drawCaptionFrame } from '../../../shared/captionGraphics.js';
+import { canDrawCaptionFrame, isGraphicsRendererDefaultForPreset, drawCaptionFrame } from '../../../shared/captionGraphics.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
 // backend/fonts/ + shared/fontRegistry.js) and served statically by the
@@ -65,12 +65,16 @@ function loadKeywordDrivenFontFaces(cssConfig) {
 }
 
 /**
- * Milestone 1 shared-graphics-renderer preview path (shared/captionGraphics.js).
- * Gated entirely behind window.__USE_GRAPHICS_CAPTIONS__, an internal dev flag
- * for visually comparing the new Canvas2D renderer against the existing
- * CSS/DOM overlay during migration — it never runs for a normal user and
- * never touches appState. See shared/captionGraphics.js's module doc for
- * current scope (sentence mode, non-keyword-driven presets only).
+ * Shared-graphics-renderer preview path (shared/captionGraphics.js). Live by
+ * default for the presets in GRAPHICS_RENDERER_DEFAULT_PRESETS (currently
+ * 'bold-yellow' and 'caps-white') — the SAME renderer backend/utils/
+ * graphicsExport.js now uses for those presets' actual video export, so
+ * preview and export can no longer visually disagree for them. Every other
+ * preset still renders via the CSS/DOM path below unchanged.
+ * window.__USE_GRAPHICS_CAPTIONS__ remains as a dev override to preview the
+ * renderer on a preset/mode it technically supports (canDrawCaptionFrame)
+ * but hasn't been promoted to the default list yet — that combination is
+ * NOT wired to export, so it's for visual inspection only, never for real use.
  */
 const canvasFontsReadyCache = new Set();
 
@@ -341,11 +345,13 @@ export function syncVideoSubtitles() {
     return;
   }
 
-  // Milestone 1 graphics-renderer path (dev-flag gated — see
-  // drawGraphicsCanvasFrame's doc comment). When it can't handle the current
-  // preset/mode, or the flag is off, this falls straight through to the
-  // existing CSS/DOM rendering below untouched.
-  if (window.__USE_GRAPHICS_CAPTIONS__ && captionsCanvas && canDrawCaptionFrame(cssConfig)) {
+  // Graphics-renderer path — see drawGraphicsCanvasFrame's doc comment for
+  // which presets this is live for by default, and the dev-flag override.
+  // Falls straight through to the existing CSS/DOM rendering below whenever
+  // neither applies.
+  const useGraphicsRenderer = isGraphicsRendererDefaultForPreset(cssConfig)
+    || (window.__USE_GRAPHICS_CAPTIONS__ && canDrawCaptionFrame(cssConfig));
+  if (useGraphicsRenderer && captionsCanvas) {
     drawGraphicsCanvasFrame(captionsCanvas, activePhrase, currentTime, cssConfig, getStyleParams());
     captionsCanvas.classList.add('active');
     captionsText.style.visibility = 'hidden';

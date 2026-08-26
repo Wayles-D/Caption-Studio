@@ -8,18 +8,23 @@
  * word-layout/draw code runs from a browser <canvas> (live preview) and from
  * a node-canvas/@napi-rs/canvas context (server-side frame generation).
  *
- * The one thing that legitimately differs between the two targets is UNIT
- * SCALE: the CSS preview renders directly into its own small on-screen
- * phone-frame box (values are literal CSS px in that box), while the export
- * frames render into the same 1080x1920 design canvas the ASS pipeline
- * already uses (values are ASS canvas units — see FONT_SIZE_ASS_SCALE /
- * WORD_SPACING_ASS_SCALE / ASS_PLAY_RES_X/Y in captionConfig.js). Rather than
- * guess a single conversion factor for both, drawCaptionFrame (preview) and
- * drawCaptionFrameForExport (server) each resolve an explicit `geometry`
- * object in their own native units, then hand off to the SAME internal
- * renderResolvedFrame() for actual layout/painting — so the part that
- * decides how pixels get drawn is truly shared, and only the part that
- * decides how big a pixel is differs.
+ * GEOMETRY: both preview and export draw into the SAME conceptual space —
+ * the preview's own fixed-size phone-frame box (330x586 CSS px, see
+ * src/style.css's `.phone-frame`) — just at different final pixel
+ * resolutions. resolveGeometry() below computes every px-domain quantity
+ * (font size, word spacing, outline, shadow, wrap width) as a proportion of
+ * that box, then both drawCaptionFrame (preview) and drawCaptionFrameForExport
+ * (server) scale that SAME proportion up to their own canvas's actual pixel
+ * dimensions — preview via devicePixelRatio against the box's live on-screen
+ * size, export via the ratio between the output video's resolution and the
+ * box's fixed 330px width. This is deliberately NOT the ASS/libass design
+ * canvas (1080x1920, FONT_SIZE_ASS_SCALE, etc.) — those constants encode
+ * libass's own font-metrics calibration, which is irrelevant once export
+ * stops going through libass for a given preset; matching the CSS preview
+ * (this renderer's other output) is what "preview equals export" requires.
+ * Only presets/modes canDrawCaptionFrame() accepts render this way — see
+ * shared/captionConfig.js's getASSStyleFromConfig for the still-authoritative
+ * ASS-domain geometry every other preset continues to use unchanged.
  *
  * SCOPE: only 'sentence' caption mode, non-keyword-driven presets, non-boxed
  * (BorderStyle 1, not 3), with the 'individual' or 'none' shadow system —
@@ -37,13 +42,7 @@ import {
   resolveWordTextCase,
   resolveShadowOutlineParams,
   resolveShadowMode,
-  CAPTION_POSITIONS,
-  FONT_SIZE_ASS_SCALE,
-  WORD_SPACING_ASS_SCALE,
-  ASS_PLAY_RES_X,
-  ASS_PLAY_RES_Y,
-  ASS_MARGIN_L,
-  ASS_MARGIN_R
+  FONT_SIZE_ASS_SCALE
 } from './captionConfig.js';
 import { resolveFontFace } from './fontRegistry.js';
 
@@ -63,6 +62,33 @@ export function canDrawCaptionFrame(cssConfig) {
   if (cssConfig.shadowMode === 'unified') return false;
   if (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') return false; // boxed presets (e.g. bg-black) — no box-fill drawing yet
   return true;
+}
+
+/**
+ * Presets actually verified end-to-end (preview AND export, both driven by
+ * this renderer, visually compared) — see the migration plan. This is
+ * intentionally a separate, narrower gate than canDrawCaptionFrame(): that
+ * function describes what the renderer's CODE currently supports in
+ * principle (mode/keyword/shadow/box scope), this constant describes what's
+ * actually been validated enough to turn on for real users by default.
+ * Widening canDrawCaptionFrame's scope (e.g. adding box-fill support) does
+ * NOT, by itself, enable a preset here — add it explicitly once verified.
+ */
+export const GRAPHICS_RENDERER_DEFAULT_PRESETS = ['bold-yellow', 'caps-white'];
+
+/**
+ * Whether this resolved style should use the graphics renderer BY DEFAULT
+ * (no opt-in flag required) — canDrawCaptionFrame's scope check, narrowed to
+ * only the presets in GRAPHICS_RENDERER_DEFAULT_PRESETS. Both the preview
+ * (src/js/components/preview.js) and the export gate
+ * (backend/utils/graphicsFrameGenerator.js's canGenerateGraphicsFrames) call
+ * this exact function, so "which presets are live" can never drift between
+ * the two — change the list above once, both sides pick it up.
+ *
+ * @param {object} cssConfig - Result of getCSSPreviewFromConfig(params).
+ */
+export function isGraphicsRendererDefaultForPreset(cssConfig) {
+  return canDrawCaptionFrame(cssConfig) && GRAPHICS_RENDERER_DEFAULT_PRESETS.includes(cssConfig.profile?.id);
 }
 
 function toPx(cssLength, basisPx) {
@@ -110,13 +136,28 @@ function buildFontString({ fontFamily, fontWeight, italic, fontSizePx }) {
 // in one documented place.
 const OVERLAY_HORIZONTAL_PADDING_PX = 20;
 
+// The preview's phone-frame stage is a fixed-size box in CSS px (see
+// src/style.css's `.phone-frame`), regardless of the actual uploaded video's
+// real resolution — every preview px-domain value (font size, word spacing,
+// outline, shadow, wrap width) is authored relative to THIS box. Export
+// reuses the exact same resolveGeometry() below with this as the reference
+// width instead of a live DOM measurement, so "how big is a word-space
+// relative to the font" is provably the same number in both places.
+const PHONE_FRAME_CSS_WIDTH = 330;
+
 /**
- * Resolves preview geometry: the CSS preview's own box is the canvas — no
- * unit conversion beyond devicePixelRatio (canvasWidth/cssPixelWidth).
+ * Resolves every px-domain drawing quantity as a proportion of the preview's
+ * phone-frame box, then scales that proportion to the caller's actual canvas
+ * via pxScale = canvasWidth / referenceCssWidth. The preview passes the
+ * phone-frame's live on-screen width (so this also absorbs devicePixelRatio);
+ * export passes the fixed PHONE_FRAME_CSS_WIDTH constant. Both callers are
+ * otherwise identical — this is the ONE place a caption's size/spacing/shadow
+ * numbers are computed, so preview and export can't drift apart by having two
+ * separately-maintained formulas.
  */
-function resolvePreviewGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth) {
+function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, referenceCssWidth) {
   const profile = cssConfig.profile;
-  const pxScale = canvasWidth / (cssPixelWidth || canvasWidth);
+  const pxScale = canvasWidth / (referenceCssWidth || canvasWidth);
 
   const fontSizePx = (parseFloat(cssConfig.text.fontSize) || 14) * pxScale;
   const wordSpacingPx = (cssConfig.wordSpacingPx || 0) * pxScale;
@@ -136,6 +177,7 @@ function resolvePreviewGeometry(cssConfig, params, canvasWidth, canvasHeight, cs
   // getCSSPreviewFromConfig's overlay anchors: translateX(-50%) on
   // top/bottom presets (block's TOP or BOTTOM edge fixed, grows the other
   // way) and translate(-50%,-50%) on center/manual (block's CENTER fixed).
+  // Percentages, so this is already resolution-independent — no scaling needed.
   const overlay = cssConfig.overlay;
   const anchorX = toPx(overlay.left, canvasWidth) ?? canvasWidth / 2;
   const isCenterTransform = overlay.transform === 'translate(-50%, -50%)';
@@ -153,64 +195,6 @@ function resolvePreviewGeometry(cssConfig, params, canvasWidth, canvasHeight, cs
       anchorY = canvasHeight - (bottomPx ?? 0);
       yEdge = 'bottom';
     }
-  }
-
-  return { fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge };
-}
-
-/**
- * Resolves export geometry: draws into the SAME 1080x1920 design canvas
- * (ASS_PLAY_RES_X/Y) the ASS pipeline positions itself against, scaled by
- * canvasWidth/canvasHeight — the ACTUAL output video's pixel dimensions —
- * exactly like libass scales PlayResX/Y to the real decoded frame size, so a
- * 1080x1920 upload composites 1:1 and any other resolution scales
- * proportionally per axis (matching ASS's own independent X/Y scaling).
- *
- * All raw numbers come from resolveShadowOutlineParams/CAPTION_POSITIONS —
- * the exact same values getASSStyleFromConfig itself builds the burned-in
- * subtitle style from — so this is provably the same numbers, not a second
- * guess at them.
- */
-function resolveExportGeometry(cssConfig, params, canvasWidth, canvasHeight) {
-  const profile = cssConfig.profile;
-  const scaleX = canvasWidth / ASS_PLAY_RES_X;
-  const scaleY = canvasHeight / ASS_PLAY_RES_Y;
-
-  const feSize = parseInt(params.fontSize || '14', 10);
-  const fontSizePx = feSize * FONT_SIZE_ASS_SCALE * scaleY;
-  const numericWordSpacing = parseFloat(params.wordSpacing !== undefined ? params.wordSpacing : 4);
-  const wordSpacingPx = numericWordSpacing * WORD_SPACING_ASS_SCALE * scaleX;
-  const maxWidthPx = (ASS_PLAY_RES_X - ASS_MARGIN_L - ASS_MARGIN_R) * scaleX;
-  const lineHeightPx = fontSizePx * (parseFloat(profile.lineSpacing) || 1.25);
-
-  const shadowMode = resolveShadowMode(params);
-  const shadowParams = resolveShadowOutlineParams(params, profile, false);
-  const outlineWidthPx = (shadowParams.outlineSizeAss || 0) * scaleY;
-  const outlineColor = params.outlineColor || profile.colors.outlineHex || '#000000';
-  const hasShadow = shadowMode === 'individual' && shadowParams.shadowSizeAss > 0;
-  const shadowBlurPx = shadowParams.shadowSizeAss * scaleY;
-  const shadowOffsetXPx = shadowParams.shadowOffsetXAss * scaleX;
-  const shadowOffsetYPx = shadowParams.shadowOffsetYAss * scaleY;
-  const shadowColor = shadowParams.shadowColorHex || profile.colors.shadowHex || '#000000';
-
-  // getASSStyleFromConfig always emits Alignment 2 (bottom-center anchor) for
-  // every non-manual position preset — MarginV just moves that anchor point
-  // up/down the frame, text still stacks UPWARD from it regardless of which
-  // preset is chosen (see CAPTION_POSITIONS' marginV values). Manual
-  // placement instead emits \an5 (true center anchor) via \pos(). Replicating
-  // both exactly, rather than the CSS preview's own top/bottom-edge anchor
-  // logic, is deliberate: this geometry must match the CURRENT ASS EXPORT
-  // (this milestone's comparison target), not the preview.
-  let anchorX, anchorY, yEdge;
-  if (params.position === 'manual') {
-    anchorX = (parseFloat(params.customPosX ?? 50) / 100) * canvasWidth;
-    anchorY = (parseFloat(params.customPosY ?? 85) / 100) * canvasHeight;
-    yEdge = 'center';
-  } else {
-    const posKey = params.position && CAPTION_POSITIONS[params.position] ? params.position : 'bottom';
-    anchorX = canvasWidth / 2;
-    anchorY = canvasHeight - (CAPTION_POSITIONS[posKey].marginV * scaleY);
-    yEdge = 'bottom';
   }
 
   return { fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge };
@@ -262,8 +246,7 @@ function resolveWordDrawSpec(word, drawCtx) {
  * Lays out an already case-transformed, spec-resolved word list into
  * center-aligned lines wrapped to maxWidthPx — the canvas equivalent of the
  * CSS preview's `display:inline-block; width:90%; text-align:center`
- * container (or, for export, the ASS style's MarginL/MarginR-constrained
- * wrap width) with manual line breaks at breakAfterIndices. Only visible
+ * container — with manual line breaks at breakAfterIndices. Only visible
  * words (typewriter's not-yet-spoken words are dropped) occupy layout space.
  */
 function layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndices }) {
@@ -414,7 +397,7 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
 
 /**
  * Draws one caption frame into a browser <canvas>'s 2D context, in that
- * canvas's own on-screen pixel space (see resolvePreviewGeometry).
+ * canvas's own on-screen pixel space (see resolveGeometry).
  *
  * @param {CanvasRenderingContext2D} ctx
  * @param {object} opts
@@ -428,16 +411,18 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
  */
 export function drawCaptionFrame(ctx, opts) {
   const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, cssPixelWidth } = opts;
-  const geometry = resolvePreviewGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
+  const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
   renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry });
 }
 
 /**
- * Draws one caption frame for server-side export, into the SAME 1080x1920
- * ASS design-canvas unit space the burned-in subtitle pipeline positions
- * itself against, scaled to the actual output video's pixel dimensions (see
- * resolveExportGeometry). Use this instead of drawCaptionFrame whenever ctx
- * is NOT a live browser <canvas> tied to an on-screen preview box.
+ * Draws one caption frame for server-side export. Uses the exact same
+ * resolveGeometry() as drawCaptionFrame, evaluated at the phone-frame's fixed
+ * on-screen width (PHONE_FRAME_CSS_WIDTH) instead of a live DOM measurement —
+ * see this module's doc comment for why that (not the ASS/libass design
+ * canvas) is the correct reference for a preset the graphics renderer now
+ * owns end-to-end. Use this instead of drawCaptionFrame whenever ctx is NOT a
+ * live browser <canvas> tied to an on-screen preview box.
  *
  * @param {CanvasRenderingContext2D} ctx
  * @param {object} opts
@@ -445,11 +430,11 @@ export function drawCaptionFrame(ctx, opts) {
  * @param {number} opts.canvasHeight - Output video's pixel height.
  * @param {object} opts.activePhrase
  * @param {number} opts.currentTime
- * @param {object} opts.cssConfig - Result of getCSSPreviewFromConfig(params) — used for colors/profile/animation only, NOT geometry.
+ * @param {object} opts.cssConfig - Result of getCSSPreviewFromConfig(params).
  * @param {object} opts.params
  */
 export function drawCaptionFrameForExport(ctx, opts) {
   const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params } = opts;
-  const geometry = resolveExportGeometry(cssConfig, params, canvasWidth, canvasHeight);
+  const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, PHONE_FRAME_CSS_WIDTH);
   renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry });
 }
