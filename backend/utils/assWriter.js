@@ -354,70 +354,32 @@ function buildRollingStackLineBlock(chunk, options, isWordActive) {
   return buildKeywordDrivenWordBlock(null, lineText, metadata, outlineSize || 0, shadowSize || 0, wordAlphaHex);
 }
 
-// ASS alignment numbers 1/2/3 all anchor MarginV as "distance from the
-// bottom edge" (unlike 4-6/7-9, which anchor from the vertical center/top) —
-// exactly the semantics getASSStyleFromConfig's own marginV already assumes
-// for every other mode, so reusing 1/2/3 here for left/center/right lets a
-// rolling-stack block's horizontal anchor vary independently of its vertical
-// one without touching that existing marginV system at all.
-const ROLLING_STACK_ALIGN_NUM = { left: 1, center: 2, right: 3 };
-
 /**
  * Rolling Stack: a two-layer previous/active caption layout built around
  * detected keywords (see shared/rollingStack.js for the shared chunking/
- * slicing/alignment logic both this and the CSS preview call).
- *
- * When both a top and bottom block exist (and the caption isn't using the
- * manual drag-to-position mode — see below), each block becomes its OWN
- * Dialogue event with its own `\an` horizontal anchor, so the two can sit at
- * independent left/center/right positions: the bottom block keeps the
- * caption's normal vertical anchor (MarginV), the top block's own per-event
- * MarginV is raised by one line's height so it lands directly above it. Two
- * simultaneous, independently-positioned Dialogue events is a normal ASS
- * construct — there's no per-line horizontal anchor within a single `\N`
- * joined event, which is why one event becomes two here.
- *
- * A slice with no top chunk (the phrase's opening run, or a keyword-free
- * phrase, which is always a single chunk) still emits just one centered
- * event — a real single line, not an empty forced second line, unchanged
- * from before. Manual position mode also keeps the original single-event
- * `\N`-joined centered rendering: the user's dragged x/y is one point, which
- * doesn't have an unambiguous way to host two independently-anchored blocks,
- * so independent alignment is scoped to the standard top/center/bottom
- * position modes where it's unambiguous.
+ * slicing logic both this and the CSS preview call). One Dialogue event per
+ * rolling-stack slice; each event's text is the top (previous) chunk's line,
+ * an ASS `\N` line break, then the bottom (active) chunk's line — under the
+ * Style's existing bottom-center alignment this stacks the active line
+ * closest to the anchor with the previous line above it, with no manual
+ * pixel positioning needed. When a slice has no top chunk (the phrase's
+ * opening run, or a keyword-free phrase, which is always a single chunk),
+ * only the bottom line is emitted — a real single line, not an empty forced
+ * second line.
  */
 function generateRollingStackDialogueEvents(phrase, options) {
-  const { posOverrideTag, marginV, fontSizeAss, lineSpacing } = options;
+  const { posOverrideTag } = options;
   const slices = buildRollingStackSlices(phrase);
-  // A little extra headroom beyond plain line-height accounts for the
-  // keyword tier's own fontScale pop (up to ~150%), which can render taller
-  // than the base font size this offset is computed from.
-  const lineOffsetAss = Math.round((fontSizeAss || 0) * (parseFloat(lineSpacing) || 1.25) * 1.15);
 
-  const events = [];
-  slices.forEach((slice) => {
-    if (!slice.top || posOverrideTag) {
-      let payload = buildShadowOverrideTag(options);
-      if (slice.top) {
-        payload += buildRollingStackLineBlock(slice.top, options, false);
-        payload += '\\N';
-      }
-      payload += buildRollingStackLineBlock(slice.bottom, options, true);
-      events.push(`Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Default,,0,0,0,,${posOverrideTag || ''}${payload}`);
-      return;
+  return slices.map((slice) => {
+    let payload = buildShadowOverrideTag(options);
+    if (slice.top) {
+      payload += buildRollingStackLineBlock(slice.top, options, false);
+      payload += '\\N';
     }
-
-    const bottomAn = ROLLING_STACK_ALIGN_NUM[slice.alignment.bottom] || 2;
-    const topAn = ROLLING_STACK_ALIGN_NUM[slice.alignment.top] || 2;
-
-    const bottomPayload = `${buildShadowOverrideTag(options)}{\\an${bottomAn}}${buildRollingStackLineBlock(slice.bottom, options, true)}`;
-    events.push(`Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Default,,0,0,${marginV || 0},,${bottomPayload}`);
-
-    const topPayload = `${buildShadowOverrideTag(options)}{\\an${topAn}}${buildRollingStackLineBlock(slice.top, options, false)}`;
-    events.push(`Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Default,,0,0,${(marginV || 0) + lineOffsetAss},,${topPayload}`);
-  });
-
-  return events.join('\n');
+    payload += buildRollingStackLineBlock(slice.bottom, options, true);
+    return `Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Default,,0,0,0,,${posOverrideTag || ''}${payload}`;
+  }).join('\n');
 }
 
 /**
@@ -547,9 +509,6 @@ export function generateASSDialogueLine(phrase, options = {}) {
   const captionMode = typeof options === 'object' && (options.captionMode === 'word' || options.captionMode === 'rolling-stack')
     ? options.captionMode
     : 'sentence';
-  const marginV = (typeof options === 'object' && options.marginV) || 0;
-  const fontSizeAss = (typeof options === 'object' && options.fontSizeAss) || 0;
-  const lineSpacing = (typeof options === 'object' && options.lineSpacing) || '1.25';
 
   const resolvedOptions = {
     textCase, animationMode, popScale, primaryColor, secondaryColor,
@@ -557,7 +516,7 @@ export function generateASSDialogueLine(phrase, options = {}) {
     shadowColor, shadowOffsetX, shadowOffsetY,
     primaryColorHex, secondaryColorHex, keywordDriven, keywordStyleConfig, keywordTextCase,
     activeHighlightEnabled, outlineSize, shadowSize, textOpacity,
-    baseFontFamily, baseFontWeight, marginV, fontSizeAss, lineSpacing
+    baseFontFamily, baseFontWeight
   };
 
   // Word Mode and Rolling Stack both override every animation mode: they're
@@ -706,35 +665,16 @@ export function generateUnifiedShadowWordDialogueEvents(phrase, options = {}) {
 export function generateUnifiedShadowRollingStackDialogueEvents(phrase, options = {}) {
   const textCase = options.textCase || 'uppercase';
   const posOverrideTag = options.posOverrideTag || '';
-  const marginV = options.marginV || 0;
-  const lineOffsetAss = Math.round((options.fontSizeAss || 0) * (parseFloat(options.lineSpacing) || 1.25) * 1.15);
   const slices = buildRollingStackSlices(phrase);
 
-  const events = [];
-  slices.forEach((slice) => {
+  return slices.map((slice) => {
     const bottomCase = resolveWordTextCase(slice.bottom.type === 'keyword', options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
     const bottomText = applyCaseTransform(chunkRawText(slice.bottom), bottomCase, true);
-
-    if (!slice.top || posOverrideTag) {
-      let text = bottomText;
-      if (slice.top) {
-        const topCase = resolveWordTextCase(slice.top.type === 'keyword', options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
-        text = `${applyCaseTransform(chunkRawText(slice.top), topCase, true)}\\N${bottomText}`;
-      }
-      events.push(`Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Shadow,,0,0,0,,${posOverrideTag}${text}`);
-      return;
+    let text = bottomText;
+    if (slice.top) {
+      const topCase = resolveWordTextCase(slice.top.type === 'keyword', options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
+      text = `${applyCaseTransform(chunkRawText(slice.top), topCase, true)}\\N${bottomText}`;
     }
-
-    // Mirrors generateRollingStackDialogueEvents' two-event split exactly,
-    // so the shadow silhouette's shape always matches the real caption's.
-    const topCase = resolveWordTextCase(slice.top.type === 'keyword', options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
-    const topText = applyCaseTransform(chunkRawText(slice.top), topCase, true);
-    const bottomAn = ROLLING_STACK_ALIGN_NUM[slice.alignment.bottom] || 2;
-    const topAn = ROLLING_STACK_ALIGN_NUM[slice.alignment.top] || 2;
-
-    events.push(`Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Shadow,,0,0,${marginV},,{\\an${bottomAn}}${bottomText}`);
-    events.push(`Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Shadow,,0,0,${marginV + lineOffsetAss},,{\\an${topAn}}${topText}`);
-  });
-
-  return events.join('\n');
+    return `Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Shadow,,0,0,0,,${posOverrideTag}${text}`;
+  }).join('\n');
 }

@@ -82,12 +82,9 @@ export function resolveRollingStackActiveChunkIndex(chunks, time) {
 export function resolveRollingStackFrame(words, currentTime) {
   const chunks = buildRollingStackChunks(words);
   const activeIndex = resolveRollingStackActiveChunkIndex(chunks, currentTime);
-  const top = activeIndex > 0 ? chunks[activeIndex - 1] : null;
-  const bottom = chunks[activeIndex];
   return {
-    top,
-    bottom,
-    alignment: resolveRollingStackAlignment(top, bottom),
+    top: activeIndex > 0 ? chunks[activeIndex - 1] : null,
+    bottom: chunks[activeIndex],
     chunks,
     activeIndex
   };
@@ -111,16 +108,12 @@ export function buildRollingStackSlices(phrase) {
   const chunks = buildRollingStackChunks(phrase.words);
   if (chunks.length === 0) return [];
 
-  return chunks.map((chunk, i) => {
-    const top = i > 0 ? chunks[i - 1] : null;
-    return {
-      start: i === 0 ? phrase.start : chunk.start,
-      end: i + 1 < chunks.length ? chunks[i + 1].start : phrase.end,
-      top,
-      bottom: chunk,
-      alignment: resolveRollingStackAlignment(top, chunk)
-    };
-  }).filter((slice) => slice.end - slice.start >= 0.001);
+  return chunks.map((chunk, i) => ({
+    start: i === 0 ? phrase.start : chunk.start,
+    end: i + 1 < chunks.length ? chunks[i + 1].start : phrase.end,
+    top: i > 0 ? chunks[i - 1] : null,
+    bottom: chunk
+  })).filter((slice) => slice.end - slice.start >= 0.001);
 }
 
 /**
@@ -132,57 +125,4 @@ export function buildRollingStackSlices(phrase) {
  */
 export function chunkRawText(chunk) {
   return (chunk?.words || []).map((w) => (w.word || w.text || '').trim()).join(' ');
-}
-
-// A curated set of intentional top/bottom horizontal pairings — never fully
-// random, so captions read as deliberately art-directed rather than jittery.
-// Each entry is picked deterministically per frame (see resolveRollingStackAlignment),
-// so the exact same caption content always resolves to the exact same layout,
-// in both the preview and the export.
-export const ROLLING_STACK_ALIGNMENT_COMBOS = [
-  { top: 'left', bottom: 'right' },
-  { top: 'right', bottom: 'left' },
-  { top: 'center', bottom: 'left' },
-  { top: 'left', bottom: 'center' },
-  { top: 'center', bottom: 'right' },
-  { top: 'right', bottom: 'center' },
-  { top: 'left', bottom: 'left' },
-  { top: 'right', bottom: 'right' }
-];
-
-/**
- * Small, stable string hash (djb2-derived) — deterministic across Node and
- * the browser, with no dependency on Math.random()/Date.now(), so the same
- * frame content always hashes to the same combo on every render.
- */
-function hashString(str) {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash);
-}
-
-/**
- * Resolves the independent left/center/right horizontal alignment for a
- * rolling-stack frame's top and bottom blocks. Deterministic — derived from
- * the frame's own chunk content/timing, never Math.random() — so the choice
- * is stable across repeated renders/re-exports (see acceptance test #12) and
- * identical between the CSS preview and the ASS exporter, which both call
- * this exact function with the exact same {top, bottom} chunks.
- *
- * Single-block frames (no top chunk — a keyword-free phrase, or the phrase's
- * opening run before its first keyword) always resolve to plain center
- * alignment, preserving the already-confirmed-working single-line behavior
- * unchanged; independent positioning only ever applies once both blocks exist.
- *
- * @param {object|null} topChunk
- * @param {object} bottomChunk
- * @returns {{top:'left'|'center'|'right', bottom:'left'|'center'|'right'}}
- */
-export function resolveRollingStackAlignment(topChunk, bottomChunk) {
-  if (!topChunk) return { top: 'center', bottom: 'center' };
-  const key = `${chunkRawText(topChunk)}@${topChunk.start}|${chunkRawText(bottomChunk)}@${bottomChunk.start}`;
-  const combo = ROLLING_STACK_ALIGNMENT_COMBOS[hashString(key) % ROLLING_STACK_ALIGNMENT_COMBOS.length];
-  return combo;
 }
