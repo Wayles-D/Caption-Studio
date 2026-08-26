@@ -355,17 +355,18 @@ function buildRollingStackLineBlock(chunk, options, isWordActive) {
 }
 
 /**
- * Rolling Stack: a two-layer previous/active caption layout built around
- * detected keywords (see shared/rollingStack.js for the shared chunking/
- * slicing logic both this and the CSS preview call). One Dialogue event per
- * rolling-stack slice; each event's text is the top (previous) chunk's line,
- * an ASS `\N` line break, then the bottom (active) chunk's line — under the
- * Style's existing bottom-center alignment this stacks the active line
- * closest to the anchor with the previous line above it, with no manual
- * pixel positioning needed. When a slice has no top chunk (the phrase's
- * opening run, or a keyword-free phrase, which is always a single chunk),
- * only the bottom line is emitted — a real single line, not an empty forced
- * second line.
+ * Rolling Stack: a two-layer caption layout built around detected keywords
+ * (see shared/rollingStack.js for the shared chunking/slicing logic both
+ * this and the CSS preview call). One Dialogue event per rolling-stack
+ * slice, and slices only exist where at least one chunk is genuinely active
+ * — buildRollingStackSlices already drops gaps entirely, so a chunk can
+ * never render past its own end timestamp just because nothing new has
+ * started yet. Most slices have only a `bottom` chunk (single line); a slice
+ * gets a `top` chunk too only when two chunks' own timestamps genuinely
+ * overlap, in which case the text is the top chunk's line, an ASS `\N` line
+ * break, then the bottom chunk's line — under the Style's existing
+ * bottom-center alignment this stacks them with no manual pixel positioning
+ * needed.
  */
 function generateRollingStackDialogueEvents(phrase, options) {
   const { posOverrideTag } = options;

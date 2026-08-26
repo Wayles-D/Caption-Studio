@@ -2,8 +2,12 @@
  * "Rolling Stack" caption display behavior — a reusable layout engine, not a
  * font preset. It groups a phrase's already-analyzed words (word.isKeyword,
  * already produced by keywordAnalysisService/phraseGrouper) into alternating
- * normal/keyword "chunks", then derives a two-layer (previous/active) rolling
- * frame from those chunks and the current playback position.
+ * normal/keyword "chunks", then derives a two-layer frame strictly from which
+ * chunk(s) are genuinely active at the current playback position — a chunk is
+ * only ever shown while `chunk.start <= time < chunk.end`, exactly mirroring
+ * each word's own Whisper timestamps. Nothing is carried forward once its own
+ * window ends; two chunks share the frame only when their timestamps
+ * genuinely overlap.
  *
  * Both the CSS preview (preview.js) and the ASS exporter (assWriter.js) call
  * these same pure functions so the two renderers can never disagree about
@@ -43,50 +47,69 @@ export function buildRollingStackChunks(words) {
   return chunks;
 }
 
+// Matches the small float-safety epsilon generateStaticHighlightDialogueEvents
+// already uses elsewhere in this codebase for the same kind of boundary check.
+const TIMING_EPSILON = 0.001;
+
 /**
- * Resolves which chunk index is "active" at a given time: the chunk whose
- * own [start, end] contains time, or — during a natural pause between two
- * chunks — the most recently completed chunk (hold-last-state), so the
- * display never blanks out during ordinary speech gaps. Falls back to the
- * first chunk before the phrase has started.
+ * Resolves EVERY chunk that is genuinely active at a given time — strictly
+ * `chunk.start <= time < chunk.end`, mirroring each word's own Whisper
+ * timestamps exactly. No hold-last-state fallback: a chunk that has finished
+ * is never reported as active just because nothing new has started yet, and
+ * a chunk that hasn't started yet is never reported as active early. This is
+ * what a caller derives the current on-screen composition from — never a
+ * cache of "whatever was shown last".
+ *
+ * Ordinarily returns exactly one index (sequential, non-overlapping speech).
+ * Returns two only when two chunks' real timestamps genuinely overlap — the
+ * one deliberate exception where two blocks may share the screen. Returns
+ * an empty array during a genuine gap where nothing is currently being said.
  *
  * @param {Array} chunks - Output of buildRollingStackChunks.
  * @param {number} time - Playback time (or, for export, a slice's start time).
- * @returns {number} Index into chunks.
+ * @returns {number[]} Indices into chunks, in chunk order.
  */
-export function resolveRollingStackActiveChunkIndex(chunks, time) {
+export function resolveRollingStackActiveChunkIndices(chunks, time) {
+  const active = [];
   for (let i = 0; i < chunks.length; i++) {
-    if (time >= chunks[i].start && time <= chunks[i].end) return i;
+    if (time >= chunks[i].start - TIMING_EPSILON && time < chunks[i].end - TIMING_EPSILON) {
+      active.push(i);
+    }
   }
-  let lastIdx = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    if (chunks[i].end <= time) lastIdx = i;
-  }
-  return lastIdx;
+  return active;
 }
 
 /**
  * Resolves the two-layer frame for a single moment in time — used by the
  * live CSS preview, which re-evaluates this every timeupdate tick.
  *
- * `top` is the chunk that has rolled up into the previous/context position
- * (null when the active chunk is the very first chunk in the phrase — this
- * is what naturally collapses a keyword-free phrase, or the phrase's opening
- * run before its first keyword, down to a single line with no forced empty
- * second line).
+ * Both `top` and `bottom` are null/absent unless a chunk is genuinely active
+ * right now — nothing is ever carried forward from a previous instant. With
+ * exactly one active chunk it renders alone as `bottom` (matching the
+ * existing single-line layout). With two genuinely overlapping active chunks,
+ * the earlier one renders as `top` and the later as `bottom`, preserving the
+ * existing stacked two-line layout/positioning for that case. With zero
+ * active chunks (a genuine pause) both are null and nothing is shown.
  *
  * @param {Array<object>} words - phrase.words (word-level timing + isKeyword).
  * @param {number} currentTime - Current video playback time.
- * @returns {{top: object|null, bottom: object, chunks: Array, activeIndex: number}}
+ * @returns {{top: object|null, bottom: object|null, chunks: Array, activeIndices: number[]}}
  */
 export function resolveRollingStackFrame(words, currentTime) {
   const chunks = buildRollingStackChunks(words);
-  const activeIndex = resolveRollingStackActiveChunkIndex(chunks, currentTime);
+  const activeIndices = resolveRollingStackActiveChunkIndices(chunks, currentTime);
+
+  if (activeIndices.length === 0) {
+    return { top: null, bottom: null, chunks, activeIndices };
+  }
+  if (activeIndices.length === 1) {
+    return { top: null, bottom: chunks[activeIndices[0]], chunks, activeIndices };
+  }
   return {
-    top: activeIndex > 0 ? chunks[activeIndex - 1] : null,
-    bottom: chunks[activeIndex],
+    top: chunks[activeIndices[0]],
+    bottom: chunks[activeIndices[activeIndices.length - 1]],
     chunks,
-    activeIndex
+    activeIndices
   };
 }
 
@@ -95,11 +118,15 @@ export function resolveRollingStackFrame(words, currentTime) {
  * entire on-screen duration, each with its own [start, end) time slice — the
  * ASS exporter's equivalent of resolveRollingStackFrame's per-tick lookup,
  * since a Dialogue event needs an explicit time range rather than a single
- * instant. Slice boundaries land exactly on chunk start times, so within any
- * one slice resolveRollingStackActiveChunkIndex(chunks, t) is constant and
- * equal to that slice's chunk index — the two are proven equivalent by
- * construction, which is what keeps preview and export frame-for-frame
- * identical without duplicating the timing logic.
+ * instant. Slice boundaries are every chunk's own start/end timestamp, so
+ * within any one slice the active chunk set is constant — proven equivalent
+ * to resolveRollingStackFrame by construction, which is what keeps preview
+ * and export frame-for-frame identical without duplicating the timing logic.
+ *
+ * A gap where nothing is active produces no slice at all (no Dialogue event
+ * covers it), rather than stretching the previous slice forward — this is
+ * the export-side half of the same fix: a word/chunk must never render past
+ * its own end timestamp just because the next one hasn't started yet.
  *
  * @param {object} phrase - Unified phrase (start, end, words[]).
  * @returns {Array<{start:number, end:number, top:object|null, bottom:object}>}
@@ -108,12 +135,28 @@ export function buildRollingStackSlices(phrase) {
   const chunks = buildRollingStackChunks(phrase.words);
   if (chunks.length === 0) return [];
 
-  return chunks.map((chunk, i) => ({
-    start: i === 0 ? phrase.start : chunk.start,
-    end: i + 1 < chunks.length ? chunks[i + 1].start : phrase.end,
-    top: i > 0 ? chunks[i - 1] : null,
-    bottom: chunk
-  })).filter((slice) => slice.end - slice.start >= 0.001);
+  const boundarySet = new Set([phrase.start, phrase.end]);
+  chunks.forEach((c) => {
+    boundarySet.add(c.start);
+    boundarySet.add(c.end);
+  });
+  const boundaries = Array.from(boundarySet).sort((a, b) => a - b);
+
+  const slices = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const sliceStart = boundaries[i];
+    const sliceEnd = boundaries[i + 1];
+    if (sliceEnd - sliceStart < TIMING_EPSILON) continue;
+
+    const activeIndices = resolveRollingStackActiveChunkIndices(chunks, sliceStart);
+    if (activeIndices.length === 0) continue; // genuine gap — no event, nothing shown
+
+    const top = activeIndices.length > 1 ? chunks[activeIndices[0]] : null;
+    const bottom = chunks[activeIndices[activeIndices.length - 1]];
+
+    slices.push({ start: sliceStart, end: sliceEnd, top, bottom });
+  }
+  return slices;
 }
 
 /**

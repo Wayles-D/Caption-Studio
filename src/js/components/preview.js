@@ -530,14 +530,21 @@ function buildRollingStackLineElement(chunk, cssConfig, isActive) {
  * shared/rollingStack.js's resolveRollingStackFrame — the exact same
  * chunking/timing logic assWriter.js's generateRollingStackDialogueEvents
  * uses for export) and renders it as a small vertical stack — a real single
- * line when there's no top chunk yet (keyword-free phrase, or before the
- * phrase's first keyword becomes active), two lines once one exists. The
- * container is switched to a column flex layout only while this mode is
- * active; every other mode's inline-block layout (set by
- * applyCSSPreviewStyles) is left untouched.
+ * line when only one chunk is genuinely active right now, two lines only
+ * when two chunks' own timestamps genuinely overlap, and nothing at all
+ * during a genuine gap between words. Nothing is ever carried forward from a
+ * previous tick: every render derives strictly from the current playback
+ * time against each chunk's own start/end. The container is switched to a
+ * column flex layout only while this mode is active; every other mode's
+ * inline-block layout (set by applyCSSPreviewStyles) is left untouched.
  */
 function renderRollingStackCaption(activePhrase, currentTime, cssConfig, captionsText) {
   const { top, bottom } = resolveRollingStackFrame(activePhrase.words, currentTime);
+
+  if (!bottom) {
+    captionsText.replaceChildren();
+    return;
+  }
 
   captionsText.style.display = 'flex';
   captionsText.style.flexDirection = 'column';
