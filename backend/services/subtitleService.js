@@ -76,7 +76,13 @@ export async function generateSubtitleFromTranscript(transcriptPath, subtitlePat
     textOpacity: resolvedStyle.textOpacity,
     baseFontFamily: resolvedStyle.fontName,
     baseFontWeight: resolvedStyle.profile?.fontWeight,
-    captionMode: resolvedStyle.captionMode
+    captionMode: resolvedStyle.captionMode,
+    // Rolling Stack's independent top/bottom horizontal alignment needs the
+    // resolved vertical anchor (marginV) and font size to place its two
+    // separately-anchored Dialogue events — see generateRollingStackDialogueEvents.
+    marginV: resolvedStyle.marginV,
+    fontSizeAss: resolvedStyle.fontSizeAss,
+    lineSpacing: resolvedStyle.profile?.lineSpacing
   };
   
   phrases.forEach((phrase) => {
@@ -149,7 +155,10 @@ export async function generateUnifiedShadowSubtitle(transcriptPath, shadowSubtit
     textCase: options.styles?.textCase || 'uppercase',
     posOverrideTag: resolvedStyle.posOverrideTag || null,
     enableKeywordHighlighting: resolvedStyle.enableKeywordHighlighting !== false,
-    keywordTextCase: resolvedStyle.keywordTextCase
+    keywordTextCase: resolvedStyle.keywordTextCase,
+    marginV: resolvedStyle.marginV,
+    fontSizeAss: resolvedStyle.fontSizeAss,
+    lineSpacing: resolvedStyle.profile?.lineSpacing
   };
   // Word Mode's unified shadow silhouettes one word at a time, and Rolling
   // Stack's silhouettes one two-line slice at a time (matching each mode's

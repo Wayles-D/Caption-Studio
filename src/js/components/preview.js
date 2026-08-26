@@ -232,6 +232,16 @@ export function syncVideoSubtitles() {
 
   const cssConfig = getCSSPreviewFromConfig(getStyleParams());
 
+  // Rolling Stack is the only mode that switches the container to a column
+  // flex layout with an explicit width (see renderRollingStackCaption) — undo
+  // that here so switching to any other mode never inherits a stale layout.
+  if (appState.captionMode !== 'rolling-stack') {
+    captionsText.style.width = '';
+    captionsText.style.flexDirection = '';
+    captionsText.style.alignItems = '';
+    captionsText.style.gap = '';
+  }
+
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
   const mode = appState.animationMode || 'karaoke';
@@ -481,7 +491,7 @@ function renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsTex
  * same way it does for individual words: true for the bottom chunk, false
  * for the top chunk, so only the currently-active line ever scales up.
  */
-function buildRollingStackLineElement(chunk, cssConfig, isActive) {
+function buildRollingStackLineElement(chunk, cssConfig, isActive, align) {
   const keywordsEnabled = appState.enableKeywordHighlighting;
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
@@ -507,6 +517,9 @@ function buildRollingStackLineElement(chunk, cssConfig, isActive) {
 
   const line = document.createElement('div');
   line.className = 'rolling-stack-line';
+  const alignSelfMap = { left: 'flex-start', center: 'center', right: 'flex-end' };
+  line.style.alignSelf = alignSelfMap[align] || 'center';
+  line.style.textAlign = align || 'center';
   line.style.color = applyOpacityToColor(metadata.colorHex, lineOpacity);
   if (metadata.fontFamily) line.style.fontFamily = metadata.fontFamily;
   if (metadata.fontWeight) line.style.fontWeight = metadata.fontWeight;
@@ -537,16 +550,21 @@ function buildRollingStackLineElement(chunk, cssConfig, isActive) {
  * applyCSSPreviewStyles) is left untouched.
  */
 function renderRollingStackCaption(activePhrase, currentTime, cssConfig, captionsText) {
-  const { top, bottom } = resolveRollingStackFrame(activePhrase.words, currentTime);
+  const { top, bottom, alignment } = resolveRollingStackFrame(activePhrase.words, currentTime);
 
   captionsText.style.display = 'flex';
   captionsText.style.flexDirection = 'column';
   captionsText.style.alignItems = 'center';
+  // Full container width so each line's own align-self (left/center/right)
+  // has room to diverge from the other — matching the ASS exporter's own
+  // independent \an anchors, which are likewise unconstrained by the other
+  // line's position.
+  captionsText.style.width = '100%';
   captionsText.style.gap = '0.15em';
 
   const fragment = document.createDocumentFragment();
-  if (top) fragment.append(buildRollingStackLineElement(top, cssConfig, false));
-  fragment.append(buildRollingStackLineElement(bottom, cssConfig, true));
+  if (top) fragment.append(buildRollingStackLineElement(top, cssConfig, false, alignment.top));
+  fragment.append(buildRollingStackLineElement(bottom, cssConfig, true, alignment.bottom));
   captionsText.replaceChildren(fragment);
 }
 
