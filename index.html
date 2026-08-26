@@ -610,6 +610,11 @@
                         <div class="subtitles-overlay" id="subtitles-overlay">
                             <div class="captions-text" id="captions-text"></div>
                         </div>
+                        <!-- Shared Canvas2D graphics-renderer overlay (see shared/captionGraphics.js).
+                             Hidden/inert unless window.__USE_GRAPHICS_CAPTIONS__ is set — an internal
+                             dev flag for comparing the new renderer against the CSS overlay above
+                             during migration; it renders nothing by default and does not replace it. -->
+                        <canvas class="captions-canvas" id="captions-canvas"></canvas>
                     </div>
                 </div>
 

@@ -8,6 +8,7 @@ import { resolveASSStyle } from '../utils/assWriter.js';
 import { analyzeKeywords } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
+import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor } from '../utils/graphicsExport.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -184,16 +185,26 @@ export async function uploadAndExtractAudio(req, res, next) {
     await generateUnifiedShadowSubtitle(transcriptPath, shadowSubtitlePath, { styles: req.body });
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Completed (Duration: ${Date.now() - subtitleStart}ms)`);
 
-    // 6. Burn subtitles into original uploaded video to create the final captioned video
+    // 6. Render the final captioned video. For presets/modes the shared
+    // graphics renderer already covers (see shared/captionGraphics.js's
+    // canDrawCaptionFrame), try that first — it composites the same PNGs
+    // validated against this ASS pipeline during the graphics-renderer
+    // migration. Any gap in scope, or any failure, falls straight back to
+    // the existing ASS/libass burn below, unchanged.
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Started`);
     const renderStart = Date.now();
     const resolvedStyle = resolveASSStyle(req.body || {});
-    await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
-      onSpawn: (proc) => { activeProc = proc; },
-      shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
-      unifiedShadow: resolvedStyle.unifiedShadow
-    });
-    console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Completed (Duration: ${Date.now() - renderStart}ms)`);
+    const usedGraphicsRenderer = await tryRenderCaptionsWithGraphics(
+      videoPath, words, req.body, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName)
+    );
+    if (!usedGraphicsRenderer) {
+      await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
+        onSpawn: (proc) => { activeProc = proc; },
+        shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
+        unifiedShadow: resolvedStyle.unifiedShadow
+      });
+    }
+    console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Completed (${usedGraphicsRenderer ? 'graphics' : 'ass'} pipeline, Duration: ${Date.now() - renderStart}ms)`);
     activeProc = null;
 
     // Clean up large intermediate temporary files - only WAV audio (video is retained for re-rendering)
@@ -350,16 +361,22 @@ export async function regenerateCaptions(req, res, next) {
     await generateUnifiedShadowSubtitle(transcriptPath, shadowSubtitlePath, { words, styles });
     console.log(`[Regenerate] [${baseName}] Stage: Subtitle Regeneration Completed (Duration: ${Date.now() - subtitleStart}ms)`);
 
-    // 3. Re-burn subtitles into original video
+    // 3. Re-render into the original video. Same graphics-first, ASS-fallback
+    // policy as the initial upload pipeline (see uploadAndExtractAudio).
     console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Started`);
     const renderStart = Date.now();
     const resolvedStyle = resolveASSStyle(styles || {});
-    await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
-      onSpawn: (proc) => { activeProc = proc; },
-      shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
-      unifiedShadow: resolvedStyle.unifiedShadow
-    });
-    console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Completed (Duration: ${Date.now() - renderStart}ms)`);
+    const usedGraphicsRenderer = await tryRenderCaptionsWithGraphics(
+      videoPath, words, styles, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName)
+    );
+    if (!usedGraphicsRenderer) {
+      await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
+        onSpawn: (proc) => { activeProc = proc; },
+        shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
+        unifiedShadow: resolvedStyle.unifiedShadow
+      });
+    }
+    console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Completed (${usedGraphicsRenderer ? 'graphics' : 'ass'} pipeline, Duration: ${Date.now() - renderStart}ms)`);
     activeProc = null;
 
     isRequestFinished = true;

@@ -5,6 +5,7 @@ import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from
 import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, applyOpacityToColor } from '../../../shared/captionConfig.js';
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
 import { resolveRollingStackFrame, chunkRawText } from '../../../shared/rollingStack.js';
+import { canDrawCaptionFrame, drawCaptionFrame } from '../../../shared/captionGraphics.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
 // backend/fonts/ + shared/fontRegistry.js) and served statically by the
@@ -61,6 +62,56 @@ function loadKeywordDrivenFontFaces(cssConfig) {
 
   const font = appState.keywordFont || keywordStyle.fontFamily;
   if (font) loadLocalFontFace(font, keywordStyle.face || 'regular');
+}
+
+/**
+ * Milestone 1 shared-graphics-renderer preview path (shared/captionGraphics.js).
+ * Gated entirely behind window.__USE_GRAPHICS_CAPTIONS__, an internal dev flag
+ * for visually comparing the new Canvas2D renderer against the existing
+ * CSS/DOM overlay during migration — it never runs for a normal user and
+ * never touches appState. See shared/captionGraphics.js's module doc for
+ * current scope (sentence mode, non-keyword-driven presets only).
+ */
+const canvasFontsReadyCache = new Set();
+
+function ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx) {
+  const key = `${fontFamily}::${fontWeight}`;
+  if (canvasFontsReadyCache.has(key)) return Promise.resolve(false);
+  const fontStr = `${fontWeight || '400'} ${fontSizePx}px '${fontFamily}'`;
+  return document.fonts.load(fontStr).then(() => {
+    canvasFontsReadyCache.add(key);
+    return true;
+  }).catch(() => false);
+}
+
+function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, params) {
+  const phoneFrame = document.querySelector('.phone-frame');
+  if (!phoneFrame) return;
+
+  const rect = phoneFrame.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.round(rect.width * dpr);
+  const targetH = Math.round(rect.height * dpr);
+  if (targetW <= 0 || targetH <= 0) return;
+  if (canvas.width !== targetW) canvas.width = targetW;
+  if (canvas.height !== targetH) canvas.height = targetH;
+
+  const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
+  const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
+  ensureCanvasFontReady(fontFamily, cssConfig.profile.fontWeight, fontSizePx).then((justLoaded) => {
+    if (justLoaded) syncVideoSubtitles();
+  });
+
+  const ctx = canvas.getContext('2d');
+  drawCaptionFrame(ctx, {
+    canvasWidth: targetW,
+    canvasHeight: targetH,
+    cssPixelWidth: rect.width,
+    activePhrase,
+    currentTime,
+    cssConfig,
+    params
+  });
 }
 
 export function initPreviewWorkspace() {
@@ -228,6 +279,15 @@ export function syncVideoSubtitles() {
 
   if (!previewVideo || !captionsText) return;
 
+  // Default the graphics-renderer canvas to inert; only the sentence-mode
+  // branch below (the sole mode canDrawCaptionFrame currently supports)
+  // re-activates it. Every other return path in this function (demo
+  // fallback, Word Mode, Rolling Stack) leaves it hidden instead of showing
+  // stale content from a previous mode.
+  const captionsCanvas = document.getElementById('captions-canvas');
+  if (captionsCanvas) captionsCanvas.classList.remove('active');
+  captionsText.style.visibility = '';
+
   const currentTime = previewVideo.currentTime;
 
   const cssConfig = getCSSPreviewFromConfig(getStyleParams());
@@ -279,6 +339,16 @@ export function syncVideoSubtitles() {
   if (appState.captionMode === 'rolling-stack') {
     renderRollingStackCaption(activePhrase, currentTime, cssConfig, captionsText);
     return;
+  }
+
+  // Milestone 1 graphics-renderer path (dev-flag gated — see
+  // drawGraphicsCanvasFrame's doc comment). When it can't handle the current
+  // preset/mode, or the flag is off, this falls straight through to the
+  // existing CSS/DOM rendering below untouched.
+  if (window.__USE_GRAPHICS_CAPTIONS__ && captionsCanvas && canDrawCaptionFrame(cssConfig)) {
+    drawGraphicsCanvasFrame(captionsCanvas, activePhrase, currentTime, cssConfig, getStyleParams());
+    captionsCanvas.classList.add('active');
+    captionsText.style.visibility = 'hidden';
   }
 
   // Render active phrase words

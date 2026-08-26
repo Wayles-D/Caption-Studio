@@ -465,7 +465,18 @@ export function hexToASSColor(hex, defaultHex = '#FFFFFF') {
 // left the CSS preview's outline/shadow several times thicker relative to the
 // font than the exported video's, occasionally thick enough for the outline
 // to fully eclipse the text fill.
-const FONT_SIZE_ASS_SCALE = 5.14;
+export const FONT_SIZE_ASS_SCALE = 5.14;
+
+// The ASS design canvas (see assWriter.js's generateASSHeader) and the word
+// spacing conversion applied to it — both re-exported so any other renderer
+// that needs to work in the ASS/export's own 1080x1920 canvas-unit space
+// (see shared/captionGraphics.js's export geometry) reads the exact same
+// numbers the ASS pipeline already uses, instead of a second guessed copy.
+export const ASS_PLAY_RES_X = 1080;
+export const ASS_PLAY_RES_Y = 1920;
+export const ASS_MARGIN_L = 100;
+export const ASS_MARGIN_R = 100;
+export const WORD_SPACING_ASS_SCALE = 1.5;
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -540,7 +551,7 @@ export function applyOpacityToColor(color, opacityPercent = 100) {
  *   (see resolveBoxState) — box mode repurposes the ASS Outline field for
  *   padding, so a distinct text-outline width only applies when unboxed.
  */
-function resolveShadowOutlineParams(params, profile, isBoxed) {
+export function resolveShadowOutlineParams(params, profile, isBoxed) {
   const outlineSizeAss = isBoxed
     ? null
     : (params.outlineSize != null ? parseInt(params.outlineSize, 10) : profile.outlineSize);
@@ -851,7 +862,7 @@ export function getASSStyleFromConfig(params = {}) {
 
   // Word spacing conversion (scaled to 1080p canvas)
   const numericWordSpacing = parseFloat(params.wordSpacing !== undefined ? params.wordSpacing : 4);
-  const assSpacing = Math.round(numericWordSpacing * 1.5); // Spacing in ASS canvas pixels
+  const assSpacing = Math.round(numericWordSpacing * WORD_SPACING_ASS_SCALE); // Spacing in ASS canvas pixels
 
   // Advanced Animation Controls
   const popScale = parseFloat(params.popScale || 118);

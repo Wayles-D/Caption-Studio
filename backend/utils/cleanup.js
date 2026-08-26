@@ -27,6 +27,19 @@ export function cleanupJobAssets(baseName) {
     path.join(outputDir, `${baseName}_captioned.mp4`)
   ];
 
+  // Graphics-renderer scratch PNGs (see graphicsExport.js's
+  // graphicsFramesDirFor) — normally already removed by the render call
+  // itself, but an early/aborted job may leave this behind.
+  const graphicsFramesDir = path.join(outputDir, `${baseName}_graphics_frames`);
+  if (fs.existsSync(graphicsFramesDir)) {
+    try {
+      fs.rmSync(graphicsFramesDir, { recursive: true, force: true });
+      console.log(`[Pipeline] [${baseName}] Cleanup: Removed graphics frames directory`);
+    } catch (err) {
+      console.error(`[Pipeline] [${baseName}] Cleanup: Failed to remove graphics frames directory - ${err.message}`);
+    }
+  }
+
   // Try checking multiple extensions for the initial video video file.
   const videoExtensions = ['.mp4', '.mov', '.webm'];
   videoExtensions.forEach(ext => {
@@ -78,15 +91,31 @@ export function runPeriodicCleanup() {
           if (statErr) return;
 
           const age = now - stats.mtimeMs;
-          if (age > timeoutMs) {
-            fs.unlink(filePath, (unlinkErr) => {
-              if (unlinkErr) {
-                console.error(`[Cleanup Daemon] Failed to delete orphaned file ${file}:`, unlinkErr.message);
+          if (age <= timeoutMs) return;
+
+          // Graphics-renderer jobs (see graphicsExport.js) scratch their
+          // per-slice caption PNGs into a `<baseName>_graphics_frames/`
+          // directory inside outputDir, normally removed as soon as that
+          // job's render finishes — this only ever fires as a safety net if
+          // the process died mid-render before that cleanup ran.
+          if (stats.isDirectory()) {
+            fs.rm(filePath, { recursive: true, force: true }, (rmErr) => {
+              if (rmErr) {
+                console.error(`[Cleanup Daemon] Failed to remove orphaned directory ${file}:`, rmErr.message);
               } else {
-                console.log(`[Cleanup Daemon] Purged idle orphaned file: ${file} (Age: ${Math.round(age / 1000)}s)`);
+                console.log(`[Cleanup Daemon] Purged idle orphaned directory: ${file} (Age: ${Math.round(age / 1000)}s)`);
               }
             });
+            return;
           }
+
+          fs.unlink(filePath, (unlinkErr) => {
+            if (unlinkErr) {
+              console.error(`[Cleanup Daemon] Failed to delete orphaned file ${file}:`, unlinkErr.message);
+            } else {
+              console.log(`[Cleanup Daemon] Purged idle orphaned file: ${file} (Age: ${Math.round(age / 1000)}s)`);
+            }
+          });
         });
       });
     });
