@@ -4,6 +4,7 @@
 import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from '../state.js';
 import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, applyOpacityToColor } from '../../../shared/captionConfig.js';
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
+import { resolveRollingStackFrame, chunkRawText } from '../../../shared/rollingStack.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
 // backend/fonts/ + shared/fontRegistry.js) and served statically by the
@@ -271,6 +272,15 @@ export function syncVideoSubtitles() {
     return;
   }
 
+  // Rolling Stack: a two-layer previous/active caption layout built around
+  // detected keywords — see shared/rollingStack.js for the shared chunking/
+  // framing logic this and the ASS exporter's generateRollingStackDialogueEvents
+  // both call, so preview and export can never disagree on grouping or timing.
+  if (appState.captionMode === 'rolling-stack') {
+    renderRollingStackCaption(activePhrase, currentTime, cssConfig, captionsText);
+    return;
+  }
+
   // Render active phrase words
   const breakIndices = new Set(activePhrase.breakAfterIndices || []);
 
@@ -327,6 +337,12 @@ export function syncVideoSubtitles() {
       }
       if (metadata.shadow) wordElement.style.textShadow = metadata.shadow.css;
       if (metadata.outline) wordElement.style.webkitTextStroke = metadata.outline.css;
+      // wordText was already case-transformed above via caseForWord — prevent
+      // the container's own CSS text-transform (set from the global textCase)
+      // from re-transforming it and silently overriding a per-word casing
+      // override (e.g. a keyword forced lowercase while the caption is
+      // otherwise uppercase) purely at paint time.
+      wordElement.style.textTransform = 'none';
       wordElement.textContent = wordText;
 
       if (!breakIndices.has(idx) && idx !== activePhrase.words.length - 1) {
@@ -366,6 +382,7 @@ export function syncVideoSubtitles() {
     if (keywordsEnabled && w.isKeyword) {
       wordElement.style.fontWeight = '900';
     }
+    wordElement.style.textTransform = 'none';
     wordElement.textContent = wordText;
 
     if (!breakIndices.has(idx) && idx !== activePhrase.words.length - 1) {
@@ -449,8 +466,88 @@ function renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsTex
     }
   }
 
+  wordElement.style.textTransform = 'none';
   wordElement.textContent = wordText;
   captionsText.replaceChildren(wordElement);
+}
+
+/**
+ * Builds one Rolling Stack line (top/previous or bottom/active) from
+ * resolveWordStyleMetadata's generic metadata — a chunk of one-or-more
+ * consecutive words that share the same isKeyword value (see
+ * shared/rollingStack.js), styled exactly like a keyword-driven word span
+ * elsewhere in this file, just applied to the chunk's joined text instead of
+ * a single word. `isActive` gates the pop-scale/active-highlight-color the
+ * same way it does for individual words: true for the bottom chunk, false
+ * for the top chunk, so only the currently-active line ever scales up.
+ */
+function buildRollingStackLineElement(chunk, cssConfig, isActive) {
+  const keywordsEnabled = appState.enableKeywordHighlighting;
+  const activeHighlight = cssConfig.highlightColor || '#FEF08A';
+  const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
+
+  const caseForChunk = resolveWordTextCase(chunk.type === 'keyword', keywordsEnabled, appState.textCase, cssConfig.keywordTextCase);
+  const lineText = applyCaseTransform(chunkRawText(chunk), caseForChunk, true);
+
+  const metadata = resolveWordStyleMetadata({ isKeyword: chunk.type === 'keyword' }, {
+    keywordStyleConfig: cssConfig.keywordStyleConfig,
+    keywordsEnabled,
+    activeHighlightEnabled: cssConfig.activeHighlightEnabled,
+    isWordActive: isActive,
+    mode: appState.animationMode,
+    activeHighlightColorHex: activeHighlight,
+    inactiveColorHex: inactiveColor,
+    baseFontFamily: cssConfig.profile?.fontFamily,
+    baseFontWeight: cssConfig.profile?.fontWeight
+  });
+
+  const lineOpacity = metadata.isKeyword
+    ? (appState.textOpacity ?? 100) * (cssConfig.keywordStyleConfig.opacity ?? 100) / 100
+    : 100;
+
+  const line = document.createElement('div');
+  line.className = 'rolling-stack-line';
+  line.style.color = applyOpacityToColor(metadata.colorHex, lineOpacity);
+  if (metadata.fontFamily) line.style.fontFamily = metadata.fontFamily;
+  if (metadata.fontWeight) line.style.fontWeight = metadata.fontWeight;
+  line.style.fontStyle = metadata.italic ? 'italic' : 'normal';
+  if (metadata.fontScale && metadata.fontScale !== 1) {
+    line.style.transform = `scale(${metadata.fontScale})`;
+  }
+  if (metadata.shadow) line.style.textShadow = metadata.shadow.css;
+  if (metadata.outline) line.style.webkitTextStroke = metadata.outline.css;
+  // lineText was already case-transformed above via caseForChunk — same
+  // reasoning as the sentence/word-mode word spans: prevent the container's
+  // inherited CSS text-transform from silently re-uppercasing a keyword
+  // chunk forced lowercase.
+  line.style.textTransform = 'none';
+  line.textContent = lineText;
+  return line;
+}
+
+/**
+ * Rolling Stack's render step: resolves the current two-layer frame (see
+ * shared/rollingStack.js's resolveRollingStackFrame — the exact same
+ * chunking/timing logic assWriter.js's generateRollingStackDialogueEvents
+ * uses for export) and renders it as a small vertical stack — a real single
+ * line when there's no top chunk yet (keyword-free phrase, or before the
+ * phrase's first keyword becomes active), two lines once one exists. The
+ * container is switched to a column flex layout only while this mode is
+ * active; every other mode's inline-block layout (set by
+ * applyCSSPreviewStyles) is left untouched.
+ */
+function renderRollingStackCaption(activePhrase, currentTime, cssConfig, captionsText) {
+  const { top, bottom } = resolveRollingStackFrame(activePhrase.words, currentTime);
+
+  captionsText.style.display = 'flex';
+  captionsText.style.flexDirection = 'column';
+  captionsText.style.alignItems = 'center';
+  captionsText.style.gap = '0.15em';
+
+  const fragment = document.createDocumentFragment();
+  if (top) fragment.append(buildRollingStackLineElement(top, cssConfig, false));
+  fragment.append(buildRollingStackLineElement(bottom, cssConfig, true));
+  captionsText.replaceChildren(fragment);
 }
 
 function formatTime(seconds) {

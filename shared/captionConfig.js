@@ -589,18 +589,22 @@ export function resolveShadowMode(params) {
 
 /**
  * Resolves the caption display mode: 'sentence' (existing behavior — the
- * full phrase is shown, with per-word active/inactive highlighting) or
- * 'word' (exactly one transcript word visible at a time, timed to that
- * word's own Whisper start/end). Absent/unrecognized values fall back to
- * 'sentence', matching every existing project/preset that predates this
- * control. Both the CSS preview and the ASS exporter read this from the
- * same place so they can never disagree on which mode is active.
+ * full phrase is shown, with per-word active/inactive highlighting), 'word'
+ * (exactly one transcript word visible at a time, timed to that word's own
+ * Whisper start/end), or 'rolling-stack' (a two-layer previous/active rolling
+ * layout built around detected keywords — see shared/rollingStack.js).
+ * Absent/unrecognized values fall back to 'sentence', matching every existing
+ * project/preset that predates these controls. Both the CSS preview and the
+ * ASS exporter read this from the same place so they can never disagree on
+ * which mode is active.
  *
  * @param {object} params - Client style params.
- * @returns {'sentence'|'word'}
+ * @returns {'sentence'|'word'|'rolling-stack'}
  */
 export function resolveCaptionMode(params) {
-  return params.captionMode === 'word' ? 'word' : 'sentence';
+  if (params.captionMode === 'word') return 'word';
+  if (params.captionMode === 'rolling-stack') return 'rolling-stack';
+  return 'sentence';
 }
 
 // Subtle centered shadow with a small blur, per the Unified Shadow spec.

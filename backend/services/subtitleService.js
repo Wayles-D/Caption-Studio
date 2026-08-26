@@ -3,7 +3,8 @@ import path from 'path';
 import { groupWordsToPhrases, sanitizePhraseTimings } from '../utils/phraseGrouper.js';
 import {
   generateASSHeader, generateASSDialogueLine, resolveASSStyle,
-  generateUnifiedShadowASSHeader, generateUnifiedShadowDialogueLine, generateUnifiedShadowWordDialogueEvents
+  generateUnifiedShadowASSHeader, generateUnifiedShadowDialogueLine, generateUnifiedShadowWordDialogueEvents,
+  generateUnifiedShadowRollingStackDialogueEvents
 } from '../utils/assWriter.js';
 
 /**
@@ -150,11 +151,15 @@ export async function generateUnifiedShadowSubtitle(transcriptPath, shadowSubtit
     enableKeywordHighlighting: resolvedStyle.enableKeywordHighlighting !== false,
     keywordTextCase: resolvedStyle.keywordTextCase
   };
-  // Word Mode's unified shadow silhouettes one word at a time (matching its
-  // real caption track), instead of the whole phrase for its whole duration.
+  // Word Mode's unified shadow silhouettes one word at a time, and Rolling
+  // Stack's silhouettes one two-line slice at a time (matching each mode's
+  // own real caption track), instead of the whole phrase for its whole
+  // duration.
   const dialogueLines = resolvedStyle.captionMode === 'word'
     ? phrases.map((phrase) => generateUnifiedShadowWordDialogueEvents(phrase, dialogueOptions))
-    : phrases.map((phrase) => generateUnifiedShadowDialogueLine(phrase, dialogueOptions));
+    : resolvedStyle.captionMode === 'rolling-stack'
+      ? phrases.map((phrase) => generateUnifiedShadowRollingStackDialogueEvents(phrase, dialogueOptions))
+      : phrases.map((phrase) => generateUnifiedShadowDialogueLine(phrase, dialogueOptions));
 
   const assOutputContent = [shadowHeader, dialogueLines.join('\n')].join('\n');
 

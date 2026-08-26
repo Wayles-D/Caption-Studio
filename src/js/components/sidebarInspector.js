@@ -107,7 +107,23 @@ export function initSidebarInspector() {
 
   captionModeRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
-      updateState({ captionMode: e.target.value });
+      const updates = { captionMode: e.target.value };
+      // Rolling Stack needs genuinely distinct normal/keyword typography to
+      // read as a two-layer stack; if the user hasn't already picked a
+      // keyword-driven preset, default to EDIT's Poppins + PP Editorial New
+      // Ultra Bold Italic pairing (this spec's default typography) the first
+      // time Rolling Stack is chosen — the same one-time convenience-default
+      // pattern a preset's own autoFontFamilyOnSelect already uses. Every
+      // font/color is still a regular override afterward, and this never
+      // re-fires once a keyword-driven preset is active.
+      if (e.target.value === 'rolling-stack' && !getCurrentProfile().keywordDriven) {
+        const editProfile = CREATOR_PROFILES['poppins-editorial'];
+        updates.currentPreset = 'poppins-editorial';
+        if (editProfile?.autoFontFamilyOnSelect) {
+          updates.fontFamily = editProfile.autoFontFamilyOnSelect;
+        }
+      }
+      updateState(updates);
     });
   });
 
@@ -391,7 +407,9 @@ function syncSidebarUI() {
 
   // Caption Mode
   const captionModeRadios = document.getElementsByName('caption-mode');
-  const captionMode = appState.captionMode === 'word' ? 'word' : 'sentence';
+  const captionMode = (appState.captionMode === 'word' || appState.captionMode === 'rolling-stack')
+    ? appState.captionMode
+    : 'sentence';
   captionModeRadios.forEach(r => { r.checked = r.value === captionMode; });
 
   // Font Family

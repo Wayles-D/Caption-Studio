@@ -542,6 +542,10 @@ input:checked + .theme-slider::before {
   border: 1px solid var(--border-color);
 }
 
+.caption-mode-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .radio-tab {
   position: relative;
   text-align: center;

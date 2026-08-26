@@ -1,4 +1,5 @@
 import { getASSStyleFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, hexToASSColor, opacityToAssAlpha } from '../../shared/captionConfig.js';
+import { buildRollingStackSlices, chunkRawText } from '../../shared/rollingStack.js';
 
 /**
  * Formats a duration in seconds to the standard ASS timestamp format: H:MM:SS.cs
@@ -314,6 +315,74 @@ function generateWordModeDialogueEvents(phrase, options) {
 }
 
 /**
+ * Builds one rolling-stack line's inline override block from
+ * resolveWordStyleMetadata's generic metadata, reusing buildKeywordDrivenWordBlock
+ * verbatim (it only ever reads wordText/metadata, never the raw word object,
+ * so a whole joined chunk line is a drop-in "word" as far as it's concerned).
+ * isWordActive is passed in by the caller: true for the bottom/active chunk,
+ * false for the top/previous chunk — this is what naturally limits the pop
+ * scale-up and the "active" highlight color to the bottom line only, via the
+ * exact same resolveWordStyleMetadata logic every other mode already uses.
+ */
+function buildRollingStackLineBlock(chunk, options, isWordActive) {
+  const {
+    textCase, enableKeywordHighlighting, keywordStyleConfig, keywordTextCase, activeHighlightEnabled,
+    animationMode, primaryColorHex, secondaryColorHex, baseFontFamily, baseFontWeight,
+    outlineSize, shadowSize, textOpacity
+  } = options;
+
+  const caseForChunk = resolveWordTextCase(chunk.type === 'keyword', enableKeywordHighlighting, textCase, keywordTextCase);
+  const lineText = applyCaseTransform(chunkRawText(chunk), caseForChunk, true);
+
+  const metadata = resolveWordStyleMetadata({ isKeyword: chunk.type === 'keyword' }, {
+    keywordStyleConfig,
+    keywordsEnabled: enableKeywordHighlighting,
+    activeHighlightEnabled,
+    isWordActive,
+    mode: animationMode,
+    activeHighlightColorHex: primaryColorHex,
+    inactiveColorHex: secondaryColorHex,
+    baseFontFamily,
+    baseFontWeight
+  });
+
+  const combinedOpacity = metadata.isKeyword
+    ? (textOpacity ?? 100) * (keywordStyleConfig.opacity ?? 100) / 100
+    : (textOpacity ?? 100);
+  const wordAlphaHex = opacityToAssAlpha(combinedOpacity);
+
+  return buildKeywordDrivenWordBlock(null, lineText, metadata, outlineSize || 0, shadowSize || 0, wordAlphaHex);
+}
+
+/**
+ * Rolling Stack: a two-layer previous/active caption layout built around
+ * detected keywords (see shared/rollingStack.js for the shared chunking/
+ * slicing logic both this and the CSS preview call). One Dialogue event per
+ * rolling-stack slice; each event's text is the top (previous) chunk's line,
+ * an ASS `\N` line break, then the bottom (active) chunk's line — under the
+ * Style's existing bottom-center alignment this stacks the active line
+ * closest to the anchor with the previous line above it, with no manual
+ * pixel positioning needed. When a slice has no top chunk (the phrase's
+ * opening run, or a keyword-free phrase, which is always a single chunk),
+ * only the bottom line is emitted — a real single line, not an empty forced
+ * second line.
+ */
+function generateRollingStackDialogueEvents(phrase, options) {
+  const { posOverrideTag } = options;
+  const slices = buildRollingStackSlices(phrase);
+
+  return slices.map((slice) => {
+    let payload = buildShadowOverrideTag(options);
+    if (slice.top) {
+      payload += buildRollingStackLineBlock(slice.top, options, false);
+      payload += '\\N';
+    }
+    payload += buildRollingStackLineBlock(slice.bottom, options, true);
+    return `Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Default,,0,0,0,,${posOverrideTag || ''}${payload}`;
+  }).join('\n');
+}
+
+/**
  * Generates one Dialogue event per word-boundary time-slice within a phrase.
  * The full phrase is always visible; only the currently active word's color
  * (and scale, for 'pop') differs — no word is ever hidden or swept/revealed.
@@ -437,7 +506,9 @@ export function generateASSDialogueLine(phrase, options = {}) {
   const textOpacity = (typeof options === 'object' && options.textOpacity != null) ? options.textOpacity : 100;
   const baseFontFamily = (typeof options === 'object' && options.baseFontFamily) || null;
   const baseFontWeight = (typeof options === 'object' && options.baseFontWeight) || null;
-  const captionMode = (typeof options === 'object' && options.captionMode === 'word') ? 'word' : 'sentence';
+  const captionMode = typeof options === 'object' && (options.captionMode === 'word' || options.captionMode === 'rolling-stack')
+    ? options.captionMode
+    : 'sentence';
 
   const resolvedOptions = {
     textCase, animationMode, popScale, primaryColor, secondaryColor,
@@ -448,12 +519,17 @@ export function generateASSDialogueLine(phrase, options = {}) {
     baseFontFamily, baseFontWeight
   };
 
-  // Word Mode overrides every animation mode: exactly one word on screen at
-  // a time is a distinct rendering shape from all of karaoke/pop/instant/
-  // typewriter's "full phrase, differing emphasis" model, so it's checked
-  // first regardless of animationMode (see generateWordModeDialogueEvents).
+  // Word Mode and Rolling Stack both override every animation mode: they're
+  // distinct rendering shapes from all of karaoke/pop/instant/typewriter's
+  // "full phrase, differing emphasis" model, so they're checked first
+  // regardless of animationMode (see generateWordModeDialogueEvents /
+  // generateRollingStackDialogueEvents).
   if (captionMode === 'word') {
     return generateWordModeDialogueEvents(phrase, resolvedOptions);
+  }
+
+  if (captionMode === 'rolling-stack') {
+    return generateRollingStackDialogueEvents(phrase, resolvedOptions);
   }
 
   if (animationMode === 'typewriter') {
@@ -573,4 +649,32 @@ export function generateUnifiedShadowWordDialogueEvents(phrase, options = {}) {
       return `Dialogue: 0,${formatASSTimestamp(w.start)},${formatASSTimestamp(w.end)},Shadow,,0,0,0,,${posOverrideTag}${wordText}`;
     })
     .join('\n');
+}
+
+/**
+ * Rolling Stack's Unified Shadow events: one flat, two-line silhouette event
+ * per rolling-stack slice (see generateRollingStackDialogueEvents), reusing
+ * the exact same shared slicing so the shadow layer's shape and timing always
+ * matches the real caption track — same top/bottom line pairing, just flat
+ * single-color text with no per-chunk keyword styling.
+ *
+ * @param {object} phrase - Unified phrase (start, end, words[]).
+ * @param {object} options - { textCase, posOverrideTag, enableKeywordHighlighting, keywordTextCase }.
+ * @returns {string} Newline-joined ASS Dialogue Event lines, one per slice.
+ */
+export function generateUnifiedShadowRollingStackDialogueEvents(phrase, options = {}) {
+  const textCase = options.textCase || 'uppercase';
+  const posOverrideTag = options.posOverrideTag || '';
+  const slices = buildRollingStackSlices(phrase);
+
+  return slices.map((slice) => {
+    const bottomCase = resolveWordTextCase(slice.bottom.type === 'keyword', options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
+    const bottomText = applyCaseTransform(chunkRawText(slice.bottom), bottomCase, true);
+    let text = bottomText;
+    if (slice.top) {
+      const topCase = resolveWordTextCase(slice.top.type === 'keyword', options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
+      text = `${applyCaseTransform(chunkRawText(slice.top), topCase, true)}\\N${bottomText}`;
+    }
+    return `Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Shadow,,0,0,0,,${posOverrideTag}${text}`;
+  }).join('\n');
 }

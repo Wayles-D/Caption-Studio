@@ -94,7 +94,7 @@
                     <div class="accordion-body">
                         <div class="settings-group">
                             <label class="group-label">Caption Mode</label>
-                            <div class="radio-toggle-grid">
+                            <div class="radio-toggle-grid caption-mode-grid">
                                 <label class="radio-tab">
                                     <input type="radio" name="caption-mode" value="sentence" checked>
                                     <span>Sentence</span>
@@ -103,8 +103,12 @@
                                     <input type="radio" name="caption-mode" value="word">
                                     <span>Word</span>
                                 </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="caption-mode" value="rolling-stack">
+                                    <span>Rolling Stack</span>
+                                </label>
                             </div>
-                            <p class="field-hint">Word mode shows exactly one transcript word at a time instead of the full caption line. "Bold Social" fonts below work well here.</p>
+                            <p class="field-hint">Word mode shows exactly one transcript word at a time instead of the full caption line. Rolling Stack shows normal words on top and the current keyword below, rolling forward as speech continues. "Bold Social" fonts below work well here.</p>
                         </div>
 
                         <div class="settings-group">
