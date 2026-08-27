@@ -23,20 +23,21 @@ import fs from 'fs';
 import path from 'path';
 import { createCanvas } from '@napi-rs/canvas';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
-import { canDrawCaptionFrame, isGraphicsRendererDefaultForPreset, drawCaptionFrameForExport } from '../../shared/captionGraphics.js';
+import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport } from '../../shared/captionGraphics.js';
+import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
 /**
  * Whether a job with this style should render via the graphics pipeline
  * instead of ASS — delegates entirely to the shared
- * isGraphicsRendererDefaultForPreset, the SAME check the frontend preview
+ * isGraphicsRendererDefault, the SAME check the frontend preview
  * uses to decide when to switch off the CSS/DOM renderer, so export can
  * never go live for a preset the preview hasn't (see
  * shared/captionGraphics.js's GRAPHICS_RENDERER_DEFAULT_PRESETS).
  */
 export function canGenerateGraphicsFrames(params) {
   const cssConfig = getCSSPreviewFromConfig(params);
-  return isGraphicsRendererDefaultForPreset(cssConfig);
+  return isGraphicsRendererDefault(cssConfig);
 }
 
 /**
@@ -114,6 +115,55 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
 }
 
 /**
+ * Rolling Stack's frame generator — export counterpart to
+ * generatePhraseCaptionFrames. Slices are window-boundary-based (see
+ * shared/rollingStack.js's buildRollingStackWindowSlices — Active-Word
+ * Selection), not per-word: a new PNG is only rendered when the on-screen
+ * chunk window actually changes, which for typical 2-3-word chunks is far
+ * fewer redraws than one-per-word, keeping this within the app's existing
+ * memory budget the same way generatePhraseCaptionFrames does.
+ *
+ * @param {object} phrase - { start, end, words: [{word|text, start, end, isKeyword?}] }
+ * @param {object} params - Same raw style params, including rollingStackLayerCount/rollingStackAlignment.
+ * @param {number} canvasWidth - Output video's pixel width.
+ * @param {number} canvasHeight - Output video's pixel height.
+ * @param {string} outDir - Directory to write per-slice PNGs into (created if missing).
+ * @returns {{start:number, end:number, file:string}[]}
+ */
+export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
+  registerBackendCanvasFonts();
+
+  const cssConfig = getCSSPreviewFromConfig(params);
+  if (!canDrawCaptionFrame(cssConfig)) {
+    throw new Error('generateRollingStackPhraseFrames: unsupported preset/mode for the graphics renderer (see shared/captionGraphics.js canDrawCaptionFrame).');
+  }
+
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const layerCount = params.rollingStackLayerCount || 2;
+  const slices = buildRollingStackWindowSlices(phrase, layerCount);
+  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const ctx = canvas.getContext('2d');
+
+  return slices.map((slice) => {
+    drawRollingStackFrameForExport(ctx, {
+      canvasWidth,
+      canvasHeight,
+      windowChunks: slice.chunks,
+      cssConfig,
+      params,
+      alignment: params.rollingStackAlignment,
+      createOffscreenCanvas: (w, h) => createCanvas(w, h)
+    });
+
+    const file = path.join(outDir, `slice-${Math.round(slice.start * 1000)}.png`);
+    fs.writeFileSync(file, canvas.toBuffer('image/png'));
+
+    return { start: slice.start, end: slice.end, file };
+  });
+}
+
+/**
  * Writes one fully-transparent PNG at the given resolution — the "nothing is
  * captioned right now" filler segment used to bridge gaps between phrases
  * (and before the first / after the last) when building a full-video caption
@@ -153,12 +203,19 @@ export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHe
     if (end - start >= 0.001) segments.push({ start, end, file: blankFile });
   };
 
+  // Caption mode is a global style setting, not per-phrase, so this is
+  // resolved once and used for every phrase in the video.
+  const cssConfig = getCSSPreviewFromConfig(params);
+  const generatePhraseFrames = cssConfig.captionMode === 'rolling-stack'
+    ? generateRollingStackPhraseFrames
+    : generatePhraseCaptionFrames;
+
   const segments = [];
   let cursor = 0;
 
   [...phrases].sort((a, b) => a.start - b.start).forEach((phrase) => {
     pushGap(segments, cursor, phrase.start);
-    segments.push(...generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasHeight, outDir));
+    segments.push(...generatePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir));
     cursor = phrase.end;
   });
   pushGap(segments, cursor, videoDuration);

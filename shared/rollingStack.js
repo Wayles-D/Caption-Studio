@@ -160,6 +160,84 @@ export function buildRollingStackSlices(phrase) {
 }
 
 /**
+ * Resolves the active WINDOW of chunks for the graphics renderer's Rolling
+ * Stack layout: the chunk currently being spoken (chunk.start <= time <
+ * chunk.end) plus the (layerCount - 1) chunks immediately preceding it in
+ * sequence — regardless of whether their own timestamps literally overlap
+ * the current chunk's.
+ *
+ * This is deliberately different from resolveRollingStackActiveChunkIndices
+ * above (which only pairs chunks that genuinely overlap in time, still used
+ * by the legacy CSS/ASS renderers for the cases the graphics engine doesn't
+ * cover yet): natural speech essentially never has two adjacent words with
+ * truly overlapping timestamps, so a "genuine overlap only" rule can never
+ * produce the intended "the just-finished chunk stays paired with the one
+ * now being spoken" composition (e.g. NORMAL "do it" staying on screen next
+ * to KEYWORD "consistently" once it starts, even though "do it" has already
+ * finished by then).
+ *
+ * Never includes a chunk before it has started (no future words), and every
+ * chunk drops out of the window as soon as a newer chunk becomes current and
+ * pushes it more than (layerCount - 1) positions back — so nothing lingers
+ * indefinitely and nothing is ever synthesized as filler; a chunk is only
+ * ever on screen because it is the current chunk or immediately precedes it.
+ *
+ * During a genuine gap (no chunk's own [start, end) contains `time`) this
+ * returns an empty array — matching resolveRollingStackFrame's existing
+ * "nothing shown during a real pause" behavior, not a frozen last-state.
+ *
+ * @param {Array} chunks - Output of buildRollingStackChunks.
+ * @param {number} time - Playback time (or, for export, a slice's start time).
+ * @param {number} layerCount - Max simultaneous layers (2 or 3).
+ * @returns {Array} Chunks in the window, oldest first, current chunk last.
+ */
+export function resolveRollingStackWindow(chunks, time, layerCount) {
+  const currentIndex = chunks.findIndex(
+    (c) => time >= c.start - TIMING_EPSILON && time < c.end - TIMING_EPSILON
+  );
+  if (currentIndex === -1) return [];
+  const windowSize = Math.max(1, layerCount || 2);
+  const startIndex = Math.max(0, currentIndex - (windowSize - 1));
+  return chunks.slice(startIndex, currentIndex + 1);
+}
+
+/**
+ * Export-side equivalent of resolveRollingStackWindow: the full sequence of
+ * timed windows covering a phrase's on-screen duration, sliced at every
+ * chunk boundary (so the active window is constant within any one slice) —
+ * same construction as buildRollingStackSlices above, generalized to N
+ * layers. Used by the backend graphics frame generator; not by the ASS path.
+ *
+ * @param {object} phrase - Unified phrase (start, end, words[]).
+ * @param {number} layerCount - Max simultaneous layers (2 or 3).
+ * @returns {Array<{start:number, end:number, chunks:Array}>}
+ */
+export function buildRollingStackWindowSlices(phrase, layerCount) {
+  const chunks = buildRollingStackChunks(phrase.words);
+  if (chunks.length === 0) return [];
+
+  const boundarySet = new Set([phrase.start, phrase.end]);
+  chunks.forEach((c) => {
+    boundarySet.add(c.start);
+    boundarySet.add(c.end);
+  });
+  const boundaries = Array.from(boundarySet).sort((a, b) => a - b);
+
+  const slices = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const sliceStart = boundaries[i];
+    const sliceEnd = boundaries[i + 1];
+    if (sliceEnd - sliceStart < TIMING_EPSILON) continue;
+
+    const windowChunks = resolveRollingStackWindow(chunks, sliceStart, layerCount);
+    if (windowChunks.length === 0) continue; // genuine gap — nothing shown
+
+    slices.push({ start: sliceStart, end: sliceEnd, chunks: windowChunks });
+  }
+  return slices;
+}
+
+/**
  * Joins a chunk's word texts into a single display string — chunk-level
  * equivalent of a single word's raw text, ready for applyCaseTransform.
  *

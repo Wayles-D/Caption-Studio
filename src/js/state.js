@@ -45,6 +45,11 @@ export const initialStyleState = {
   // 'word' (exactly one transcript word visible at a time) — see
   // resolveCaptionMode in shared/captionConfig.js.
   captionMode: "sentence",
+  // Rolling Stack only: max simultaneous layers in the composition (2 or 3
+  // — user-controlled, never auto-decided) and how each line is aligned
+  // within the shared invisible container. See shared/rollingStack.js.
+  rollingStackLayerCount: 2,
+  rollingStackAlignment: "center",
   animationMode: "karaoke",
   textCase: "uppercase",
   position: "bottom",
@@ -232,6 +237,8 @@ export function getStyleParams() {
     textOpacity: appState.textOpacity,
     backgroundOpacity: appState.backgroundOpacity,
     captionMode: appState.captionMode,
+    rollingStackLayerCount: appState.rollingStackLayerCount,
+    rollingStackAlignment: appState.rollingStackAlignment,
     textCase: appState.textCase,
     position: appState.position,
     customPosX: appState.customPosX,

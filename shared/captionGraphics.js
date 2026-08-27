@@ -26,25 +26,33 @@
  * shared/captionConfig.js's getASSStyleFromConfig for the still-authoritative
  * ASS-domain geometry every other preset continues to use unchanged.
  *
- * SCOPE: only 'sentence' caption mode, non-keyword-driven presets, non-boxed
- * (BorderStyle 1, not 3), with the 'individual' or 'none' shadow system —
- * this currently covers 'bold-yellow' and 'caps-white'. Keyword-driven
- * presets (WAYLES family, Poppins + Editorial), boxed presets ('bg-black' —
- * no box-fill/padding drawing yet), Unified Shadow, Word Mode, and Rolling
- * Stack are intentionally NOT implemented yet — canDrawCaptionFrame() below
- * returns false for anything outside this scope so callers can fall back to
- * the existing CSS/ASS renderers untouched. Widen the scope incrementally,
- * preset family by preset family, per the migration plan — not by silently
+ * SCOPE: 'sentence' mode covers non-keyword-driven, non-boxed presets with
+ * the 'individual'/'none' shadow system — currently 'bold-yellow' and
+ * 'caps-white' (see GRAPHICS_RENDERER_DEFAULT_PRESETS). 'rolling-stack' mode
+ * (see drawRollingStackFrame/drawRollingStackFrameForExport below) covers
+ * ANY preset, including keyword-driven ones — Rolling Stack inherently needs
+ * distinct normal/keyword typography, resolved through the same
+ * resolveWordStyleMetadata every keyword-driven sentence-mode preset already
+ * uses, independent of that preset's own keywordDriven flag. Boxed
+ * backgrounds ('bg-black' — no box-fill/padding drawing yet), Unified
+ * Shadow, and Word Mode are intentionally NOT implemented in EITHER mode —
+ * canDrawCaptionFrame() below returns false for anything outside this scope
+ * so callers can fall back to the existing CSS/ASS renderers untouched.
+ * Widen the scope incrementally per the migration plan — not by silently
  * guessing at unimplemented styling.
  */
 import {
   applyCaseTransform,
   resolveWordTextCase,
+  resolveWordStyleMetadata,
   resolveShadowOutlineParams,
   resolveShadowMode,
+  resolveUnifiedShadowParams,
+  applyOpacityToColor,
   FONT_SIZE_ASS_SCALE
 } from './captionConfig.js';
 import { resolveFontFace } from './fontRegistry.js';
+import { chunkRawText } from './rollingStack.js';
 
 /**
  * Whether the graphics engine currently knows how to render this resolved
@@ -57,38 +65,53 @@ import { resolveFontFace } from './fontRegistry.js';
  */
 export function canDrawCaptionFrame(cssConfig) {
   if (!cssConfig) return false;
-  if (cssConfig.captionMode !== 'sentence') return false;
-  if (cssConfig.keywordDriven) return false;
-  if (cssConfig.shadowMode === 'unified') return false;
+  if (!['sentence', 'rolling-stack'].includes(cssConfig.captionMode)) return false;
+  // Keyword-driven presets are out of scope for sentence mode (still on the
+  // ASS path — see the migration plan), but Rolling Stack REQUIRES keyword
+  // typography to differ from normal typography regardless of the base
+  // preset's own keywordDriven flag, so it's never excluded on that basis.
+  if (cssConfig.keywordDriven && cssConfig.captionMode !== 'rolling-stack') return false;
+  // Unified shadow: sentence mode still defers to the ASS pipeline's own
+  // offscreen-composited silhouette layer (unchanged, already correct — see
+  // backend/utils/ffmpeg.js). Rolling Stack's graphics renderer implements
+  // Unified mode itself (see renderRollingStackResolvedFrame's own
+  // offscreen-composite technique), so it's never excluded on that basis.
+  if (cssConfig.shadowMode === 'unified' && cssConfig.captionMode !== 'rolling-stack') return false;
   if (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') return false; // boxed presets (e.g. bg-black) — no box-fill drawing yet
   return true;
 }
 
 /**
- * Presets actually verified end-to-end (preview AND export, both driven by
- * this renderer, visually compared) — see the migration plan. This is
- * intentionally a separate, narrower gate than canDrawCaptionFrame(): that
- * function describes what the renderer's CODE currently supports in
- * principle (mode/keyword/shadow/box scope), this constant describes what's
- * actually been validated enough to turn on for real users by default.
- * Widening canDrawCaptionFrame's scope (e.g. adding box-fill support) does
- * NOT, by itself, enable a preset here — add it explicitly once verified.
+ * Sentence-mode presets actually verified end-to-end (preview AND export,
+ * both driven by this renderer, visually compared) — see the migration
+ * plan. This is intentionally a separate, narrower gate than
+ * canDrawCaptionFrame(): that function describes what the renderer's CODE
+ * currently supports in principle (mode/keyword/shadow/box scope), this
+ * constant describes which SENTENCE-mode presets have actually been
+ * validated enough to turn on for real users by default. Widening
+ * canDrawCaptionFrame's scope (e.g. adding box-fill support) does NOT, by
+ * itself, enable a preset here — add it explicitly once verified. Rolling
+ * Stack mode doesn't use this list at all — see isGraphicsRendererDefault.
  */
 export const GRAPHICS_RENDERER_DEFAULT_PRESETS = ['bold-yellow', 'caps-white'];
 
 /**
  * Whether this resolved style should use the graphics renderer BY DEFAULT
- * (no opt-in flag required) — canDrawCaptionFrame's scope check, narrowed to
- * only the presets in GRAPHICS_RENDERER_DEFAULT_PRESETS. Both the preview
- * (src/js/components/preview.js) and the export gate
+ * (no opt-in flag required). Rolling Stack mode is always default when in
+ * scope — there is no legacy rendering worth preferring over it (the
+ * previous CSS/ASS Rolling Stack positioned its two layers independently
+ * rather than as one bounded composition), so it isn't gated by preset.
+ * Sentence mode stays gated to GRAPHICS_RENDERER_DEFAULT_PRESETS. Both the
+ * preview (src/js/components/preview.js) and the export gate
  * (backend/utils/graphicsFrameGenerator.js's canGenerateGraphicsFrames) call
- * this exact function, so "which presets are live" can never drift between
- * the two — change the list above once, both sides pick it up.
+ * this exact function, so "what's live" can never drift between the two.
  *
  * @param {object} cssConfig - Result of getCSSPreviewFromConfig(params).
  */
-export function isGraphicsRendererDefaultForPreset(cssConfig) {
-  return canDrawCaptionFrame(cssConfig) && GRAPHICS_RENDERER_DEFAULT_PRESETS.includes(cssConfig.profile?.id);
+export function isGraphicsRendererDefault(cssConfig) {
+  if (!canDrawCaptionFrame(cssConfig)) return false;
+  if (cssConfig.captionMode === 'rolling-stack') return true;
+  return GRAPHICS_RENDERER_DEFAULT_PRESETS.includes(cssConfig.profile?.id);
 }
 
 function toPx(cssLength, basisPx) {
@@ -197,7 +220,7 @@ function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, reference
     }
   }
 
-  return { fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge };
+  return { pxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge };
 }
 
 /**
@@ -335,64 +358,99 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
 
     line.words.forEach((word) => {
       const centerX = cursorX + word.width / 2;
-      ctx.save();
-      ctx.font = word.font;
-      ctx.textAlign = 'center';
-
-      if (word.scale !== 1) {
-        ctx.translate(centerX, lineY);
-        ctx.scale(word.scale, word.scale);
-        ctx.translate(-centerX, -lineY);
-      }
-
-      const applyShadow = () => {
-        if (!hasShadow) return;
-        ctx.shadowColor = shadowColor;
-        ctx.shadowBlur = shadowBlurPx;
-        ctx.shadowOffsetX = shadowOffsetXPx;
-        ctx.shadowOffsetY = shadowOffsetYPx;
-      };
-      const clearShadow = () => { ctx.shadowColor = 'transparent'; };
-      // See needsSyntheticBold's doc comment: an explicit stand-in stroke (in
-      // the word's own fill color, drawn UNDER the fill) for a bold weight
-      // this font has no real bold file for — thin enough to thicken the
-      // glyph rather than distort it, same technique browsers use internally.
-      const emboldenWidthPx = word.syntheticBold ? fontSizePx * 0.04 : 0;
-
-      // The shadow is a single drop-shadow behind the glyph's full rendered
-      // shape (fill + outline together), so it's only drawn on whichever pass
-      // paints first — the other pass runs with shadow cleared, matching how
-      // a single CSS text-shadow layer sits behind both simultaneously.
-      if (outlineWidthPx > 0) {
-        applyShadow();
-        ctx.lineWidth = outlineWidthPx;
-        ctx.strokeStyle = outlineColor;
-        ctx.strokeText(word.text, centerX, lineY);
-        clearShadow();
-        if (emboldenWidthPx > 0) {
-          ctx.lineWidth = emboldenWidthPx;
-          ctx.strokeStyle = word.color;
-          ctx.strokeText(word.text, centerX, lineY);
-        }
-        ctx.fillStyle = word.color;
-        ctx.fillText(word.text, centerX, lineY);
-      } else {
-        applyShadow();
-        if (emboldenWidthPx > 0) {
-          ctx.lineWidth = emboldenWidthPx;
-          ctx.strokeStyle = word.color;
-          ctx.strokeText(word.text, centerX, lineY);
-          clearShadow();
-        }
-        ctx.fillStyle = word.color;
-        ctx.fillText(word.text, centerX, lineY);
-        clearShadow();
-      }
-
-      ctx.restore();
+      paintText(ctx, word.text, centerX, lineY, {
+        font: word.font,
+        color: word.color,
+        scale: word.scale,
+        syntheticBold: word.syntheticBold,
+        fontSizePx,
+        outlineWidthPx,
+        outlineColor,
+        hasShadow,
+        shadowBlurPx,
+        shadowOffsetXPx,
+        shadowOffsetYPx,
+        shadowColor
+      });
       cursorX += word.width + wordSpacingPx;
     });
   });
+}
+
+/**
+ * Low-level paint step for one run of text at one point: outline (if any) +
+ * synthetic-bold embolden (if any, see needsSyntheticBold) + fill, with an
+ * optional drop-shadow applied to whichever pass paints first (so it reads
+ * as one shadow behind the glyph's full rendered shape, matching a single
+ * CSS text-shadow layer). Shared by the sentence-mode word loop above and
+ * the Rolling Stack line loop below — this is the one place glyphs actually
+ * get painted, so the two layouts can never visually diverge in HOW a piece
+ * of text is drawn, only in where.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} text
+ * @param {number} x - Anchor x per ctx.textAlign (set by the caller via `font`'s caller — textAlign itself is set here to 'center').
+ * @param {number} y - Baseline y.
+ * @param {object} style - { font, color, scale, syntheticBold, fontSizePx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, textAlign? }
+ */
+function paintText(ctx, text, x, y, style) {
+  const {
+    font, color, scale = 1, syntheticBold, fontSizePx,
+    outlineWidthPx = 0, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor,
+    textAlign = 'center'
+  } = style;
+
+  ctx.save();
+  ctx.font = font;
+  ctx.textAlign = textAlign;
+
+  if (scale !== 1) {
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    ctx.translate(-x, -y);
+  }
+
+  const applyShadow = () => {
+    if (!hasShadow) return;
+    ctx.shadowColor = shadowColor;
+    ctx.shadowBlur = shadowBlurPx;
+    ctx.shadowOffsetX = shadowOffsetXPx;
+    ctx.shadowOffsetY = shadowOffsetYPx;
+  };
+  const clearShadow = () => { ctx.shadowColor = 'transparent'; };
+  // See needsSyntheticBold's doc comment: an explicit stand-in stroke (in
+  // the text's own fill color, drawn UNDER the fill) for a bold weight this
+  // font has no real bold file for — thin enough to thicken the glyph
+  // rather than distort it, same technique browsers use internally.
+  const emboldenWidthPx = syntheticBold ? fontSizePx * 0.04 : 0;
+
+  if (outlineWidthPx > 0) {
+    applyShadow();
+    ctx.lineWidth = outlineWidthPx;
+    ctx.strokeStyle = outlineColor;
+    ctx.strokeText(text, x, y);
+    clearShadow();
+    if (emboldenWidthPx > 0) {
+      ctx.lineWidth = emboldenWidthPx;
+      ctx.strokeStyle = color;
+      ctx.strokeText(text, x, y);
+    }
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  } else {
+    applyShadow();
+    if (emboldenWidthPx > 0) {
+      ctx.lineWidth = emboldenWidthPx;
+      ctx.strokeStyle = color;
+      ctx.strokeText(text, x, y);
+      clearShadow();
+    }
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+    clearShadow();
+  }
+
+  ctx.restore();
 }
 
 /**
@@ -437,4 +495,264 @@ export function drawCaptionFrameForExport(ctx, opts) {
   const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params } = opts;
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, PHONE_FRAME_CSS_WIDTH);
   renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry });
+}
+
+/* =========================================================================
+ * ROLLING STACK
+ *
+ * A compact, bounded composition — not independently-positioned text boxes.
+ * Callers resolve WHICH chunks are on screen (shared/rollingStack.js's
+ * resolveRollingStackWindow/buildRollingStackWindowSlices — Active-Word
+ * Selection) and pass that array in as `windowChunks` (oldest chunk first,
+ * the currently-active chunk last); everything below is purely Layout +
+ * Graphics: measure each chunk's own typography, size the shared invisible
+ * container to fit the widest line, stack lines inside it, paint.
+ *
+ * Typography per chunk comes from resolveWordStyleMetadata — the SAME
+ * function every keyword-driven preset's normal/keyword styling already
+ * resolves through — so normal vs keyword font/size/color/shadow/outline
+ * stay fully configurable via the existing style controls; nothing about a
+ * specific font pairing is hard-coded here (see this module's SCOPE note).
+ *
+ * No animation: metadata.animation (a transient "pop" scale some keyword
+ * tiers configure) is deliberately never read below — only the STATIC
+ * fontScale (the real, permanent "keyword is bigger" ratio) is applied.
+ * ======================================================================= */
+
+// Fixed "soft emphasis" shadow/outline for a keyword tier that opts into
+// them (tier.hasShadow/hasOutline) — same constants
+// buildKeywordShadowMetadata/buildKeywordOutlineMetadata in
+// captionConfig.js encode (assDepth 3 / assWidth 3, ASS-canvas-domain,
+// converted the same way every other ASS-domain number in this file is:
+// divide by FONT_SIZE_ASS_SCALE for the CSS-px equivalent, then by pxScale
+// for the caller's actual canvas). Re-declared here rather than imported
+// because captionConfig.js's versions build CSS strings, not raw numbers.
+const KEYWORD_EMPHASIS_ASS_DEPTH = 3;
+const KEYWORD_EMPHASIS_BLUR_RATIO = 1.3; // matches buildKeywordShadowMetadata's own blur-vs-depth ratio
+const KEYWORD_EMPHASIS_SHADOW_COLOR = 'rgba(0, 0, 0, 0.45)';
+const KEYWORD_EMPHASIS_OUTLINE_COLOR = '#000000';
+
+// Vertical gap between stacked layers and horizontal padding for the
+// implicit safe area, both expressed as a fraction of the BASE (normal-word)
+// font size — mirrors the previous CSS renderer's `gap: 0.15em`, which was
+// relative to the container's own (base) font-size.
+const ROLLING_STACK_LAYER_GAP_RATIO = 0.15;
+
+/**
+ * Resolves one chunk's full draw spec: text, font, size, color, shadow,
+ * outline — everything paintText() needs — via resolveWordStyleMetadata,
+ * exactly like a keyword-driven sentence-mode preset resolves a single
+ * word's style, just applied to a chunk's joined text instead.
+ *
+ * Shadow/outline precedence matches the CSS/ASS sentence-mode renderer
+ * exactly: the keyword tier's own fixed "soft emphasis" shadow/outline
+ * (opt-in per preset/user via shadowByDefault/outlineByDefault or the
+ * Keyword Shadow/Outline toggles — see resolveWordStyleMetadata) OVERRIDES
+ * the real shadow/outline for that one chunk when present; every other
+ * chunk uses the real, user-configurable Shadow/Outline sliders
+ * (geometry.hasShadow/outlineWidthPx etc., resolved once for the whole
+ * frame in resolveGeometry) — never a fixed value. This is what actually
+ * wires the Shadow Mode/Size/Color/Offset controls into Rolling Stack;
+ * emphasisOffsetPx below is ONLY the small fixed keyword-emphasis effect,
+ * not a substitute for those controls.
+ */
+function resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geometry) {
+  const profile = cssConfig.profile;
+  const keywordsEnabled = !!params.enableKeywordHighlighting && params.enableKeywordHighlighting !== 'false';
+  const activeHighlight = cssConfig.highlightColor || '#FEF08A';
+  const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
+
+  const caseForChunk = resolveWordTextCase(chunk.type === 'keyword', keywordsEnabled, params.textCase, cssConfig.keywordTextCase);
+  const text = applyCaseTransform(chunkRawText(chunk), caseForChunk, true);
+
+  const metadata = resolveWordStyleMetadata(
+    { isKeyword: chunk.type === 'keyword' },
+    {
+      keywordStyleConfig: cssConfig.keywordStyleConfig,
+      keywordsEnabled,
+      activeHighlightEnabled: cssConfig.activeHighlightEnabled,
+      isWordActive: isCurrent,
+      mode: 'karaoke', // never 'pop' — see this section's "No animation" note; metadata.animation is never read below regardless
+      activeHighlightColorHex: activeHighlight,
+      inactiveColorHex: inactiveColor,
+      baseFontFamily: profile.fontFamily,
+      baseFontWeight: profile.fontWeight
+    }
+  );
+
+  // Matches the CSS Rolling Stack renderer's own opacity composition exactly
+  // (see preview.js's buildRollingStackLineElement): global text opacity only
+  // ever applies to keyword chunks, composed with the dedicated Keyword
+  // Opacity control; normal chunks are unaffected by either.
+  const opacity = metadata.isKeyword
+    ? (params.textOpacity ?? 100) * (cssConfig.keywordStyleConfig.opacity ?? 100) / 100
+    : 100;
+
+  const fontFamily = (metadata.fontFamily || profile.fontFamily || 'Poppins').toString();
+  const fontWeight = metadata.fontWeight || profile.fontWeight;
+  const fontSizePx = geometry.fontSizePx * (metadata.fontScale || 1);
+
+  const emphasisOffsetPx = (KEYWORD_EMPHASIS_ASS_DEPTH / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+
+  const useEmphasisOutline = !!metadata.outline;
+  const useEmphasisShadow = !!metadata.shadow;
+
+  return {
+    text,
+    fontSizePx,
+    font: buildFontString({ fontFamily, fontWeight, italic: metadata.italic, fontSizePx }),
+    color: applyOpacityToColor(metadata.colorHex, opacity),
+    syntheticBold: needsSyntheticBold(fontFamily, parseInt(fontWeight, 10) || 0),
+    outlineWidthPx: useEmphasisOutline ? emphasisOffsetPx : geometry.outlineWidthPx,
+    outlineColor: useEmphasisOutline ? KEYWORD_EMPHASIS_OUTLINE_COLOR : geometry.outlineColor,
+    // geometry.hasShadow already reflects the real Shadow Mode (only true
+    // when Individual mode + Shadow Size > 0 — see resolveGeometry) so this
+    // naturally stays off in Unified/None mode unless the keyword-emphasis
+    // override kicks in; Unified mode's own whole-composition shadow is
+    // applied separately, once, by renderRollingStackResolvedFrame.
+    hasShadow: useEmphasisShadow || geometry.hasShadow,
+    shadowBlurPx: useEmphasisShadow ? emphasisOffsetPx * KEYWORD_EMPHASIS_BLUR_RATIO : geometry.shadowBlurPx,
+    shadowOffsetXPx: useEmphasisShadow ? emphasisOffsetPx : geometry.shadowOffsetXPx,
+    shadowOffsetYPx: useEmphasisShadow ? emphasisOffsetPx : geometry.shadowOffsetYPx,
+    shadowColor: useEmphasisShadow ? KEYWORD_EMPHASIS_SHADOW_COLOR : geometry.shadowColor
+  };
+}
+
+/**
+ * Computes layout (line widths/heights, container size, per-line x/y) for a
+ * window of chunks — pure math, no drawing, shared by both the direct-paint
+ * path (None/Individual shadow mode) and the offscreen-composite path
+ * (Unified mode, see renderRollingStackResolvedFrame).
+ */
+function layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry, alignment) {
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+
+  const layerGapPx = geometry.fontSizePx * ROLLING_STACK_LAYER_GAP_RATIO;
+
+  const lines = windowChunks.map((chunk, idx) => {
+    const isCurrent = idx === windowChunks.length - 1;
+    const spec = resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geometry);
+    ctx.font = spec.font;
+    const width = ctx.measureText(spec.text).width;
+    const lineHeightPx = spec.fontSizePx * (parseFloat(cssConfig.profile.lineSpacing) || 1.25);
+    return { ...spec, width, lineHeightPx };
+  });
+
+  const containerWidth = Math.max(...lines.map((l) => l.width));
+  const totalHeight = lines.reduce((sum, l) => sum + l.lineHeightPx, 0) + layerGapPx * (lines.length - 1);
+
+  const { anchorX, anchorY, yEdge } = geometry;
+  const blockTop = yEdge === 'top' ? anchorY : yEdge === 'center' ? anchorY - totalHeight / 2 : anchorY - totalHeight;
+
+  const textAlign = alignment === 'left' || alignment === 'right' ? alignment : 'center';
+  const lineX = alignment === 'left' ? anchorX - containerWidth / 2
+    : alignment === 'right' ? anchorX + containerWidth / 2
+    : anchorX;
+
+  let cursorY = blockTop;
+  const positionedLines = lines.map((line) => {
+    const lineY = cursorY + line.lineHeightPx * 0.8; // ~baseline within the line box
+    cursorY += line.lineHeightPx + layerGapPx;
+    return { ...line, x: lineX, y: lineY, textAlign };
+  });
+
+  return positionedLines;
+}
+
+function paintRollingStackLines(ctx, positionedLines) {
+  positionedLines.forEach((line) => {
+    paintText(ctx, line.text, line.x, line.y, line);
+  });
+}
+
+/**
+ * Shared layout+paint step: given an already-resolved window of chunks
+ * (oldest first, current last), lays them out as one bounded, top-aligned
+ * stack — container width = the widest line, lines share a common left
+ * edge/center/right edge per `alignment`, vertical position follows the
+ * SAME anchor/yEdge geometry (position setting) sentence mode uses — then
+ * paints each line via the shared paintText(). Nothing here decides WHICH
+ * chunks are active; that's entirely the caller's job (Active-Word
+ * Selection, see shared/rollingStack.js), keeping this purely Layout+Graphics.
+ *
+ * Unified shadow mode is handled here rather than per-line: the whole
+ * composition is first painted onto an offscreen canvas with no shadow, then
+ * that ONE offscreen image is drawn onto the real canvas with a single
+ * drop-shadow — producing one combined silhouette-shaped shadow behind the
+ * entire composition (not one blurred copy per line/word, which would show
+ * visible gaps at larger blur radii — the same reason burnSubtitles' Unified
+ * Shadow composites a whole silhouette track rather than per-glyph, see
+ * backend/utils/ffmpeg.js). Requires `createOffscreenCanvas` — supplied by
+ * the caller since this module has no DOM/Node canvas-construction of its
+ * own (see this file's module doc). Falls back to drawing without a shadow
+ * if it isn't provided, rather than silently guessing at one.
+ */
+function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, cssConfig, params, geometry, alignment, createOffscreenCanvas }) {
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  if (!windowChunks || !windowChunks.length) return;
+
+  const shadowMode = resolveShadowMode(params);
+
+  if (shadowMode === 'unified' && createOffscreenCanvas) {
+    const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
+    const offCtx = offscreen.getContext('2d');
+    const positionedLines = layoutRollingStackLines(offCtx, windowChunks, cssConfig, params, geometry, alignment);
+    paintRollingStackLines(offCtx, positionedLines);
+
+    const uni = resolveUnifiedShadowParams(params);
+    const textOpacity = params.textOpacity ?? 100;
+    ctx.save();
+    ctx.shadowColor = applyOpacityToColor(uni.colorHex, (uni.opacity * textOpacity) / 100);
+    ctx.shadowBlur = (uni.blurAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+    ctx.shadowOffsetX = (uni.offsetXAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+    ctx.shadowOffsetY = (uni.offsetYAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+    ctx.drawImage(offscreen, 0, 0);
+    ctx.restore();
+    return;
+  }
+
+  const positionedLines = layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry, alignment);
+  paintRollingStackLines(ctx, positionedLines);
+}
+
+/**
+ * Draws one Rolling Stack frame into a browser <canvas>, in that canvas's
+ * own on-screen pixel space — preview counterpart to drawCaptionFrame.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {object} opts
+ * @param {number} opts.canvasWidth
+ * @param {number} opts.canvasHeight
+ * @param {number} opts.cssPixelWidth
+ * @param {Array} opts.windowChunks - Output of resolveRollingStackWindow (shared/rollingStack.js), oldest first, current last.
+ * @param {object} opts.cssConfig - Result of getCSSPreviewFromConfig(params).
+ * @param {object} opts.params
+ * @param {'left'|'center'|'right'} [opts.alignment='center']
+ * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode; see renderRollingStackResolvedFrame.
+ */
+export function drawRollingStackFrame(ctx, opts) {
+  const { canvasWidth, canvasHeight, cssPixelWidth, windowChunks, cssConfig, params, alignment, createOffscreenCanvas } = opts;
+  const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
+  renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, cssConfig, params, geometry, alignment, createOffscreenCanvas });
+}
+
+/**
+ * Draws one Rolling Stack frame for server-side export — export counterpart
+ * to drawCaptionFrameForExport, same PHONE_FRAME_CSS_WIDTH reference.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {object} opts
+ * @param {number} opts.canvasWidth
+ * @param {number} opts.canvasHeight
+ * @param {Array} opts.windowChunks - Output of resolveRollingStackWindow/buildRollingStackWindowSlices (shared/rollingStack.js).
+ * @param {object} opts.cssConfig
+ * @param {object} opts.params
+ * @param {'left'|'center'|'right'} [opts.alignment='center']
+ * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode; see renderRollingStackResolvedFrame.
+ */
+export function drawRollingStackFrameForExport(ctx, opts) {
+  const { canvasWidth, canvasHeight, windowChunks, cssConfig, params, alignment, createOffscreenCanvas } = opts;
+  const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, PHONE_FRAME_CSS_WIDTH);
+  renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, cssConfig, params, geometry, alignment, createOffscreenCanvas });
 }

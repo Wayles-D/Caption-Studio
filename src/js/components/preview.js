@@ -4,8 +4,8 @@
 import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from '../state.js';
 import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, applyOpacityToColor } from '../../../shared/captionConfig.js';
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
-import { resolveRollingStackFrame, chunkRawText } from '../../../shared/rollingStack.js';
-import { canDrawCaptionFrame, isGraphicsRendererDefaultForPreset, drawCaptionFrame } from '../../../shared/captionGraphics.js';
+import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolveRollingStackWindow } from '../../../shared/rollingStack.js';
+import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame } from '../../../shared/captionGraphics.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
 // backend/fonts/ + shared/fontRegistry.js) and served statically by the
@@ -88,33 +88,78 @@ function ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx) {
   }).catch(() => false);
 }
 
-function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, params) {
+/**
+ * Sizes the graphics canvas to the phone-frame's current on-screen box
+ * (device pixels) and kicks off font-readiness loading for the base font —
+ * shared prep step for both the sentence-mode and Rolling Stack canvas draw
+ * paths below. Returns null when the phone-frame isn't laid out yet.
+ */
+function prepareGraphicsCanvas(canvas, fontFamily, fontWeight, fontSizePx) {
   const phoneFrame = document.querySelector('.phone-frame');
-  if (!phoneFrame) return;
+  if (!phoneFrame) return null;
 
   const rect = phoneFrame.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const targetW = Math.round(rect.width * dpr);
   const targetH = Math.round(rect.height * dpr);
-  if (targetW <= 0 || targetH <= 0) return;
+  if (targetW <= 0 || targetH <= 0) return null;
   if (canvas.width !== targetW) canvas.width = targetW;
   if (canvas.height !== targetH) canvas.height = targetH;
 
-  const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
-  const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
-  ensureCanvasFontReady(fontFamily, cssConfig.profile.fontWeight, fontSizePx).then((justLoaded) => {
+  ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx).then((justLoaded) => {
     if (justLoaded) syncVideoSubtitles();
   });
 
-  const ctx = canvas.getContext('2d');
-  drawCaptionFrame(ctx, {
-    canvasWidth: targetW,
-    canvasHeight: targetH,
-    cssPixelWidth: rect.width,
+  return { ctx: canvas.getContext('2d'), targetW, targetH, cssPixelWidth: rect.width };
+}
+
+function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, params) {
+  const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
+  const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
+  const prepped = prepareGraphicsCanvas(canvas, fontFamily, cssConfig.profile.fontWeight, fontSizePx);
+  if (!prepped) return;
+
+  drawCaptionFrame(prepped.ctx, {
+    canvasWidth: prepped.targetW,
+    canvasHeight: prepped.targetH,
+    cssPixelWidth: prepped.cssPixelWidth,
     activePhrase,
     currentTime,
     cssConfig,
     params
+  });
+}
+
+/**
+ * Rolling Stack's canvas draw path. `windowChunks` is already resolved (see
+ * resolveRollingStackWindow in shared/rollingStack.js) — this only sizes the
+ * canvas, makes sure the base font is loading, and hands off to the shared
+ * graphics renderer's drawRollingStackFrame.
+ */
+function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, cssConfig, params) {
+  const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
+  const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
+  const prepped = prepareGraphicsCanvas(canvas, fontFamily, cssConfig.profile.fontWeight, fontSizePx);
+  if (!prepped) return;
+
+  drawRollingStackFrame(prepped.ctx, {
+    canvasWidth: prepped.targetW,
+    canvasHeight: prepped.targetH,
+    cssPixelWidth: prepped.cssPixelWidth,
+    windowChunks,
+    cssConfig,
+    params,
+    alignment: params.rollingStackAlignment,
+    // Unified shadow mode needs to composite the whole line stack offscreen
+    // before applying one drop-shadow to it — see drawRollingStackFrame's
+    // doc comment. A plain in-DOM <canvas> (never attached) works fine as a
+    // scratch surface here.
+    createOffscreenCanvas: (w, h) => {
+      const off = document.createElement('canvas');
+      off.width = w;
+      off.height = h;
+      return off;
+    }
   });
 }
 
@@ -284,9 +329,9 @@ export function syncVideoSubtitles() {
   if (!previewVideo || !captionsText) return;
 
   // Default the graphics-renderer canvas to inert; only the sentence-mode
-  // branch below (the sole mode canDrawCaptionFrame currently supports)
-  // re-activates it. Every other return path in this function (demo
-  // fallback, Word Mode, Rolling Stack) leaves it hidden instead of showing
+  // and Rolling Stack branches below (the two modes canDrawCaptionFrame
+  // currently supports) re-activate it. Every other return path in this
+  // function (demo fallback, Word Mode) leaves it hidden instead of showing
   // stale content from a previous mode.
   const captionsCanvas = document.getElementById('captions-canvas');
   if (captionsCanvas) captionsCanvas.classList.remove('active');
@@ -336,12 +381,24 @@ export function syncVideoSubtitles() {
     return;
   }
 
-  // Rolling Stack: a two-layer previous/active caption layout built around
-  // detected keywords — see shared/rollingStack.js for the shared chunking/
-  // framing logic this and the ASS exporter's generateRollingStackDialogueEvents
-  // both call, so preview and export can never disagree on grouping or timing.
+  // Rolling Stack: a compact, bounded composition of up to
+  // appState.rollingStackLayerCount stacked chunks (see
+  // shared/rollingStack.js's resolveRollingStackWindow — Active-Word
+  // Selection). Graphics-renderer path first (see canDrawCaptionFrame's
+  // rolling-stack scope note); falls back to the legacy CSS renderer only
+  // for combinations still out of scope (boxed backgrounds, Unified Shadow).
   if (appState.captionMode === 'rolling-stack') {
-    renderRollingStackCaption(activePhrase, currentTime, cssConfig, captionsText);
+    if (canDrawCaptionFrame(cssConfig) && captionsCanvas) {
+      const chunks = buildRollingStackChunks(activePhrase.words);
+      const windowChunks = resolveRollingStackWindow(chunks, currentTime, appState.rollingStackLayerCount);
+      if (windowChunks.length) {
+        drawGraphicsRollingStackCanvasFrame(captionsCanvas, windowChunks, cssConfig, getStyleParams());
+        captionsCanvas.classList.add('active');
+      }
+      captionsText.style.visibility = 'hidden';
+    } else {
+      renderRollingStackCaption(activePhrase, currentTime, cssConfig, captionsText);
+    }
     return;
   }
 
@@ -349,7 +406,7 @@ export function syncVideoSubtitles() {
   // which presets this is live for by default, and the dev-flag override.
   // Falls straight through to the existing CSS/DOM rendering below whenever
   // neither applies.
-  const useGraphicsRenderer = isGraphicsRendererDefaultForPreset(cssConfig)
+  const useGraphicsRenderer = isGraphicsRendererDefault(cssConfig)
     || (window.__USE_GRAPHICS_CAPTIONS__ && canDrawCaptionFrame(cssConfig));
   if (useGraphicsRenderer && captionsCanvas) {
     drawGraphicsCanvasFrame(captionsCanvas, activePhrase, currentTime, cssConfig, getStyleParams());

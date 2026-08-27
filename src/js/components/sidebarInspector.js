@@ -127,6 +127,20 @@ export function initSidebarInspector() {
     });
   });
 
+  // Rolling Stack: words-per-layer (2/3, user-controlled, never auto-decided)
+  // and layer alignment — only meaningful while Rolling Stack is selected;
+  // visibility toggled in syncSidebarUI.
+  document.getElementsByName('rolling-stack-layer-count').forEach((radio) => {
+    radio.addEventListener('change', (e) => {
+      updateState({ rollingStackLayerCount: parseInt(e.target.value, 10) });
+    });
+  });
+  document.getElementsByName('rolling-stack-alignment').forEach((radio) => {
+    radio.addEventListener('change', (e) => {
+      updateState({ rollingStackAlignment: e.target.value });
+    });
+  });
+
   if (fontFamilySelect) {
     fontFamilySelect.addEventListener('change', (e) => {
       updateState({ fontFamily: e.target.value });
@@ -411,6 +425,18 @@ function syncSidebarUI() {
     ? appState.captionMode
     : 'sentence';
   captionModeRadios.forEach(r => { r.checked = r.value === captionMode; });
+
+  // Rolling Stack's own controls only make sense while it's the active mode.
+  const rollingStackSettings = document.getElementById('rolling-stack-settings');
+  if (rollingStackSettings) {
+    rollingStackSettings.style.display = captionMode === 'rolling-stack' ? '' : 'none';
+  }
+  document.getElementsByName('rolling-stack-layer-count').forEach((r) => {
+    r.checked = parseInt(r.value, 10) === (appState.rollingStackLayerCount ?? 2);
+  });
+  document.getElementsByName('rolling-stack-alignment').forEach((r) => {
+    r.checked = r.value === (appState.rollingStackAlignment || 'center');
+  });
 
   // Font Family
   const fontFamilySelect = document.getElementById('font-family-select');

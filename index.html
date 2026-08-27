@@ -111,6 +111,35 @@
                             <p class="field-hint">Word mode shows exactly one transcript word at a time instead of the full caption line. Rolling Stack shows normal words on top and the current keyword below, rolling forward as speech continues. "Bold Social" fonts below work well here.</p>
                         </div>
 
+                        <div class="settings-group" id="rolling-stack-settings" style="display: none;">
+                            <label class="group-label">Words per Layer</label>
+                            <div class="radio-toggle-grid">
+                                <label class="radio-tab">
+                                    <input type="radio" name="rolling-stack-layer-count" value="2" checked>
+                                    <span>2</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="rolling-stack-layer-count" value="3">
+                                    <span>3</span>
+                                </label>
+                            </div>
+                            <label class="group-label" style="margin-top: 12px;">Layer Alignment</label>
+                            <div class="radio-toggle-grid">
+                                <label class="radio-tab">
+                                    <input type="radio" name="rolling-stack-alignment" value="left">
+                                    <span>Left</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="rolling-stack-alignment" value="center" checked>
+                                    <span>Center</span>
+                                </label>
+                                <label class="radio-tab">
+                                    <input type="radio" name="rolling-stack-alignment" value="right">
+                                    <span>Right</span>
+                                </label>
+                            </div>
+                        </div>
+
                         <div class="settings-group">
                             <label for="font-family-select" class="group-label">Font Family</label>
                             <select id="font-family-select" class="select-control">

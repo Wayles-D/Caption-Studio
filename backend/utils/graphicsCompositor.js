@@ -10,13 +10,28 @@ import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 
 /**
- * Reads a video's pixel dimensions and duration straight from FFmpeg's own
- * stderr stream banner (no decoding, no separate ffprobe binary/dependency —
- * `-i` alone is enough for FFmpeg to print the input's stream info before it
- * errors out on "At least one output file must be specified"). Frames are
- * rendered at this exact resolution so they composite 1:1 with no runtime
- * scaling filter, and the duration is what the caption track's trailing
- * blank filler segment is padded out to (see buildFullTimelineSegments).
+ * Reads a video's DISPLAY-orientation pixel dimensions and duration from
+ * FFmpeg's own stderr stream banner (no decoding, no separate ffprobe
+ * binary/dependency — `-i` alone is enough for FFmpeg to print the input's
+ * stream info before it errors out on "At least one output file must be
+ * specified"). Frames are rendered at this exact resolution so they
+ * composite 1:1 with no runtime scaling filter, and the duration is what the
+ * caption track's trailing blank filler segment is padded out to (see
+ * buildFullTimelineSegments).
+ *
+ * "Display-orientation" matters: phone-recorded portrait video is very
+ * commonly ENCODED at landscape pixel dimensions with a `displaymatrix`
+ * rotation tag telling players to rotate it for display (e.g. coded
+ * 1920x1080 + "rotation of 90 degrees" for a video that's actually portrait
+ * 1080x1920). FFmpeg's own demuxer auto-applies that rotation when DECODING
+ * (on by default), so the frames compositeGraphicsCaptionTrack's filter
+ * graph actually overlays onto are already rotated to display orientation —
+ * only the raw stderr banner still reports the pre-rotation coded size. A
+ * 90°/270° rotation tag therefore means width/height must be swapped here,
+ * or every caption is sized and positioned for the wrong aspect entirely
+ * (this is why the ASS/libass pipeline never had this problem: it never
+ * independently probes dimensions, it just fits whatever shape actually
+ * flows through the SAME filter graph, post-rotation).
  */
 export function getVideoInfo(inputVideoPath) {
   return new Promise((resolve, reject) => {
@@ -27,10 +42,34 @@ export function getVideoInfo(inputVideoPath) {
     proc.stderr.on('data', (data) => { stderr += data.toString(); });
     proc.on('error', reject);
     proc.on('close', () => {
-      const dimensionMatch = stderr.match(/Video:.*?(\d{2,5})x(\d{2,5})/);
-      if (!dimensionMatch) {
+      const videoLineMatch = stderr.match(/Stream #\d+:\d+.*?Video:.*?(\d{2,5})x(\d{2,5})/);
+      if (!videoLineMatch) {
         return reject(new Error(`Could not determine video dimensions from FFmpeg output for: ${inputVideoPath}`));
       }
+      let width = parseInt(videoLineMatch[1], 10);
+      let height = parseInt(videoLineMatch[2], 10);
+
+      // Rotation metadata is reported a line or two AFTER the Video: line,
+      // scoped to just this stream's own block (up to the next Stream #
+      // line) so a rotation tag on a DIFFERENT stream can never be misread
+      // as this video stream's own orientation.
+      const afterVideoLine = stderr.slice(stderr.indexOf(videoLineMatch[0]) + videoLineMatch[0].length);
+      const nextStreamIdx = afterVideoLine.search(/Stream #\d+:\d+/);
+      const streamBlock = nextStreamIdx === -1 ? afterVideoLine : afterVideoLine.slice(0, nextStreamIdx);
+      // Modern ffmpeg reports "displaymatrix: rotation of -90.00 degrees";
+      // older/legacy tagging shows as a plain "rotate : 90" metadata field —
+      // handle both since either can appear depending on how the source
+      // video was originally muxed.
+      const rotationMatch = streamBlock.match(/rotation of (-?\d+(?:\.\d+)?) degrees/i)
+        || streamBlock.match(/rotate\s*:\s*(-?\d+)/i);
+      if (rotationMatch) {
+        const normalized = ((parseFloat(rotationMatch[1]) % 360) + 360) % 360;
+        const isQuarterTurn = Math.abs(normalized - 90) < 1 || Math.abs(normalized - 270) < 1;
+        if (isQuarterTurn) {
+          [width, height] = [height, width];
+        }
+      }
+
       const durationMatch = stderr.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
       if (!durationMatch) {
         return reject(new Error(`Could not determine video duration from FFmpeg output for: ${inputVideoPath}`));
@@ -38,7 +77,7 @@ export function getVideoInfo(inputVideoPath) {
       const [, hh, mm, ss, cs] = durationMatch;
       const duration = (parseInt(hh, 10) * 3600) + (parseInt(mm, 10) * 60) + parseInt(ss, 10) + (parseInt(cs, 10) / 100);
 
-      resolve({ width: parseInt(dimensionMatch[1], 10), height: parseInt(dimensionMatch[2], 10), duration });
+      resolve({ width, height, duration });
     });
   });
 }
