@@ -1,0 +1,9 @@
+{
+  "ignore": [
+    "uploads/*",
+    "output/*",
+    "transcripts/*",
+    "subtitles/*",
+    "*_graphics_frames/*"
+  ]
+}
