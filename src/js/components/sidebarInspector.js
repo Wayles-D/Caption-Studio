@@ -4,6 +4,7 @@
 import { appState, updateState, subscribe, getStyleParams } from '../state.js';
 import { getCSSPreviewFromConfig, CREATOR_PROFILES, resolveUnifiedShadowParams } from '../../../shared/captionConfig.js';
 import { initColorPicker, syncColorSwatches } from './colorPicker.js';
+import { initNumericControl } from './numericControl.js';
 
 const COLOR_FALLBACK_MAP = {
   activeWordColor: (cssConfig) => cssConfig.highlightColor || '#FEF08A',
@@ -63,6 +64,17 @@ function getFallbackUnifiedShadow() {
   return resolveUnifiedShadowParams({});
 }
 
+/**
+ * Every numeric slider's `.sync` handle (see numericControl.js), keyed by
+ * the same name syncSidebarUI() already uses to look up its appState value —
+ * populated once in initSidebarInspector, read every time syncSidebarUI()
+ * runs. Ranges here are the single source of truth for each property's
+ * min/max/step: audited per-property rather than one blanket range (see the
+ * editor-controls upgrade) — e.g. Shadow Blur and Font Size intentionally
+ * allow much larger values than Word Spacing or Pop Scale do.
+ */
+const numeric = {};
+
 export function initSidebarInspector() {
   // 1. Accordion Header Toggle Binding
   const accordionHeaders = document.querySelectorAll('.accordion-header');
@@ -99,10 +111,6 @@ export function initSidebarInspector() {
   // 3. Typography Inputs
   const captionModeRadios = document.getElementsByName('caption-mode');
   const fontFamilySelect = document.getElementById('font-family-select');
-  const inputFontSize = document.getElementById('input-font-size');
-  const valFontSize = document.getElementById('val-font-size');
-  const inputWordSpacing = document.getElementById('input-word-spacing');
-  const valWordSpacing = document.getElementById('val-word-spacing');
   const textCaseRadios = document.getElementsByName('text-case');
 
   captionModeRadios.forEach(radio => {
@@ -147,21 +155,20 @@ export function initSidebarInspector() {
     });
   }
 
-  if (inputFontSize) {
-    inputFontSize.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valFontSize) valFontSize.textContent = `${val}px`;
-      updateState({ fontSize: val });
-    });
-  }
+  // Font size: previously capped at 24px — far too small for a real caption
+  // editor (cover-text-sized captions routinely run well past 100px). 8-120px
+  // covers legible fine print through oversized cover text.
+  numeric.fontSize = initNumericControl({
+    sliderId: 'input-font-size', badgeId: 'val-font-size',
+    min: 8, max: 120, step: 1, unit: 'px',
+    onChange: (v) => updateState({ fontSize: v })
+  });
 
-  if (inputWordSpacing) {
-    inputWordSpacing.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valWordSpacing) valWordSpacing.textContent = `${val}px`;
-      updateState({ wordSpacing: val });
-    });
-  }
+  numeric.wordSpacing = initNumericControl({
+    sliderId: 'input-word-spacing', badgeId: 'val-word-spacing',
+    min: 0, max: 60, step: 1, unit: 'px',
+    onChange: (v) => updateState({ wordSpacing: v })
+  });
 
   textCaseRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
@@ -169,33 +176,50 @@ export function initSidebarInspector() {
     });
   });
 
-  // 4. Custom Color Picker Popovers (preset palette + hex + recently used)
+  // 4. Custom Color Picker Popovers (preset palette + visual picker + hex + recently used)
   initColorPicker({ getFallbackColor: getFallbackColorFor });
 
   // 4b. Outline, Shadow & Opacity Controls
-  const inputOutlineSize = document.getElementById('input-outline-size');
-  const valOutlineSize = document.getElementById('val-outline-size');
-  const inputShadowSize = document.getElementById('input-shadow-size');
-  const valShadowSize = document.getElementById('val-shadow-size');
-  const inputShadowOffsetX = document.getElementById('input-shadow-offset-x');
-  const valShadowOffsetX = document.getElementById('val-shadow-offset-x');
-  const inputShadowOffsetY = document.getElementById('input-shadow-offset-y');
-  const valShadowOffsetY = document.getElementById('val-shadow-offset-y');
-  const inputTextOpacity = document.getElementById('input-text-opacity');
-  const valTextOpacity = document.getElementById('val-text-opacity');
-  const inputBackgroundOpacity = document.getElementById('input-background-opacity');
-  const valBackgroundOpacity = document.getElementById('val-background-opacity');
+  numeric.outlineSize = initNumericControl({
+    sliderId: 'input-outline-size', badgeId: 'val-outline-size',
+    min: 0, max: 50, step: 1, unit: 'px',
+    onChange: (v) => updateState({ outlineSize: v })
+  });
+
+  // Shadow Intensity/Blur: previously capped at 20px. Raised to 100px so
+  // extreme, intentional styling is reachable without artificial clamping.
+  numeric.shadowSize = initNumericControl({
+    sliderId: 'input-shadow-size', badgeId: 'val-shadow-size',
+    min: 0, max: 100, step: 1, unit: 'px',
+    onChange: (v) => updateState({ shadowSize: v })
+  });
+
+  numeric.shadowOffsetX = initNumericControl({
+    sliderId: 'input-shadow-offset-x', badgeId: 'val-shadow-offset-x',
+    min: -100, max: 100, step: 1, unit: 'px',
+    onChange: (v) => updateState({ shadowOffsetX: v })
+  });
+
+  numeric.shadowOffsetY = initNumericControl({
+    sliderId: 'input-shadow-offset-y', badgeId: 'val-shadow-offset-y',
+    min: -100, max: 100, step: 1, unit: 'px',
+    onChange: (v) => updateState({ shadowOffsetY: v })
+  });
+
+  numeric.textOpacity = initNumericControl({
+    sliderId: 'input-text-opacity', badgeId: 'val-text-opacity',
+    min: 0, max: 100, step: 1, unit: '%',
+    onChange: (v) => updateState({ textOpacity: v })
+  });
+
+  numeric.backgroundOpacity = initNumericControl({
+    sliderId: 'input-background-opacity', badgeId: 'val-background-opacity',
+    min: 0, max: 100, step: 1, unit: '%',
+    onChange: (v) => updateState({ backgroundOpacity: v })
+  });
 
   // 4c. Shadow Mode (None / Individual / Unified) & the Unified shadow's own controls
   const shadowModeRadios = document.getElementsByName('shadow-mode');
-  const inputUnifiedShadowOpacity = document.getElementById('input-unified-shadow-opacity');
-  const valUnifiedShadowOpacity = document.getElementById('val-unified-shadow-opacity');
-  const inputUnifiedShadowBlur = document.getElementById('input-unified-shadow-blur');
-  const valUnifiedShadowBlur = document.getElementById('val-unified-shadow-blur');
-  const inputUnifiedShadowOffsetX = document.getElementById('input-unified-shadow-offset-x');
-  const valUnifiedShadowOffsetX = document.getElementById('val-unified-shadow-offset-x');
-  const inputUnifiedShadowOffsetY = document.getElementById('input-unified-shadow-offset-y');
-  const valUnifiedShadowOffsetY = document.getElementById('val-unified-shadow-offset-y');
 
   shadowModeRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
@@ -203,90 +227,33 @@ export function initSidebarInspector() {
     });
   });
 
-  if (inputUnifiedShadowOpacity) {
-    inputUnifiedShadowOpacity.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valUnifiedShadowOpacity) valUnifiedShadowOpacity.textContent = `${val}%`;
-      updateState({ unifiedShadowOpacity: val });
-    });
-  }
+  numeric.unifiedShadowOpacity = initNumericControl({
+    sliderId: 'input-unified-shadow-opacity', badgeId: 'val-unified-shadow-opacity',
+    min: 0, max: 100, step: 1, unit: '%',
+    onChange: (v) => updateState({ unifiedShadowOpacity: v })
+  });
 
-  if (inputUnifiedShadowBlur) {
-    inputUnifiedShadowBlur.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valUnifiedShadowBlur) valUnifiedShadowBlur.textContent = `${val}px`;
-      updateState({ unifiedShadowBlur: val });
-    });
-  }
+  // Matches Individual mode's own Shadow Blur range (see above) for consistency.
+  numeric.unifiedShadowBlur = initNumericControl({
+    sliderId: 'input-unified-shadow-blur', badgeId: 'val-unified-shadow-blur',
+    min: 0, max: 100, step: 1, unit: 'px',
+    onChange: (v) => updateState({ unifiedShadowBlur: v })
+  });
 
-  if (inputUnifiedShadowOffsetX) {
-    inputUnifiedShadowOffsetX.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valUnifiedShadowOffsetX) valUnifiedShadowOffsetX.textContent = `${val}px`;
-      updateState({ unifiedShadowOffsetX: val });
-    });
-  }
+  numeric.unifiedShadowOffsetX = initNumericControl({
+    sliderId: 'input-unified-shadow-offset-x', badgeId: 'val-unified-shadow-offset-x',
+    min: -100, max: 100, step: 1, unit: 'px',
+    onChange: (v) => updateState({ unifiedShadowOffsetX: v })
+  });
 
-  if (inputUnifiedShadowOffsetY) {
-    inputUnifiedShadowOffsetY.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valUnifiedShadowOffsetY) valUnifiedShadowOffsetY.textContent = `${val}px`;
-      updateState({ unifiedShadowOffsetY: val });
-    });
-  }
-
-  if (inputOutlineSize) {
-    inputOutlineSize.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valOutlineSize) valOutlineSize.textContent = `${val}px`;
-      updateState({ outlineSize: val });
-    });
-  }
-
-  if (inputShadowSize) {
-    inputShadowSize.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valShadowSize) valShadowSize.textContent = `${val}px`;
-      updateState({ shadowSize: val });
-    });
-  }
-
-  if (inputShadowOffsetX) {
-    inputShadowOffsetX.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valShadowOffsetX) valShadowOffsetX.textContent = `${val}px`;
-      updateState({ shadowOffsetX: val });
-    });
-  }
-
-  if (inputShadowOffsetY) {
-    inputShadowOffsetY.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valShadowOffsetY) valShadowOffsetY.textContent = `${val}px`;
-      updateState({ shadowOffsetY: val });
-    });
-  }
-
-  if (inputTextOpacity) {
-    inputTextOpacity.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valTextOpacity) valTextOpacity.textContent = `${val}%`;
-      updateState({ textOpacity: val });
-    });
-  }
-
-  if (inputBackgroundOpacity) {
-    inputBackgroundOpacity.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valBackgroundOpacity) valBackgroundOpacity.textContent = `${val}%`;
-      updateState({ backgroundOpacity: val });
-    });
-  }
+  numeric.unifiedShadowOffsetY = initNumericControl({
+    sliderId: 'input-unified-shadow-offset-y', badgeId: 'val-unified-shadow-offset-y',
+    min: -100, max: 100, step: 1, unit: 'px',
+    onChange: (v) => updateState({ unifiedShadowOffsetY: v })
+  });
 
   // 5. Animation Mode & Pop Scale Inputs
   const animModeRadios = document.getElementsByName('anim-mode');
-  const inputPopScale = document.getElementById('input-pop-scale');
-  const valPopScale = document.getElementById('val-pop-scale');
 
   animModeRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
@@ -294,18 +261,16 @@ export function initSidebarInspector() {
     });
   });
 
-  if (inputPopScale) {
-    inputPopScale.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valPopScale) valPopScale.textContent = `${val}%`;
-      updateState({ popScale: val });
-    });
-  }
+  // Pop Scale: previously capped at 150% (1.5x). Raised to 300% for more
+  // dramatic pop emphasis when intentionally wanted.
+  numeric.popScale = initNumericControl({
+    sliderId: 'input-pop-scale', badgeId: 'val-pop-scale',
+    min: 100, max: 300, step: 1, unit: '%',
+    onChange: (v) => updateState({ popScale: v })
+  });
 
   // 6. Subtitle Position & Spacing Inputs
   const positionRadios = document.getElementsByName('sub-pos');
-  const inputMarginV = document.getElementById('input-margin-v');
-  const valMarginV = document.getElementById('val-margin-v');
 
   positionRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
@@ -321,13 +286,14 @@ export function initSidebarInspector() {
     });
   });
 
-  if (inputMarginV) {
-    inputMarginV.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valMarginV) valMarginV.textContent = `${val}px`;
-      updateState({ marginV: val });
-    });
-  }
+  // Margin V is a position offset within the 1080x1920 export canvas —
+  // widened to the full 0-1900 range so the caption can be pushed all the
+  // way to either edge, not just the middle band the old 50-800 cap allowed.
+  numeric.marginV = initNumericControl({
+    sliderId: 'input-margin-v', badgeId: 'val-margin-v',
+    min: 0, max: 1900, step: 1, unit: 'px',
+    onChange: (v) => updateState({ marginV: v })
+  });
 
   // 7. AI Keyword Highlighting Toggle
   const toggleKeywordHighlighting = document.getElementById('toggle-keyword-highlighting');
@@ -341,13 +307,9 @@ export function initSidebarInspector() {
   const toggleActiveHighlight = document.getElementById('toggle-active-highlight');
   const selectKeywordFont = document.getElementById('select-keyword-font');
   const selectKeywordWeight = document.getElementById('select-keyword-weight');
-  const inputKeywordScale = document.getElementById('input-keyword-scale');
-  const valKeywordScale = document.getElementById('val-keyword-scale');
   const selectKeywordAnimation = document.getElementById('select-keyword-animation');
   const toggleKeywordShadow = document.getElementById('toggle-keyword-shadow');
   const toggleKeywordOutline = document.getElementById('toggle-keyword-outline');
-  const inputKeywordOpacity = document.getElementById('input-keyword-opacity');
-  const valKeywordOpacity = document.getElementById('val-keyword-opacity');
 
   if (toggleActiveHighlight) {
     toggleActiveHighlight.addEventListener('change', (e) => {
@@ -367,13 +329,18 @@ export function initSidebarInspector() {
     });
   }
 
-  if (inputKeywordScale) {
-    inputKeywordScale.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valKeywordScale) valKeywordScale.textContent = `${val}%`;
-      updateState({ keywordScale: val / 100 });
-    });
-  }
+  // Keyword Scale: state stores a 1.0-3.0 ratio (appState.keywordScale),
+  // displayed/edited as 100-300%. Raised from the old 100-150% cap for
+  // consistency with Pop Scale above, and to let the keyword layer read as
+  // genuinely much larger than normal text where that's the intended effect
+  // (see Rolling Stack's "keyword occupies more visual space" typography).
+  numeric.keywordScale = initNumericControl({
+    sliderId: 'input-keyword-scale', badgeId: 'val-keyword-scale',
+    min: 100, max: 300, step: 1, unit: '%',
+    onChange: (v) => updateState({ keywordScale: v }),
+    toState: (displayValue) => displayValue / 100,
+    fromState: (stateValue) => stateValue * 100
+  });
 
   if (selectKeywordAnimation) {
     selectKeywordAnimation.addEventListener('change', (e) => {
@@ -393,13 +360,11 @@ export function initSidebarInspector() {
     });
   }
 
-  if (inputKeywordOpacity) {
-    inputKeywordOpacity.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      if (valKeywordOpacity) valKeywordOpacity.textContent = `${val}%`;
-      updateState({ keywordOpacity: val });
-    });
-  }
+  numeric.keywordOpacity = initNumericControl({
+    sliderId: 'input-keyword-opacity', badgeId: 'val-keyword-opacity',
+    min: 0, max: 100, step: 1, unit: '%',
+    onChange: (v) => updateState({ keywordOpacity: v })
+  });
 
   // 9. Subscribe to global state changes to synchronize UI controls
   subscribe('*', () => {
@@ -444,57 +409,19 @@ function syncSidebarUI() {
     fontFamilySelect.value = appState.fontFamily;
   }
 
-  // Font Size
-  const inputFontSize = document.getElementById('input-font-size');
-  const valFontSize = document.getElementById('val-font-size');
-  if (inputFontSize) inputFontSize.value = appState.fontSize;
-  if (valFontSize) valFontSize.textContent = `${appState.fontSize}px`;
-
-  // Word Spacing
-  const inputWordSpacing = document.getElementById('input-word-spacing');
-  const valWordSpacing = document.getElementById('val-word-spacing');
-  if (inputWordSpacing) inputWordSpacing.value = appState.wordSpacing;
-  if (valWordSpacing) valWordSpacing.textContent = `${appState.wordSpacing}px`;
+  numeric.fontSize?.sync(appState.fontSize);
+  numeric.wordSpacing?.sync(appState.wordSpacing);
 
   // Colors
   syncColorSwatches(getFallbackColorFor);
 
   // Outline, Shadow & Opacity
-  const inputOutlineSize = document.getElementById('input-outline-size');
-  const valOutlineSize = document.getElementById('val-outline-size');
-  const outlineSize = appState.outlineSize ?? getFallbackOutlineSize();
-  if (inputOutlineSize) inputOutlineSize.value = outlineSize;
-  if (valOutlineSize) valOutlineSize.textContent = `${outlineSize}px`;
-
-  const inputShadowSize = document.getElementById('input-shadow-size');
-  const valShadowSize = document.getElementById('val-shadow-size');
-  const shadowSize = appState.shadowSize ?? getFallbackShadowSize();
-  if (inputShadowSize) inputShadowSize.value = shadowSize;
-  if (valShadowSize) valShadowSize.textContent = `${shadowSize}px`;
-
-  const inputShadowOffsetX = document.getElementById('input-shadow-offset-x');
-  const valShadowOffsetX = document.getElementById('val-shadow-offset-x');
-  const shadowOffsetX = appState.shadowOffsetX ?? getFallbackShadowOffset();
-  if (inputShadowOffsetX) inputShadowOffsetX.value = shadowOffsetX;
-  if (valShadowOffsetX) valShadowOffsetX.textContent = `${shadowOffsetX}px`;
-
-  const inputShadowOffsetY = document.getElementById('input-shadow-offset-y');
-  const valShadowOffsetY = document.getElementById('val-shadow-offset-y');
-  const shadowOffsetY = appState.shadowOffsetY ?? getFallbackShadowOffset();
-  if (inputShadowOffsetY) inputShadowOffsetY.value = shadowOffsetY;
-  if (valShadowOffsetY) valShadowOffsetY.textContent = `${shadowOffsetY}px`;
-
-  const inputTextOpacity = document.getElementById('input-text-opacity');
-  const valTextOpacity = document.getElementById('val-text-opacity');
-  const textOpacity = appState.textOpacity ?? 100;
-  if (inputTextOpacity) inputTextOpacity.value = textOpacity;
-  if (valTextOpacity) valTextOpacity.textContent = `${textOpacity}%`;
-
-  const inputBackgroundOpacity = document.getElementById('input-background-opacity');
-  const valBackgroundOpacity = document.getElementById('val-background-opacity');
-  const backgroundOpacity = appState.backgroundOpacity ?? 100;
-  if (inputBackgroundOpacity) inputBackgroundOpacity.value = backgroundOpacity;
-  if (valBackgroundOpacity) valBackgroundOpacity.textContent = `${backgroundOpacity}%`;
+  numeric.outlineSize?.sync(appState.outlineSize ?? getFallbackOutlineSize());
+  numeric.shadowSize?.sync(appState.shadowSize ?? getFallbackShadowSize());
+  numeric.shadowOffsetX?.sync(appState.shadowOffsetX ?? getFallbackShadowOffset());
+  numeric.shadowOffsetY?.sync(appState.shadowOffsetY ?? getFallbackShadowOffset());
+  numeric.textOpacity?.sync(appState.textOpacity ?? 100);
+  numeric.backgroundOpacity?.sync(appState.backgroundOpacity ?? 100);
 
   // Shadow Mode + Unified Shadow controls
   const shadowMode = appState.shadowMode || 'individual';
@@ -512,30 +439,10 @@ function syncSidebarUI() {
   if (unifiedShadowControls) unifiedShadowControls.hidden = shadowMode !== 'unified';
 
   const fallbackUnified = getFallbackUnifiedShadow();
-
-  const inputUnifiedShadowOpacity = document.getElementById('input-unified-shadow-opacity');
-  const valUnifiedShadowOpacity = document.getElementById('val-unified-shadow-opacity');
-  const unifiedShadowOpacity = appState.unifiedShadowOpacity ?? fallbackUnified.opacity;
-  if (inputUnifiedShadowOpacity) inputUnifiedShadowOpacity.value = unifiedShadowOpacity;
-  if (valUnifiedShadowOpacity) valUnifiedShadowOpacity.textContent = `${unifiedShadowOpacity}%`;
-
-  const inputUnifiedShadowBlur = document.getElementById('input-unified-shadow-blur');
-  const valUnifiedShadowBlur = document.getElementById('val-unified-shadow-blur');
-  const unifiedShadowBlur = appState.unifiedShadowBlur ?? fallbackUnified.blurAss;
-  if (inputUnifiedShadowBlur) inputUnifiedShadowBlur.value = unifiedShadowBlur;
-  if (valUnifiedShadowBlur) valUnifiedShadowBlur.textContent = `${unifiedShadowBlur}px`;
-
-  const inputUnifiedShadowOffsetX = document.getElementById('input-unified-shadow-offset-x');
-  const valUnifiedShadowOffsetX = document.getElementById('val-unified-shadow-offset-x');
-  const unifiedShadowOffsetX = appState.unifiedShadowOffsetX ?? fallbackUnified.offsetXAss;
-  if (inputUnifiedShadowOffsetX) inputUnifiedShadowOffsetX.value = unifiedShadowOffsetX;
-  if (valUnifiedShadowOffsetX) valUnifiedShadowOffsetX.textContent = `${unifiedShadowOffsetX}px`;
-
-  const inputUnifiedShadowOffsetY = document.getElementById('input-unified-shadow-offset-y');
-  const valUnifiedShadowOffsetY = document.getElementById('val-unified-shadow-offset-y');
-  const unifiedShadowOffsetY = appState.unifiedShadowOffsetY ?? fallbackUnified.offsetYAss;
-  if (inputUnifiedShadowOffsetY) inputUnifiedShadowOffsetY.value = unifiedShadowOffsetY;
-  if (valUnifiedShadowOffsetY) valUnifiedShadowOffsetY.textContent = `${unifiedShadowOffsetY}px`;
+  numeric.unifiedShadowOpacity?.sync(appState.unifiedShadowOpacity ?? fallbackUnified.opacity);
+  numeric.unifiedShadowBlur?.sync(appState.unifiedShadowBlur ?? fallbackUnified.blurAss);
+  numeric.unifiedShadowOffsetX?.sync(appState.unifiedShadowOffsetX ?? fallbackUnified.offsetXAss);
+  numeric.unifiedShadowOffsetY?.sync(appState.unifiedShadowOffsetY ?? fallbackUnified.offsetYAss);
 
   // Animation Mode
   const animModeRadios = document.getElementsByName('anim-mode');
@@ -543,11 +450,7 @@ function syncSidebarUI() {
     r.checked = r.value === appState.animationMode;
   });
 
-  // Pop Scale
-  const inputPopScale = document.getElementById('input-pop-scale');
-  const valPopScale = document.getElementById('val-pop-scale');
-  if (inputPopScale) inputPopScale.value = appState.popScale;
-  if (valPopScale) valPopScale.textContent = `${appState.popScale}%`;
+  numeric.popScale?.sync(appState.popScale);
 
   // Position & Margin
   const positionRadios = document.getElementsByName('sub-pos');
@@ -558,10 +461,7 @@ function syncSidebarUI() {
   const manualPosHint = document.getElementById('manual-pos-hint');
   if (manualPosHint) manualPosHint.hidden = appState.position !== 'manual';
 
-  const inputMarginV = document.getElementById('input-margin-v');
-  const valMarginV = document.getElementById('val-margin-v');
-  if (inputMarginV) inputMarginV.value = appState.marginV || 300;
-  if (valMarginV) valMarginV.textContent = `${appState.marginV || 300}px`;
+  numeric.marginV?.sync(appState.marginV || 300);
 
   // AI Keyword Highlighting Toggle
   const toggleKeywordHighlighting = document.getElementById('toggle-keyword-highlighting');
@@ -579,11 +479,7 @@ function syncSidebarUI() {
   const selectKeywordWeight = document.getElementById('select-keyword-weight');
   if (selectKeywordWeight) selectKeywordWeight.value = appState.keywordWeight || '';
 
-  const inputKeywordScale = document.getElementById('input-keyword-scale');
-  const valKeywordScale = document.getElementById('val-keyword-scale');
-  const keywordScalePct = Math.round((appState.keywordScale ?? getFallbackKeywordTier().fontScale) * 100);
-  if (inputKeywordScale) inputKeywordScale.value = keywordScalePct;
-  if (valKeywordScale) valKeywordScale.textContent = `${keywordScalePct}%`;
+  numeric.keywordScale?.sync(appState.keywordScale ?? getFallbackKeywordTier().fontScale);
 
   const selectKeywordAnimation = document.getElementById('select-keyword-animation');
   if (selectKeywordAnimation) {
@@ -600,9 +496,5 @@ function syncSidebarUI() {
     toggleKeywordOutline.checked = appState.keywordOutlineEnabled ?? getFallbackKeywordTier().outlineByDefault;
   }
 
-  const inputKeywordOpacity = document.getElementById('input-keyword-opacity');
-  const valKeywordOpacity = document.getElementById('val-keyword-opacity');
-  const keywordOpacity = appState.keywordOpacity ?? 100;
-  if (inputKeywordOpacity) inputKeywordOpacity.value = keywordOpacity;
-  if (valKeywordOpacity) valKeywordOpacity.textContent = `${keywordOpacity}%`;
+  numeric.keywordOpacity?.sync(appState.keywordOpacity ?? 100);
 }

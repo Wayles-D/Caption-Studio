@@ -486,6 +486,32 @@ input:checked + .theme-slider::before {
   background: var(--accent-wash-bg);
   padding: 1px 6px;
   border-radius: 4px;
+  cursor: text;
+  border: 1px solid transparent;
+}
+
+.group-value-badge:hover, .group-value-badge:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+}
+
+/* Numeric badges swap to this while being directly edited (see
+   src/js/components/numericControl.js) — same footprint as the badge it
+   replaces so the layout doesn't jump. */
+.group-value-badge-input {
+  font-family: var(--font-main);
+  width: 48px;
+  text-align: right;
+  outline: none;
+}
+
+/* Brief flash when a typed value was out of range (clamped) or malformed
+   (rejected) — the control itself never enters an unstable state, this is
+   just a transient visual acknowledgement. */
+.group-value-badge-invalid {
+  background: rgba(239, 68, 68, 0.25) !important;
+  color: #FCA5A5 !important;
+  transition: background 0.4s ease, color 0.4s ease;
 }
 
 .select-control {
@@ -698,6 +724,79 @@ input:checked + .theme-slider::before {
   background: var(--bg-input);
 }
 
+/* Visual color-selection area: saturation/value square + hue strip below it.
+   Two flat gradient layers over a solid hue-colored base is the standard
+   technique for the SV square (no canvas needed) — see buildVisualColorArea
+   in colorPicker.js. */
+.color-picker-visual-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.color-picker-sv-area {
+  position: relative;
+  width: 100%;
+  height: 130px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+  border: 1px solid var(--border-color);
+}
+
+.color-picker-sv-hue-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.color-picker-sv-white-layer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to right, #fff, rgba(255, 255, 255, 0));
+}
+
+.color-picker-sv-black-layer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, #000, rgba(0, 0, 0, 0));
+}
+
+.color-picker-sv-cursor {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.color-picker-hue-strip {
+  position: relative;
+  width: 100%;
+  height: 14px;
+  border-radius: 7px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  cursor: pointer;
+  touch-action: none;
+  border: 1px solid var(--border-color);
+}
+
+.color-picker-hue-cursor {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -8px 0 0 -7px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.4);
+  background: transparent;
+  pointer-events: none;
+}
+
 .color-picker-preview-row {
   display: flex;
   align-items: center;
@@ -723,6 +822,12 @@ input:checked + .theme-slider::before {
   font-family: var(--font-main);
   font-size: 13px;
   padding: 6px 8px;
+}
+
+.color-picker-swatch-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .color-picker-section-label {
