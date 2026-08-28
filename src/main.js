@@ -2,6 +2,11 @@
  * Caption Studio Main Core Javascript Logic (Modular Architecture)
  */
 
+// Tailwind (theme + utilities only, no Preflight reset — see tailwind.css's
+// own doc comment) for the incremental React/Tailwind UI migration. Inert
+// until a component actually uses a utility class.
+import './tailwind.css';
+
 import { appState, updateState, DEFAULT_DEMO_VIDEO_URL, getStyleParams } from './js/state.js';
 import { initToolbar } from './js/components/toolbar.js';
 import { initSidebarInspector } from './js/components/sidebarInspector.js';

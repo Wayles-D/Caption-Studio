@@ -11,10 +11,17 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "^10.0.5",
+    "playwright": "^1.62.1",
+    "tailwindcss": "^4.3.3",
     "vite": "^5.2.11"
   },
   "dependencies": {
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zustand": "^5.0.15"
   }
 }

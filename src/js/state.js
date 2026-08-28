@@ -1,6 +1,19 @@
 /**
  * State Store & Reactive Event System for Caption Studio
+ *
+ * This module is now a thin compatibility shim over two Zustand stores
+ * (src/store/editorStore.js, src/store/transformStore.js — see the
+ * migration plan's Stage 1). Every export below keeps its EXACT prior
+ * external behavior — appState reads/writes, updateState's batching +
+ * pub/sub notify + undo-snapshot semantics, subscribe('*'|key, fn), undo/
+ * redo, resetStyles, getStyleParams's output shape — so none of the six
+ * existing consumers (preview.js, canvasTransform.js, sidebarInspector.js,
+ * toolbar.js, rightInspector.js, main.js) needed to change for this stage.
+ * Once those consumers migrate to React (Stage 2+), they can adopt
+ * useEditorStore/useTransformStore directly instead of this shim.
  */
+import { useEditorStore, STYLE_DEFAULTS, SESSION_DEFAULTS } from '../store/editorStore.js';
+import { useTransformStore, TRANSFORM_DEFAULTS } from '../store/transformStore.js';
 
 export const MOCK_SUBTITLES = [
   { start: 0.0, end: 2.2, text: "WELCOME TO THE CAPTION STUDIO." },
@@ -14,94 +27,50 @@ export const MOCK_SUBTITLES = [
 
 export const DEFAULT_DEMO_VIDEO_URL = "https://assets.mixkit.co/videos/preview/mixkit-vertical-shot-of-a-beautiful-waterfall-in-a-forest-48990-large.mp4";
 
-export const initialStyleState = {
-  currentPreset: "bold-yellow",
-  fontFamily: "Montserrat",
-  fontWeight: "700",
-  fontSize: 14,
-  wordSpacing: 4,
-  lineHeight: 1.2,
-  popScale: 118,
-  activeWordColor: null,
-  inactiveWordColor: null,
-  outlineColor: null,
-  backgroundColor: null,
-  outlineSize: null,
-  shadowColor: null,
-  shadowSize: null,
-  shadowOffsetX: null,
-  shadowOffsetY: null,
-  // 'individual' (legacy default, matches every existing project/preset),
-  // 'unified', or 'none' — see resolveShadowMode in shared/captionConfig.js.
-  shadowMode: 'individual',
-  unifiedShadowColor: null,
-  unifiedShadowOpacity: null,
-  unifiedShadowBlur: null,
-  unifiedShadowOffsetX: null,
-  unifiedShadowOffsetY: null,
-  textOpacity: 100,
-  backgroundOpacity: null,
-  // 'sentence' (existing default — full phrase, per-word highlighting) or
-  // 'word' (exactly one transcript word visible at a time) — see
-  // resolveCaptionMode in shared/captionConfig.js.
-  captionMode: "sentence",
-  // Rolling Stack only: max simultaneous layers in the composition (2 or 3
-  // — user-controlled, never auto-decided) and how each line is aligned
-  // within the shared invisible container. See shared/rollingStack.js.
-  rollingStackLayerCount: 2,
-  rollingStackAlignment: "center",
-  animationMode: "karaoke",
-  textCase: "uppercase",
-  position: "bottom",
-  marginV: 300,
-  customPosX: 50,
-  customPosY: 85,
-  // On-canvas transform controls (see src/js/components/canvasTransform.js).
-  // `rotation` is the GLOBAL degrees value (applies to every caption unless
-  // a phrase has its own override below — mirrors how customPosX/Y already
-  // work as the global manual-position value). `captionTransforms` holds
-  // PER-PHRASE overrides, keyed by shared/captionTransform.js's
-  // getPhraseTransformKey — only ever populated for a phrase the user
-  // explicitly edited with "Apply to THIS CAPTION" selected; every other
-  // phrase is untouched and keeps resolving from the global fields exactly
-  // as before this feature existed. `transformApplyScope` is the editor's
-  // current This/All choice, read at edit-time to decide which of the two
-  // gets written — it is not itself consumed by the renderer.
-  rotation: 0,
-  captionTransforms: {},
-  transformApplyScope: "all",
-  enableKeywordHighlighting: true,
-  keywordColor: "#EF4444",
-  keywordFont: null,
-  keywordScale: null,
-  keywordWeight: null,
-  keywordAnimation: null,
-  keywordShadowEnabled: null,
-  keywordOutlineEnabled: null,
-  keywordOpacity: 100,
-  enableActiveHighlight: null,
-  theme: "dark"
-};
+// Same combined shape/keys appState's style slice always had (used for
+// undo/redo scoping and resetStyles) — spans both stores; which store a key
+// actually lives in is an implementation detail entirely internal to this
+// file (see storeFor below).
+export const initialStyleState = { ...STYLE_DEFAULTS, ...TRANSFORM_DEFAULTS };
+const STYLE_KEYS = Object.keys(initialStyleState);
 
-export let appState = {
-  ...initialStyleState,
-  isProcessing: false,
-  isLoaded: false,
-  currentStep: 0,
-  uploadedFile: null,
-  videoDuration: 0,
-  baseName: null,
-  words: [],
-  phrases: [],
-  renderedVideoPath: null
-};
+const TRANSFORM_KEYS = new Set(Object.keys(TRANSFORM_DEFAULTS));
+
+function storeFor(key) {
+  return TRANSFORM_KEYS.has(key) ? useTransformStore : useEditorStore;
+}
+
+/**
+ * appState — same object-like external surface as before (`appState.foo`
+ * reads, `appState.foo = x` writes), now backed by whichever Zustand store
+ * actually owns that key. A real Proxy (not a plain merged snapshot object)
+ * is required here: preview.js does one direct-mutation write
+ * (`appState.videoDuration = ...`, bypassing updateState) that must keep
+ * landing in real store state, not a stale local copy.
+ */
+export const appState = new Proxy({}, {
+  get(_target, prop) {
+    if (typeof prop === 'symbol') return undefined;
+    return storeFor(prop).getState()[prop];
+  },
+  set(_target, prop, value) {
+    storeFor(prop).setState({ [prop]: value });
+    return true;
+  },
+  has(_target, prop) {
+    return prop in useEditorStore.getState() || prop in useTransformStore.getState();
+  }
+});
 
 // Undo / Redo History Stacks
 const historyStack = [];
 const redoStack = [];
 const MAX_HISTORY = 30;
 
-// Pub/Sub Listeners
+// Pub/Sub Listeners — unchanged hand-rolled mechanism (deliberately NOT
+// replaced by Zustand's own subscribe: this preserves the exact notify
+// call order/timing every existing consumer already depends on, with
+// Zustand used purely as the storage layer underneath).
 const listeners = new Map();
 
 /**
@@ -135,7 +104,7 @@ export function notify(key, value) {
  */
 function pushHistorySnapshot() {
   const snapshot = {};
-  Object.keys(initialStyleState).forEach(k => {
+  STYLE_KEYS.forEach(k => {
     snapshot[k] = appState[k];
   });
 
@@ -158,7 +127,7 @@ export function updateState(updates, options = { recordHistory: true }) {
   let changed = false;
   Object.entries(updates).forEach(([key, value]) => {
     if (appState[key] !== value) {
-      appState[key] = value;
+      storeFor(key).setState({ [key]: value });
       changed = true;
       notify(key, value);
     }
@@ -176,14 +145,14 @@ export function undo() {
   if (historyStack.length === 0) return;
 
   const currentSnapshot = {};
-  Object.keys(initialStyleState).forEach(k => {
+  STYLE_KEYS.forEach(k => {
     currentSnapshot[k] = appState[k];
   });
   redoStack.push(currentSnapshot);
 
   const previousSnapshot = historyStack.pop();
   Object.entries(previousSnapshot).forEach(([k, v]) => {
-    appState[k] = v;
+    storeFor(k).setState({ [k]: v });
     notify(k, v);
   });
 
@@ -198,14 +167,14 @@ export function redo() {
   if (redoStack.length === 0) return;
 
   const currentSnapshot = {};
-  Object.keys(initialStyleState).forEach(k => {
+  STYLE_KEYS.forEach(k => {
     currentSnapshot[k] = appState[k];
   });
   historyStack.push(currentSnapshot);
 
   const nextSnapshot = redoStack.pop();
   Object.entries(nextSnapshot).forEach(([k, v]) => {
-    appState[k] = v;
+    storeFor(k).setState({ [k]: v });
     notify(k, v);
   });
 

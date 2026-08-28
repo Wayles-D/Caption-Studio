@@ -1,0 +1,14 @@
+/**
+ * Tailwind v4, Preflight (the base/reset layer) intentionally excluded.
+ *
+ * Importing plain `"tailwindcss"` pulls in Preflight, which resets margins,
+ * box-sizing, form-control appearance, etc. on every element — that would
+ * immediately change how the existing hand-authored src/style.css renders
+ * BEFORE any of it has been migrated (see the staged migration plan: UI
+ * regions move to React/Tailwind incrementally, canvas/video CSS never
+ * moves). Importing only the theme + utilities layers means Tailwind
+ * contributes nothing until a component actually uses a utility class —
+ * zero visual change to the still-vanilla parts of the app at any stage.
+ */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
