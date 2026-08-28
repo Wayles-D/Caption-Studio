@@ -48,12 +48,12 @@ export function PreviewStage({
   }, []);
 
   return (
-    <div className="preview-stage-container" id="preview-container">
+    <div className="flex flex-col items-center justify-center gap-4 max-h-full" id="preview-container">
       <div className="phone-frame">
         {/* Upload Dropzone View */}
         <div className={`view-state${viewState === 'upload' ? ' active' : ''}`} id="state-upload">
           <div
-            className={`drop-zone${isDragOver ? ' dragover' : ''}`}
+            className="drop-zone"
             id="drop-zone"
             onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
             onDragLeave={() => setIsDragOver(false)}
@@ -63,16 +63,25 @@ export function PreviewStage({
               if (e.dataTransfer.files.length > 0) onFilesDropped?.(e.dataTransfer.files[0]);
             }}
           >
-            <div className="drop-zone-content">
-              <div className="upload-icon-circle">
+            {/* isDragOver has no corresponding visual treatment — the original
+                app never had a `.dragover` CSS rule either (confirmed absent
+                from style.css before this Stage 5 pass), so this state is
+                tracked but intentionally left with no styling, matching the
+                pre-existing (if odd) behavior exactly. */}
+            <div className="flex flex-col items-center text-center p-6 gap-3">
+              <div className="w-14 h-14 rounded-full bg-[rgba(217,119,87,0.1)] text-[var(--accent-color)] flex items-center justify-center">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 16V8M12 8L9 11M12 8L15 11" /><path d="M3 15v3c0 1.1.9 2 2 2h14a2 2 0 002-2v-3" /></svg>
               </div>
-              <h3 className="drop-title font-geist">Upload Video</h3>
-              <p className="drop-subtitle">Drag & drop or click to choose file</p>
-              <button type="button" id="btn-select-file-dropzone" className="btn btn-primary btn-upload" onClick={() => onSelectFileClick?.()}>Select Video</button>
-              <div className="demo-wrapper">
-                <span className="text-muted">or</span>
-                <button type="button" id="btn-use-demo" className="btn btn-link" onClick={() => onUseDemo?.()}>Try Demo Video</button>
+              <h3 className="text-lg font-bold">Upload Video</h3>
+              <p className="text-xs text-[var(--text-secondary)]">Drag & drop or click to choose file</p>
+              <button
+                type="button" id="btn-select-file-dropzone" onClick={() => onSelectFileClick?.()}
+                className="bg-[var(--accent-gradient)] border-0 text-[var(--text-on-accent)] font-bold px-5 py-2.5 rounded-[var(--radius-sm)]
+                  cursor-pointer transition-[transform,background-color] duration-150 hover:bg-[var(--accent-hover)] hover:scale-[1.04]"
+              >Select Video</button>
+              <div>
+                <span>or</span>
+                <button type="button" id="btn-use-demo" onClick={() => onUseDemo?.()} className="bg-transparent border-0 text-[var(--accent-color)] text-xs font-semibold cursor-pointer underline">Try Demo Video</button>
               </div>
             </div>
           </div>
@@ -80,10 +89,10 @@ export function PreviewStage({
 
         {/* Processing State View */}
         <div className={`view-state${viewState === 'processing' ? ' active' : ''}`} id="state-processing">
-          <div className="processing-content">
-            <div className="spinner-ring" />
-            <h3 className="processing-title" id="preview-processing-title">{processingTitle}</h3>
-            <p className="processing-text" id="preview-processing-text">Whisper AI extracting word timestamps</p>
+          <div>
+            <div />
+            <h3 id="preview-processing-title">{processingTitle}</h3>
+            <p id="preview-processing-text">Whisper AI extracting word timestamps</p>
           </div>
         </div>
 
@@ -122,18 +131,30 @@ export function PreviewStage({
       </div>
 
       {/* Floating Playback Controls Bar */}
-      <div className="preview-controls-bar">
-        <button type="button" id="btn-video-play" className="btn-play-toggle" aria-label="Play/Pause">
+      <div className="bg-[var(--bg-toolbar)] backdrop-blur-md border border-[var(--border-color)] rounded-[30px] py-1.5 px-4 flex items-center gap-3.5 w-[330px] shadow-[var(--shadow-sm)]">
+        <button
+          type="button" id="btn-video-play" aria-label="Play/Pause"
+          className="bg-[var(--accent-color)] border-0 text-[var(--text-on-accent)] w-8 h-8 rounded-full flex items-center justify-center
+            cursor-pointer transition-[transform,background-color] duration-150 hover:bg-[var(--accent-hover)] hover:scale-110"
+        >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" id="icon-play-state">
             <polygon points="5,3 19,12 5,21" fill="currentColor" className="play-poly" />
           </svg>
         </button>
-        <div className="timeline-seek-wrapper">
-          <span className="time-stamp" id="time-display-current">0:00</span>
-          <input type="range" id="video-seek-bar" min="0" max="100" defaultValue="0" className="video-seek-slider" />
-          <span className="time-stamp" id="time-display-duration">0:00</span>
+        <div className="flex-1 flex items-center gap-2">
+          <span className="text-[11px] font-semibold text-[var(--text-secondary)] [font-family:'Geist_Mono',monospace]" id="time-display-current">0:00</span>
+          <input
+            type="range" id="video-seek-bar" min="0" max="100" defaultValue="0"
+            className="flex-1 appearance-none h-1 rounded-sm bg-[var(--bg-input)] cursor-pointer
+              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5
+              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent-color)]"
+          />
+          <span className="text-[11px] font-semibold text-[var(--text-secondary)] [font-family:'Geist_Mono',monospace]" id="time-display-duration">0:00</span>
         </div>
-        <button type="button" id="btn-download-video" className="btn-download-action" title="Download Captioned MP4" onClick={() => onDownloadVideo?.()}>
+        <button
+          type="button" id="btn-download-video" title="Download Captioned MP4" onClick={() => onDownloadVideo?.()}
+          className="bg-transparent border-0 text-[var(--text-secondary)] cursor-pointer hover:text-[var(--accent-color)]"
+        >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
         </button>
       </div>

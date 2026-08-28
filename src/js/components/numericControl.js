@@ -17,6 +17,25 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+// Tailwind utility classes for the value badge (migration plan's Stage 5 —
+// see SidebarInspector.jsx for the JSX that renders the initial badge with
+// these same base classes). Exported so this module and the JSX stay in
+// sync from one definition instead of two copies drifting apart.
+export const BADGE_BASE_CLASSES = 'text-[11px] font-bold text-[var(--accent-wash-text)] bg-[var(--accent-wash-bg)] px-1.5 py-px rounded cursor-text border border-transparent hover:border-[var(--accent-color)] focus-visible:border-[var(--accent-color)] focus-visible:outline-none';
+// Swapped in for the badge while it's being directly edited (see beginEdit
+// below) — same footprint/colors as the badge it replaces, just wider and
+// right-aligned so a typed value doesn't jump the layout.
+const BADGE_INPUT_EXTRA_CLASSES = 'font-[family-name:var(--font-main)] w-12 text-right outline-none';
+// Brief flash when a typed value was out of range (clamped) or malformed
+// (rejected). The `!` (important) prefix mirrors the original CSS's
+// `!important` — this transient state must visually win over the badge's
+// own base color classes. Deliberately NOT part of the base classes: the
+// transition is meant to animate the flash IN (present here) but the
+// reversion back to normal 500ms later should snap instantly, exactly like
+// the original — removing these classes together removes the transition
+// declaration along with the color, so the revert has nothing to animate.
+const BADGE_INVALID_CLASSES = '!bg-[rgba(239,68,68,0.25)] !text-[#FCA5A5] transition-colors duration-[400ms]';
+
 /**
  * @param {object} config
  * @param {string} config.sliderId - <input type="range"> element id.
@@ -53,8 +72,8 @@ export function initNumericControl(config) {
 
   const flashInvalid = () => {
     if (!badge) return;
-    badge.classList.add('group-value-badge-invalid');
-    setTimeout(() => badge.classList.remove('group-value-badge-invalid'), 500);
+    badge.classList.add(...BADGE_INVALID_CLASSES.split(' '));
+    setTimeout(() => badge.classList.remove(...BADGE_INVALID_CLASSES.split(' ')), 500);
   };
 
   const commit = (displayValue) => {
@@ -78,7 +97,7 @@ export function initNumericControl(config) {
       editingInput = document.createElement('input');
       editingInput.type = 'text';
       editingInput.inputMode = 'decimal';
-      editingInput.className = 'group-value-badge group-value-badge-input';
+      editingInput.className = `${BADGE_BASE_CLASSES} ${BADGE_INPUT_EXTRA_CLASSES}`;
       editingInput.value = String(currentDisplay);
       badge.replaceWith(editingInput);
       editingInput.focus();

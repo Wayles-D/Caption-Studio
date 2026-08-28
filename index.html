@@ -8,7 +8,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&family=Inter:wght@300;400;500;600;700;800&family=Montserrat:wght@400;600;700;800;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/src/style.css">
+    <!-- style.css is imported from main.jsx (after tailwind.css) rather than
+         linked here, so its `@layer base { ... }` block joins Tailwind's
+         `base` layer at a predictable position — see tailwind.css's and
+         style.css's own comments on why cascade layer order matters here. -->
 </head>
 <body class="dark-theme">
     <!-- Single React root (migration plan's Stage 4) — see src/main.jsx +

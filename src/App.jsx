@@ -195,19 +195,20 @@ export function App() {
         }}
       />
 
-      <header className="app-toolbar">
+      <header className="h-14 w-full bg-[var(--bg-toolbar)] backdrop-blur-lg border-b border-[var(--border-color)] flex items-center justify-between px-5 z-[100] relative">
         <Toolbar
           onImportVideo={() => videoFileInputRef.current?.click()}
           onExportVideo={() => triggerRegeneration()}
         />
       </header>
 
-      <div className="app-workspace-3col">
-        <aside className="sidebar-left">
+      <div className="grid grid-cols-[320px_1fr_340px] h-[calc(100vh-56px)] w-screen overflow-hidden
+        max-lg:grid-cols-[280px_1fr_280px] max-md:grid-cols-1 max-md:h-auto max-md:overflow-y-auto">
+        <aside className="bg-[var(--bg-sidebar)] border-r border-[var(--border-color)] overflow-y-auto flex flex-col max-md:h-auto">
           <SidebarInspector />
         </aside>
 
-        <main className="workspace-center">
+        <main className="bg-[radial-gradient(circle_at_center,rgba(30,41,59,0.3)_0%,rgba(8,12,20,1)_100%)] flex flex-col items-center justify-center relative p-5">
           <PreviewStage
             viewState={viewState}
             processingTitle={processingTitle}
@@ -219,12 +220,18 @@ export function App() {
           />
         </main>
 
-        <aside className="sidebar-right">
+        <aside className="bg-[var(--bg-sidebar)] border-l border-[var(--border-color)] overflow-y-auto p-4 flex flex-col gap-4 max-md:h-auto">
           <RightInspector onRegenerateCaptions={() => triggerRegeneration()} />
         </aside>
       </div>
 
-      <div id="app-toast" className={`toast-notification${toastVisible ? ' show' : ''}`}>
+      <div
+        id="app-toast"
+        className={`fixed bottom-6 right-6 bg-[var(--bg-card)] border border-[var(--accent-color)] text-[var(--text-primary)]
+          px-[18px] py-2.5 rounded-[var(--radius-md)] text-[13px] font-semibold shadow-[var(--shadow-md)] pointer-events-none
+          transition-all duration-[250ms] [transition-timing-function:cubic-bezier(0.175,0.885,0.32,1.275)] z-[1000]
+          ${toastVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}
+      >
         {toastMessage}
       </div>
     </>

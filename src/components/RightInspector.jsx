@@ -49,48 +49,54 @@ export function RightInspector({ onRegenerateCaptions }) {
 
   return (
     <>
-      <div className="inspector-card">
-        <div className="inspector-card-header">
-          <span className="card-title">Video Inspector</span>
-          <span className="status-badge" id="global-status-badge">Ready</span>
+      <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]">Video Inspector</span>
+          <span className="text-[10px] font-bold bg-[var(--status-wash-bg)] text-[var(--status)] px-2 py-0.5 rounded-[10px]" id="global-status-badge">Ready</span>
         </div>
-        <div className="meta-rows">
-          <div className="meta-row">
-            <span className="meta-label">File</span>
-            <span className="meta-val">{uploadedFile ? uploadedFile.name : 'Demo Video'}</span>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex justify-between text-xs">
+            <span className="text-[var(--text-muted)]">File</span>
+            <span className="font-semibold text-[var(--text-primary)]">{uploadedFile ? uploadedFile.name : 'Demo Video'}</span>
           </div>
-          <div className="meta-row">
-            <span className="meta-label">Duration</span>
-            <span className="meta-val">{durationLabel}</span>
+          <div className="flex justify-between text-xs">
+            <span className="text-[var(--text-muted)]">Duration</span>
+            <span className="font-semibold text-[var(--text-primary)]">{durationLabel}</span>
           </div>
-          <div className="meta-row">
-            <span className="meta-label">Canvas</span>
-            <span className="meta-val">1080 × 1920 (9:16)</span>
+          <div className="flex justify-between text-xs">
+            <span className="text-[var(--text-muted)]">Canvas</span>
+            <span className="font-semibold text-[var(--text-primary)]">1080 × 1920 (9:16)</span>
           </div>
         </div>
 
-        <div className="badges-summary">
-          <span className="badge-tag">{fontFamily}</span>
-          <span className="badge-tag">{(currentPreset || '').toUpperCase()}</span>
-          <span className="badge-tag">{(animationMode || '').toUpperCase()}</span>
+        <div className="flex flex-wrap gap-1.5 mt-1">
+          <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{fontFamily}</span>
+          <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{(currentPreset || '').toUpperCase()}</span>
+          <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{(animationMode || '').toUpperCase()}</span>
         </div>
       </div>
 
       <div
-        className="inspector-card transcript-card-col"
+        className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3 flex-1"
         id="transcript-card"
         style={{ display: words.length > 0 ? 'flex' : 'none' }}
       >
-        <div className="inspector-card-header">
-          <span className="card-title">Transcript Editor</span>
-          <span className="word-count-chip">{words.length} words</span>
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]">Transcript Editor</span>
+          <span className="text-[11px] font-semibold text-[var(--accent-color)]">{words.length} words</span>
         </div>
-        <p className="transcript-help">Click any word chip below to edit speech text:</p>
-        <div className="transcript-chips-box" id="transcript-words-container" ref={chipsContainerRef} />
+        <p className="text-[11px] text-[var(--text-muted)]">Click any word chip below to edit speech text:</p>
+        <div
+          className="flex-1 min-h-[180px] max-h-[300px] overflow-y-auto bg-[var(--bg-input)] border border-[var(--border-color)]
+            rounded-[var(--radius-sm)] p-2.5 flex flex-wrap content-start gap-1.5"
+          id="transcript-words-container"
+          ref={chipsContainerRef}
+        />
         <button
           type="button"
           id="btn-apply-render"
-          className="btn btn-primary btn-apply-full"
+          className="w-full h-[38px] bg-[var(--accent-gradient)] border-0 text-[var(--text-on-accent)] font-bold text-xs
+            rounded-[var(--radius-sm)] cursor-pointer transition-colors duration-150 hover:bg-[var(--accent-hover)]"
           disabled={isProcessing}
           onClick={() => onRegenerateCaptions?.()}
         >

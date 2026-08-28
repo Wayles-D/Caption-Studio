@@ -10,6 +10,12 @@ import { createRoot } from 'react-dom/client';
 // own doc comment) for the incremental React/Tailwind UI migration. Inert
 // until a component actually uses a utility class.
 import './tailwind.css';
+// Design tokens, global reset, and the protected canvas/video rendering CSS
+// (see style.css's own header comment). Imported AFTER tailwind.css so its
+// `@layer base { ... }` reset block joins Tailwind's `base` layer at a
+// predictable position in the cascade — Tailwind utilities must always be
+// able to override it.
+import './style.css';
 
 import { App } from './App.jsx';
 

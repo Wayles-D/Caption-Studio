@@ -11,6 +11,31 @@ import { registerDismissable } from '../utils/clickOutside.js';
 const RECENT_COLORS_STORAGE_KEY = 'captionStudio.recentColors';
 const MAX_RECENT_COLORS = 8;
 
+// Tailwind utility classes for the popover this module builds imperatively
+// (migration plan's Stage 5) — kept as named constants purely for
+// readability of the className assignments below, not for reuse elsewhere.
+const CLS = {
+  visualArea: 'flex flex-col gap-2',
+  svArea: 'relative w-full h-[130px] rounded-[var(--radius-sm)] overflow-hidden cursor-crosshair [touch-action:none] border border-[var(--border-color)]',
+  svHueLayer: 'absolute inset-0',
+  svWhiteLayer: 'absolute inset-0 bg-[linear-gradient(to_right,#fff,rgba(255,255,255,0))]',
+  svBlackLayer: 'absolute inset-0 bg-[linear-gradient(to_top,#000,rgba(0,0,0,0))]',
+  svCursor: 'absolute w-3.5 h-3.5 -mt-[7px] -ml-[7px] rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.6),0_1px_3px_rgba(0,0,0,0.4)] pointer-events-none',
+  hueStrip: 'relative w-full h-3.5 rounded-[7px] bg-[linear-gradient(to_right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)] cursor-pointer [touch-action:none] border border-[var(--border-color)]',
+  hueCursor: 'absolute top-1/2 w-3.5 h-3.5 -mt-2 -ml-[7px] rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.6),0_1px_3px_rgba(0,0,0,0.4)] bg-transparent pointer-events-none',
+  popover: 'fixed w-[232px] box-border bg-[var(--bg-sidebar)] border border-[var(--border-color-hover)] rounded-[var(--radius-md)] shadow-[var(--shadow-md)] p-3.5 z-[1100] flex flex-col gap-2.5',
+  headerRow: 'flex items-center justify-between gap-2',
+  heading: 'text-xs font-bold text-[var(--text-primary)]',
+  closeBtn: 'shrink-0 w-5 h-5 leading-none flex items-center justify-center border-0 bg-transparent text-[var(--text-muted)] text-base cursor-pointer rounded-[var(--radius-sm)] p-0 hover:text-[var(--text-primary)] hover:bg-[var(--bg-input)]',
+  previewRow: 'flex items-center gap-2',
+  livePreview: 'w-7 h-7 rounded-[var(--radius-sm)] border border-[var(--border-color)] shrink-0',
+  hexInput: 'flex-1 min-w-0 box-border bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] text-[var(--text-primary)] font-[family-name:var(--font-main)] text-[13px] px-2 py-1.5',
+  swatchSections: 'flex flex-col gap-2.5',
+  sectionLabel: 'text-[10px] font-bold uppercase tracking-[0.04em] text-[var(--text-muted)]',
+  swatchGrid: 'grid grid-cols-6 gap-1.5',
+  swatch: 'w-6 h-6 rounded-full border-2 border-transparent cursor-pointer p-0 hover:scale-110 [&.active]:border-[var(--accent-color)]'
+};
+
 const PRESET_PALETTE = [
   '#FFFFFF', '#000000', '#FEF08A', '#FACC15', '#FB923C', '#F87171',
   '#F472B6', '#C084FC', '#818CF8', '#38BDF8', '#2DD4BF', '#4ADE80'
@@ -131,24 +156,24 @@ function pointerRatio(event, rect) {
  */
 function buildVisualColorArea(initialHex, onLiveChange, onCommit) {
   const container = document.createElement('div');
-  container.className = 'color-picker-visual-area';
+  container.className = CLS.visualArea;
 
   const svArea = document.createElement('div');
-  svArea.className = 'color-picker-sv-area';
+  svArea.className = CLS.svArea;
   const svHueLayer = document.createElement('div');
-  svHueLayer.className = 'color-picker-sv-hue-layer';
+  svHueLayer.className = CLS.svHueLayer;
   const svWhiteLayer = document.createElement('div');
-  svWhiteLayer.className = 'color-picker-sv-white-layer';
+  svWhiteLayer.className = CLS.svWhiteLayer;
   const svBlackLayer = document.createElement('div');
-  svBlackLayer.className = 'color-picker-sv-black-layer';
+  svBlackLayer.className = CLS.svBlackLayer;
   const svCursor = document.createElement('div');
-  svCursor.className = 'color-picker-sv-cursor';
+  svCursor.className = CLS.svCursor;
   svArea.append(svHueLayer, svWhiteLayer, svBlackLayer, svCursor);
 
   const hueStrip = document.createElement('div');
-  hueStrip.className = 'color-picker-hue-strip';
+  hueStrip.className = CLS.hueStrip;
   const hueCursor = document.createElement('div');
-  hueCursor.className = 'color-picker-hue-cursor';
+  hueCursor.className = CLS.hueCursor;
   hueStrip.appendChild(hueCursor);
 
   container.append(svArea, hueStrip);
@@ -256,7 +281,7 @@ function ensurePopover() {
   if (popoverEl) return popoverEl;
 
   popoverEl = document.createElement('div');
-  popoverEl.className = 'color-picker-popover';
+  popoverEl.className = CLS.popover;
   popoverEl.setAttribute('role', 'dialog');
   popoverEl.hidden = true;
   document.body.appendChild(popoverEl);
@@ -290,16 +315,16 @@ function renderPopoverContentInner() {
   popoverEl.innerHTML = '';
 
   const headerRow = document.createElement('div');
-  headerRow.className = 'color-picker-header-row';
+  headerRow.className = CLS.headerRow;
 
   const heading = document.createElement('div');
-  heading.className = 'color-picker-heading';
+  heading.className = CLS.heading;
   heading.textContent = field.label;
   headerRow.appendChild(heading);
 
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
-  closeBtn.className = 'color-picker-close-btn';
+  closeBtn.className = CLS.closeBtn;
   closeBtn.setAttribute('aria-label', 'Close color picker');
   closeBtn.textContent = '×';
   closeBtn.addEventListener('click', () => closePopover());
@@ -308,16 +333,16 @@ function renderPopoverContentInner() {
   popoverEl.appendChild(headerRow);
 
   const previewRow = document.createElement('div');
-  previewRow.className = 'color-picker-preview-row';
+  previewRow.className = CLS.previewRow;
 
   const previewSwatch = document.createElement('span');
-  previewSwatch.className = 'color-picker-live-preview';
+  previewSwatch.className = CLS.livePreview;
   previewSwatch.style.background = isValidHex(currentColor) ? currentColor : '#000000';
   previewRow.appendChild(previewSwatch);
 
   const hexInput = document.createElement('input');
   hexInput.type = 'text';
-  hexInput.className = 'color-picker-hex-input';
+  hexInput.className = CLS.hexInput;
   hexInput.value = currentColor;
   hexInput.spellcheck = false;
   hexInput.maxLength = 7;
@@ -381,14 +406,14 @@ function renderPopoverContentInner() {
   // updating recency order and active-swatch highlighting — without
   // rebuilding the visual picker itself.
   const swatchSections = document.createElement('div');
-  swatchSections.className = 'color-picker-swatch-sections';
+  swatchSections.className = CLS.swatchSections;
   popoverEl.appendChild(swatchSections);
 
   const renderSwatchSections = (highlightColor) => {
     swatchSections.innerHTML = '';
 
     const paletteLabel = document.createElement('div');
-    paletteLabel.className = 'color-picker-section-label';
+    paletteLabel.className = CLS.sectionLabel;
     paletteLabel.textContent = 'Preset Palette';
     swatchSections.appendChild(paletteLabel);
     swatchSections.appendChild(buildSwatchGrid(PRESET_PALETTE, field.key, highlightColor));
@@ -396,7 +421,7 @@ function renderPopoverContentInner() {
     const recents = getRecentColors();
     if (recents.length > 0) {
       const recentLabel = document.createElement('div');
-      recentLabel.className = 'color-picker-section-label';
+      recentLabel.className = CLS.sectionLabel;
       recentLabel.textContent = 'Recently Used';
       swatchSections.appendChild(recentLabel);
       swatchSections.appendChild(buildSwatchGrid(recents, field.key, highlightColor));
@@ -412,12 +437,12 @@ function renderPopoverContentInner() {
 
 function buildSwatchGrid(colors, fieldKey, currentColor) {
   const grid = document.createElement('div');
-  grid.className = 'color-picker-swatch-grid';
+  grid.className = CLS.swatchGrid;
 
   colors.forEach((hex) => {
     const swatch = document.createElement('button');
     swatch.type = 'button';
-    swatch.className = 'color-picker-swatch';
+    swatch.className = CLS.swatch;
     swatch.style.background = hex;
     swatch.setAttribute('aria-label', hex);
     if (currentColor && hex.toLowerCase() === currentColor.toLowerCase()) {

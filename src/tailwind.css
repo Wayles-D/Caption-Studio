@@ -9,6 +9,19 @@
  * moves). Importing only the theme + utilities layers means Tailwind
  * contributes nothing until a component actually uses a utility class —
  * zero visual change to the still-vanilla parts of the app at any stage.
+ *
+ * The explicit `@layer theme, base, utilities;` below declares those three
+ * layers' relative priority BEFORE anything is assigned to them. This
+ * matters because CSS cascade layers always lose to *unlayered* CSS,
+ * regardless of specificity or source order — so style.css's global
+ * reset (`*, *::before, *::after { margin: 0; padding: 0; ... }`), which is
+ * plain unlayered CSS, would otherwise silently beat EVERY Tailwind utility
+ * class site-wide (e.g. `p-4` computing to `0px`, confirmed via computed
+ * styles during Stage 5 verification). style.css's reset is wrapped in this
+ * same `base` layer (see its own comment) so Tailwind utilities can always
+ * override it, exactly like Preflight's relationship to utilities normally
+ * works.
  */
+@layer theme, base, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);

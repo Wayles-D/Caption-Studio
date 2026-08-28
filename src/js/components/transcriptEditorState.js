@@ -14,9 +14,15 @@
  * itself `.edited` when its text diverges from the original word, and
  * treats Enter as "done editing" (blur) rather than inserting a newline.
  */
+// 'word-chip' itself carries no styling (kept only as a stable selector hook
+// for collectEditedWords below); all visual styling comes from the Tailwind
+// utility classes alongside it.
+const WORD_CHIP_BASE_CLASSES = 'word-chip bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md px-2 py-[3px] text-xs font-semibold text-[var(--text-primary)] outline-none cursor-text transition-all duration-150';
+const WORD_CHIP_EDITED_CLASSES = ['border-amber-500', 'bg-amber-500/15'];
+
 export function buildWordChip(wordObj, idx) {
   const chip = document.createElement('span');
-  chip.className = 'word-chip';
+  chip.className = WORD_CHIP_BASE_CLASSES;
   chip.contentEditable = 'true';
   chip.spellcheck = false;
   chip.textContent = wordObj.word || '';
@@ -26,9 +32,9 @@ export function buildWordChip(wordObj, idx) {
   chip.addEventListener('input', () => {
     const currentText = chip.textContent.trim();
     if (currentText !== chip.dataset.originalText) {
-      chip.classList.add('edited');
+      chip.classList.add(...WORD_CHIP_EDITED_CLASSES);
     } else {
-      chip.classList.remove('edited');
+      chip.classList.remove(...WORD_CHIP_EDITED_CLASSES);
     }
   });
 
