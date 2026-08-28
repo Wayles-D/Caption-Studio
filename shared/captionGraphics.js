@@ -220,7 +220,15 @@ function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, reference
     }
   }
 
-  return { pxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge };
+  // On-canvas transform (see src/js/components/canvasTransform.js): a plain
+  // degrees value, applied as a canvas rotate() around the caption block's
+  // own center (computed per-mode in renderResolvedFrame/
+  // renderRollingStackResolvedFrame) — never around the anchor point itself,
+  // since the anchor is often a block EDGE (e.g. bottom position), not its
+  // visual center, and the feature spec requires rotation around center.
+  const rotationDeg = parseFloat(params.rotation) || 0;
+
+  return { pxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge, rotationDeg };
 }
 
 /**
@@ -308,10 +316,13 @@ function layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndi
  * the caller's canvas actually is), builds the word list, wraps lines, and
  * draws fill/outline/shadow — identical for preview and export.
  */
-function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry }) {
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-  if (!activePhrase || !activePhrase.words || !activePhrase.words.length) return;
-
+/**
+ * Pure layout step for sentence mode: resolves every word's draw spec, wraps
+ * into lines, and computes the block's bounding box — no painting. Shared by
+ * renderResolvedFrame (paints it) and measureSentenceFrame (just reports the
+ * box, for the on-canvas selection overlay — see canvasTransform.js).
+ */
+function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry }) {
   const profile = cssConfig.profile;
   const mode = cssConfig.animationMode;
   const keywordsEnabled = !!params.enableKeywordHighlighting && params.enableKeywordHighlighting !== 'false';
@@ -319,11 +330,7 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
 
-  const {
-    fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx,
-    outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor,
-    anchorX, anchorY, yEdge
-  } = geometry;
+  const { fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, anchorX, anchorY, yEdge } = geometry;
 
   const breakAfterIndices = new Set(activePhrase.breakAfterIndices || []);
   const drawCtx = { currentTime, mode, keywordsEnabled, keywordColor, activeHighlight, inactiveColor, params, profile };
@@ -347,18 +354,42 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   ctx.textBaseline = 'alphabetic';
   ctx.lineJoin = 'round';
   const lines = layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndices });
-  if (!lines.length) return;
+  if (!lines.length) return null;
 
   const totalHeight = lines.length * lineHeightPx;
   const blockTop = yEdge === 'top' ? anchorY : yEdge === 'center' ? anchorY - totalHeight / 2 : anchorY - totalHeight;
+  const blockWidth = Math.max(...lines.map((l) => l.width));
+
+  return { lines, lineHeightPx, totalHeight, blockTop, blockWidth, centerX: anchorX, centerY: blockTop + totalHeight / 2 };
+}
+
+function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry }) {
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  if (!activePhrase || !activePhrase.words || !activePhrase.words.length) return;
+
+  const {
+    fontSizePx, wordSpacingPx, outlineWidthPx, outlineColor, hasShadow,
+    shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, rotationDeg
+  } = geometry;
+
+  const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
+  if (!computed) return;
+  const { lines, lineHeightPx, blockTop, centerX, centerY } = computed;
+
+  ctx.save();
+  if (rotationDeg) {
+    ctx.translate(centerX, centerY);
+    ctx.rotate((rotationDeg * Math.PI) / 180);
+    ctx.translate(-centerX, -centerY);
+  }
 
   lines.forEach((line, lineIdx) => {
     const lineY = blockTop + lineIdx * lineHeightPx + lineHeightPx * 0.8; // ~baseline within the line box
     let cursorX = anchorX - line.width / 2;
 
     line.words.forEach((word) => {
-      const centerX = cursorX + word.width / 2;
-      paintText(ctx, word.text, centerX, lineY, {
+      const wordCenterX = cursorX + word.width / 2;
+      paintText(ctx, word.text, wordCenterX, lineY, {
         font: word.font,
         color: word.color,
         scale: word.scale,
@@ -375,6 +406,37 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
       cursorX += word.width + wordSpacingPx;
     });
   });
+
+  ctx.restore();
+}
+
+/**
+ * Reports the sentence-mode caption block's bounding box + rotation, in the
+ * SAME pixel space as canvasWidth/canvasHeight (backing-store px for
+ * preview, output px for export) — no painting. The on-canvas transform
+ * overlay (canvasTransform.js) divides x/y/width/height by
+ * canvasWidth/cssPixelWidth (the same pxScale resolveGeometry already
+ * computes) to get CSS px for positioning its DOM handles; it never computes
+ * geometry a second way.
+ *
+ * @returns {{x:number,y:number,width:number,height:number,centerX:number,centerY:number,rotationDeg:number}|null}
+ */
+export function measureSentenceFrame(ctx, opts) {
+  const { canvasWidth, canvasHeight, cssPixelWidth, activePhrase, currentTime, cssConfig, params } = opts;
+  if (!activePhrase || !activePhrase.words || !activePhrase.words.length) return null;
+  const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
+  const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
+  if (!computed) return null;
+  return {
+    x: computed.centerX - computed.blockWidth / 2,
+    y: computed.blockTop,
+    width: computed.blockWidth,
+    height: computed.totalHeight,
+    centerX: computed.centerX,
+    centerY: computed.centerY,
+    rotationDeg: geometry.rotationDeg,
+    pxScale: geometry.pxScale
+  };
 }
 
 /**
@@ -657,7 +719,19 @@ function layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry,
     return { ...line, x: lineX, y: lineY, textAlign };
   });
 
-  return positionedLines;
+  // Horizontal bbox center is anchorX regardless of `alignment`: left/right
+  // alignment offset lineX by +/- containerWidth/2 from anchorX specifically
+  // so the CONTAINER (not the text-drawing anchor) stays centered on anchorX
+  // — see this function's lineX branches. That's what makes a single
+  // rotation-center formula correct for all three alignments.
+  return {
+    lines: positionedLines,
+    blockWidth: containerWidth,
+    blockTop,
+    totalHeight,
+    centerX: anchorX,
+    centerY: blockTop + totalHeight / 2
+  };
 }
 
 function paintRollingStackLines(ctx, positionedLines) {
@@ -694,12 +768,26 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
 
   const shadowMode = resolveShadowMode(params);
 
+  const { rotationDeg } = geometry;
+  const applyRotation = (targetCtx, centerX, centerY) => {
+    if (!rotationDeg) return;
+    targetCtx.translate(centerX, centerY);
+    targetCtx.rotate((rotationDeg * Math.PI) / 180);
+    targetCtx.translate(-centerX, -centerY);
+  };
+
   if (shadowMode === 'unified' && createOffscreenCanvas) {
     const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
     const offCtx = offscreen.getContext('2d');
-    const positionedLines = layoutRollingStackLines(offCtx, windowChunks, cssConfig, params, geometry, alignment);
-    paintRollingStackLines(offCtx, positionedLines);
+    const layout = layoutRollingStackLines(offCtx, windowChunks, cssConfig, params, geometry, alignment);
+    offCtx.save();
+    applyRotation(offCtx, layout.centerX, layout.centerY);
+    paintRollingStackLines(offCtx, layout.lines);
+    offCtx.restore();
 
+    // The offscreen canvas already contains the rotated composition (rotated
+    // while painting, above) — drawImage below is a plain, unrotated pixel
+    // copy, so the shadow it casts is the correctly-rotated silhouette too.
     const uni = resolveUnifiedShadowParams(params);
     const textOpacity = params.textOpacity ?? 100;
     ctx.save();
@@ -712,8 +800,33 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     return;
   }
 
-  const positionedLines = layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry, alignment);
-  paintRollingStackLines(ctx, positionedLines);
+  const layout = layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry, alignment);
+  ctx.save();
+  applyRotation(ctx, layout.centerX, layout.centerY);
+  paintRollingStackLines(ctx, layout.lines);
+  ctx.restore();
+}
+
+/**
+ * Reports the Rolling Stack composition's bounding box + rotation, in the
+ * SAME pixel space as canvasWidth/canvasHeight — no painting. Counterpart to
+ * measureSentenceFrame for the on-canvas transform overlay.
+ */
+export function measureRollingStackFrame(ctx, opts) {
+  const { canvasWidth, canvasHeight, cssPixelWidth, windowChunks, cssConfig, params, alignment } = opts;
+  if (!windowChunks || !windowChunks.length) return null;
+  const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
+  const layout = layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry, alignment);
+  return {
+    x: layout.centerX - layout.blockWidth / 2,
+    y: layout.blockTop,
+    width: layout.blockWidth,
+    height: layout.totalHeight,
+    centerX: layout.centerX,
+    centerY: layout.centerY,
+    rotationDeg: geometry.rotationDeg,
+    pxScale: geometry.pxScale
+  };
 }
 
 /**

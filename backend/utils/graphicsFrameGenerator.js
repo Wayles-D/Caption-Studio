@@ -25,6 +25,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
+import { resolvePhraseParams } from '../../shared/captionTransform.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
 /**
@@ -215,7 +216,8 @@ export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHe
 
   [...phrases].sort((a, b) => a.start - b.start).forEach((phrase) => {
     pushGap(segments, cursor, phrase.start);
-    segments.push(...generatePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir));
+    const phraseParams = resolvePhraseParams(params, phrase);
+    segments.push(...generatePhraseFrames(phrase, phraseParams, canvasWidth, canvasHeight, outDir));
     cursor = phrase.end;
   });
   pushGap(segments, cursor, videoDuration);

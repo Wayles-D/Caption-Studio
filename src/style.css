@@ -1024,6 +1024,119 @@ input:checked + .theme-slider::before {
   display: block;
 }
 
+/* On-canvas caption transform overlay (editor-only — never rendered into the
+   exported video, see src/js/components/canvasTransform.js). Sits above the
+   graphics canvas (z-index 10) so its hit-test layer and click-to-select
+   catch pointer events the canvas itself can't (it's pointer-events:none). */
+.caption-transform-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 20;
+  pointer-events: none;
+  display: none;
+}
+
+.caption-transform-overlay.active {
+  display: block;
+}
+
+.caption-transform-hit-area {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.caption-transform-box {
+  position: absolute;
+  pointer-events: auto;
+  cursor: move;
+  border: 1.5px solid #6366F1;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+  touch-action: none;
+}
+
+.caption-transform-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #6366F1;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.caption-transform-handle.tl { top: 0; left: 0; cursor: nwse-resize; }
+.caption-transform-handle.tr { top: 0; left: 100%; cursor: nesw-resize; }
+.caption-transform-handle.bl { top: 100%; left: 0; cursor: nesw-resize; }
+.caption-transform-handle.br { top: 100%; left: 100%; cursor: nwse-resize; }
+
+.caption-transform-rotate-line {
+  position: absolute;
+  left: 50%;
+  top: -28px;
+  width: 1.5px;
+  height: 28px;
+  background: #6366F1;
+  pointer-events: none;
+}
+
+.caption-transform-handle.rotate {
+  top: -28px;
+  left: 50%;
+  cursor: grab;
+  background: #6366F1;
+}
+
+.caption-transform-toolbar {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, -8px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: rgba(17, 17, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  pointer-events: auto;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #E5E7EB;
+}
+
+.caption-transform-scope-btn {
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #9CA3AF;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.caption-transform-scope-btn.active {
+  background: #6366F1;
+  color: #ffffff;
+}
+
+.caption-transform-reset-btn {
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: #E5E7EB;
+  cursor: pointer;
+  font-size: 11px;
+}
+
 /* Floating Playback Controls Bar */
 .preview-controls-bar {
   background: var(--bg-toolbar);

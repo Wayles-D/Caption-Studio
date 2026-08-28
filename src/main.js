@@ -13,6 +13,7 @@ import { fetchJson, describeFetchError } from './js/utils/apiRequest.js';
 const dropZone = document.getElementById('drop-zone');
 const videoFileInput = document.getElementById('video-file-input');
 const btnSelectFile = document.getElementById('btn-select-file');
+const btnSelectFileDropzone = document.getElementById('btn-select-file-dropzone');
 const btnUseDemo = document.getElementById('btn-use-demo');
 
 const previewVideo = document.getElementById('preview-video');
@@ -62,6 +63,7 @@ export function showToast(message) {
 function bindUploadEvents() {
   if (btnSelectFile && videoFileInput) {
     btnSelectFile.addEventListener('click', () => videoFileInput.click());
+    btnSelectFileDropzone?.addEventListener('click', () => videoFileInput.click());
     videoFileInput.addEventListener('change', (e) => {
       if (e.target.files.length > 0) {
         handleFileSelected(e.target.files[0]);

@@ -56,6 +56,20 @@ export const initialStyleState = {
   marginV: 300,
   customPosX: 50,
   customPosY: 85,
+  // On-canvas transform controls (see src/js/components/canvasTransform.js).
+  // `rotation` is the GLOBAL degrees value (applies to every caption unless
+  // a phrase has its own override below — mirrors how customPosX/Y already
+  // work as the global manual-position value). `captionTransforms` holds
+  // PER-PHRASE overrides, keyed by shared/captionTransform.js's
+  // getPhraseTransformKey — only ever populated for a phrase the user
+  // explicitly edited with "Apply to THIS CAPTION" selected; every other
+  // phrase is untouched and keeps resolving from the global fields exactly
+  // as before this feature existed. `transformApplyScope` is the editor's
+  // current This/All choice, read at edit-time to decide which of the two
+  // gets written — it is not itself consumed by the renderer.
+  rotation: 0,
+  captionTransforms: {},
+  transformApplyScope: "all",
   enableKeywordHighlighting: true,
   keywordColor: "#EF4444",
   keywordFont: null,
@@ -243,6 +257,8 @@ export function getStyleParams() {
     position: appState.position,
     customPosX: appState.customPosX,
     customPosY: appState.customPosY,
+    rotation: appState.rotation,
+    captionTransforms: appState.captionTransforms,
     animationMode: appState.animationMode,
     enableKeywordHighlighting: appState.enableKeywordHighlighting,
     keywordColor: appState.keywordColor,

@@ -615,7 +615,7 @@
                                 </div>
                                 <h3 class="drop-title font-geist">Upload Video</h3>
                                 <p class="drop-subtitle">Drag & drop or click to choose file</p>
-                                <button type="button" id="btn-select-file" class="btn btn-primary btn-upload">Select Video</button>
+                                <button type="button" id="btn-select-file-dropzone" class="btn btn-primary btn-upload">Select Video</button>
                                 <div class="demo-wrapper">
                                     <span class="text-muted">or</span>
                                     <button type="button" id="btn-use-demo" class="btn btn-link">Try Demo Video</button>
@@ -644,6 +644,26 @@
                              dev flag for comparing the new renderer against the CSS overlay above
                              during migration; it renders nothing by default and does not replace it. -->
                         <canvas class="captions-canvas" id="captions-canvas"></canvas>
+                        <!-- On-canvas caption transform overlay (editor-only UI — see
+                             src/js/components/canvasTransform.js). Never rendered into the
+                             exported video; populated/positioned entirely from JS. -->
+                        <div class="caption-transform-overlay" id="caption-transform-overlay">
+                            <div class="caption-transform-hit-area" id="caption-transform-hit-area"></div>
+                            <div class="caption-transform-box" id="caption-transform-box" hidden>
+                                <div class="caption-transform-toolbar" id="caption-transform-toolbar">
+                                    <button type="button" class="caption-transform-scope-btn" data-scope="this" id="btn-transform-scope-this">This Caption</button>
+                                    <button type="button" class="caption-transform-scope-btn" data-scope="all" id="btn-transform-scope-all">All Captions</button>
+                                    <button type="button" class="caption-transform-reset-btn" id="btn-transform-reset">Reset</button>
+                                    <span class="caption-transform-rotation-label" id="caption-transform-rotation-label"></span>
+                                </div>
+                                <div class="caption-transform-rotate-line"></div>
+                                <div class="caption-transform-handle rotate" id="caption-transform-handle-rotate"></div>
+                                <div class="caption-transform-handle tl" data-handle="tl"></div>
+                                <div class="caption-transform-handle tr" data-handle="tr"></div>
+                                <div class="caption-transform-handle bl" data-handle="bl"></div>
+                                <div class="caption-transform-handle br" data-handle="br"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 

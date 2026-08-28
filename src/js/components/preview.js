@@ -5,7 +5,9 @@ import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from
 import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, applyOpacityToColor } from '../../../shared/captionConfig.js';
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
 import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolveRollingStackWindow } from '../../../shared/rollingStack.js';
-import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame } from '../../../shared/captionGraphics.js';
+import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame } from '../../../shared/captionGraphics.js';
+import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay } from './canvasTransform.js';
+import { resolvePhraseParams } from '../../../shared/captionTransform.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
 // backend/fonts/ + shared/fontRegistry.js) and served statically by the
@@ -117,9 +119,9 @@ function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, p
   const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
   const prepped = prepareGraphicsCanvas(canvas, fontFamily, cssConfig.profile.fontWeight, fontSizePx);
-  if (!prepped) return;
+  if (!prepped) return null;
 
-  drawCaptionFrame(prepped.ctx, {
+  const drawOpts = {
     canvasWidth: prepped.targetW,
     canvasHeight: prepped.targetH,
     cssPixelWidth: prepped.cssPixelWidth,
@@ -127,7 +129,12 @@ function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, p
     currentTime,
     cssConfig,
     params
-  });
+  };
+  drawCaptionFrame(prepped.ctx, drawOpts);
+  // Same ctx (fonts already loaded into it above) so measureText resolves
+  // identically — see measureSentenceFrame's doc comment for the on-canvas
+  // transform overlay this feeds (src/js/components/canvasTransform.js).
+  return measureSentenceFrame(prepped.ctx, drawOpts);
 }
 
 /**
@@ -140,9 +147,9 @@ function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, cssConfig, pa
   const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
   const prepped = prepareGraphicsCanvas(canvas, fontFamily, cssConfig.profile.fontWeight, fontSizePx);
-  if (!prepped) return;
+  if (!prepped) return null;
 
-  drawRollingStackFrame(prepped.ctx, {
+  const drawOpts = {
     canvasWidth: prepped.targetW,
     canvasHeight: prepped.targetH,
     cssPixelWidth: prepped.cssPixelWidth,
@@ -160,7 +167,9 @@ function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, cssConfig, pa
       off.height = h;
       return off;
     }
-  });
+  };
+  drawRollingStackFrame(prepped.ctx, drawOpts);
+  return measureRollingStackFrame(prepped.ctx, drawOpts);
 }
 
 export function initPreviewWorkspace() {
@@ -234,6 +243,7 @@ export function initPreviewWorkspace() {
   });
 
   initManualDragPositioning();
+  initCanvasTransform();
 
   applyCSSPreviewStyles();
   syncVideoSubtitles();
@@ -336,15 +346,19 @@ export function syncVideoSubtitles() {
   const captionsCanvas = document.getElementById('captions-canvas');
   if (captionsCanvas) captionsCanvas.classList.remove('active');
   captionsText.style.visibility = '';
+  // Re-shown only by the two graphics-renderer branches below — every other
+  // path (demo fallback, Word Mode, non-graphics-renderer CSS fallback)
+  // leaves it hidden instead of showing a stale box over unrelated content.
+  hideCanvasTransformOverlay();
 
   const currentTime = previewVideo.currentTime;
 
-  const cssConfig = getCSSPreviewFromConfig(getStyleParams());
+  const baseStyleParams = getStyleParams();
+  const baseCssConfig = getCSSPreviewFromConfig(baseStyleParams);
 
-  const activeHighlight = cssConfig.highlightColor || '#FEF08A';
-  const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
+  const activeHighlight = baseCssConfig.highlightColor || '#FEF08A';
+  const inactiveColor = baseCssConfig.inactiveColor || '#FFFFFF';
   const mode = appState.animationMode || 'karaoke';
-  const wordSpacingPx = cssConfig.wordSpacingPx !== undefined ? cssConfig.wordSpacingPx : 4;
 
   // Search active phrase in backend generated phrase timing model
   let activePhrase = null;
@@ -367,6 +381,20 @@ export function syncVideoSubtitles() {
     }
     return;
   }
+
+  // Per-caption transform overrides (see shared/captionTransform.js and
+  // src/js/components/canvasTransform.js's "This Caption" scope) only ever
+  // affect the phrase currently on screen — resolve them here, ONCE the real
+  // active phrase is known, so every branch below (Word Mode, Rolling Stack,
+  // Sentence graphics) renders from the SAME merged params the export
+  // pipeline (backend/utils/graphicsFrameGenerator.js) already resolves
+  // through resolvePhraseParams. Without this, a "This Caption" override
+  // updates state correctly but the preview keeps drawing from the
+  // unmerged global params, making the override invisible on screen even
+  // though it's genuinely stored (and would show up correctly in export).
+  const params = resolvePhraseParams(baseStyleParams, activePhrase);
+  const cssConfig = params === baseStyleParams ? baseCssConfig : getCSSPreviewFromConfig(params);
+  const wordSpacingPx = cssConfig.wordSpacingPx !== undefined ? cssConfig.wordSpacingPx : 4;
 
   // Word Mode: exactly one transcript word visible at a time, timed to its
   // own Whisper start/end within the already-found active phrase — only
@@ -392,8 +420,9 @@ export function syncVideoSubtitles() {
       const chunks = buildRollingStackChunks(activePhrase.words);
       const windowChunks = resolveRollingStackWindow(chunks, currentTime, appState.rollingStackLayerCount);
       if (windowChunks.length) {
-        drawGraphicsRollingStackCanvasFrame(captionsCanvas, windowChunks, cssConfig, getStyleParams());
+        const box = drawGraphicsRollingStackCanvasFrame(captionsCanvas, windowChunks, cssConfig, params);
         captionsCanvas.classList.add('active');
+        updateCanvasTransformOverlay(box, activePhrase, 'rolling-stack');
       }
       captionsText.style.visibility = 'hidden';
     } else {
@@ -409,9 +438,10 @@ export function syncVideoSubtitles() {
   const useGraphicsRenderer = isGraphicsRendererDefault(cssConfig)
     || (window.__USE_GRAPHICS_CAPTIONS__ && canDrawCaptionFrame(cssConfig));
   if (useGraphicsRenderer && captionsCanvas) {
-    drawGraphicsCanvasFrame(captionsCanvas, activePhrase, currentTime, cssConfig, getStyleParams());
+    const box = drawGraphicsCanvasFrame(captionsCanvas, activePhrase, currentTime, cssConfig, params);
     captionsCanvas.classList.add('active');
     captionsText.style.visibility = 'hidden';
+    updateCanvasTransformOverlay(box, activePhrase, 'sentence');
   }
 
   // Render active phrase words
