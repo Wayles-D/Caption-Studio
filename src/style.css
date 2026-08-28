@@ -132,6 +132,25 @@ body.light-theme {
   body {
     font-size: 14px;
   }
+
+  /* Below this breakpoint the workspace collapses to a single stacked
+     column (see App.jsx's `max-md:grid-cols-1 max-md:h-auto` on the
+     workspace grid) — stacking the left sidebar, phone preview, and right
+     sidebar vertically routinely needs more height than the viewport.
+     html/body's own `overflow: hidden` above would otherwise clip that
+     straight off with no way to reach it (confirmed via computed styles:
+     the workspace grid's height became fully "auto" and taller than the
+     viewport, but nothing ever scrolled to reveal it) — so page-level
+     scrolling needs to be genuinely allowed here, matching the workspace
+     grid's own `max-md:overflow-y-auto`. */
+  @media (max-width: 768px) {
+    html, body {
+      height: auto;
+      min-height: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+  }
 }
 
 @keyframes pulse {

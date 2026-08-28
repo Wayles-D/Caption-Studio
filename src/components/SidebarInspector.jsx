@@ -68,7 +68,16 @@ const ACCORDION_HEADER = `accordion-header w-full py-3.5 px-4 bg-transparent bor
   font-[family-name:var(--font-main)] font-semibold text-[13px] cursor-pointer`;
 const ACCORDION_TITLE = 'flex items-center gap-2 text-[var(--text-primary)]';
 const CHEVRON = 'text-[var(--text-secondary)] transition-transform duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] group-[.collapsed]:-rotate-90';
-const ACCORDION_BODY = `px-4 pb-4 flex flex-col gap-3.5 max-h-[800px] opacity-100 overflow-hidden
+// max-h here is only an arbitrary ceiling so `max-height` has a concrete
+// value to transition from/to (CSS can't animate to/from `auto`) — it isn't
+// meant to actually cap real content. The original CSS used 800px, which
+// silently clipped the "Style & Colors" section once Shadow Mode is set to
+// Unified (adds 5 more controls, ~1073px of real content — confirmed via
+// computed scrollHeight) with NO way to scroll to the hidden remainder,
+// since overflow-hidden here has nothing to do with the outer sidebar's own
+// scrolling. Raised well past the tallest realistic case so every section's
+// real content always fits.
+const ACCORDION_BODY = `px-4 pb-4 flex flex-col gap-3.5 max-h-[3000px] opacity-100 overflow-hidden
   [transition:max-height_0.3s_ease,opacity_0.2s_ease,padding_0.2s_ease]
   group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:pb-0`;
 
@@ -405,7 +414,7 @@ export function SidebarInspector() {
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>}
         >
           <div className={SETTINGS_GROUP}>
-            <div className={`${RADIO_GRID} grid-cols-4`}>
+            <div className={RADIO_GRID}>
               <label className={RADIO_TAB}>
                 <input type="radio" name="anim-mode" value="karaoke" className={RADIO_TAB_INPUT} defaultChecked />
                 <span className={RADIO_TAB_SPAN}>Karaoke</span>
