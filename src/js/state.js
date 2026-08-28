@@ -183,6 +183,16 @@ export function redo() {
 }
 
 /**
+ * Current undo/redo availability as a plain, callable-anytime snapshot —
+ * added for React's useSyncExternalStore (Toolbar.jsx), which needs a
+ * getSnapshot function it can call on demand, not just the 'history'
+ * pub/sub payload notify() already pushes on each change.
+ */
+export function getHistoryState() {
+  return { canUndo: historyStack.length > 0, canRedo: redoStack.length > 0 };
+}
+
+/**
  * Reset styles back to preset defaults
  */
 export function resetStyles() {
