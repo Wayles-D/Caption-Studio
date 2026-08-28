@@ -75,7 +75,28 @@ function getFallbackUnifiedShadow() {
  */
 const numeric = {};
 
+// Guards against double-initialization: initSidebarInspector() is meant to
+// run exactly ONCE for the page's lifetime (it's a one-time getElementById +
+// addEventListener wiring pass, not per-render styling), called from
+// SidebarInspector.jsx's `useEffect(() => { initSidebarInspector(); }, [])`.
+// A plain effect like that normally only runs once — but Vite/React Fast
+// Refresh can remount a component (re-running its effects, with no cleanup
+// to undo the first run) when its OWN source file changes, while colorPicker.js's
+// module-level state (popoverEl, activeFieldKey, etc.) persists unchanged
+// across that remount. Without this guard, each such remount during a dev
+// session attaches a second, third, ... set of click listeners on top of the
+// still-live first set — most visibly on the color-swatch triggers, where an
+// even total flips open+close calls into a net no-op, making the popover's
+// own close button/outside-click seem to stop working after enough edits to
+// this file accumulate in one dev session. A real page load (or production
+// build, which never Fast-Refreshes) only ever calls this once anyway, so
+// the guard is a no-op there.
+let initialized = false;
+
 export function initSidebarInspector() {
+  if (initialized) return;
+  initialized = true;
+
   // 1. Accordion Header Toggle Binding
   const accordionHeaders = document.querySelectorAll('.accordion-header');
   accordionHeaders.forEach(header => {

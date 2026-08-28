@@ -172,7 +172,21 @@ function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, cssConfig, pa
   return measureRollingStackFrame(prepped.ctx, drawOpts);
 }
 
+// Guards against double-initialization — same reasoning as
+// sidebarInspector.js's own `initialized` guard: this is meant to run once
+// per page lifetime, called from PreviewStage.jsx's
+// `useEffect(() => { initPreviewWorkspace(); }, [])`, but React/Vite Fast
+// Refresh can remount PreviewStage.jsx (re-running that effect with no
+// cleanup) whenever this file's own source changes during a dev session,
+// silently attaching duplicate listeners (video timeupdate, play/pause,
+// seek bar, and — via initCanvasTransform() — the on-canvas transform
+// overlay's pointer handlers) on top of the still-live originals.
+let initialized = false;
+
 export function initPreviewWorkspace() {
+  if (initialized) return;
+  initialized = true;
+
   const previewVideo = document.getElementById('preview-video');
   const subtitlesOverlay = document.getElementById('subtitles-overlay');
   const captionsText = document.getElementById('captions-text');
