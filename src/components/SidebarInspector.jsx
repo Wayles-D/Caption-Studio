@@ -4,20 +4,18 @@
  *
  * React port of the vanilla src/js/components/sidebarInspector.js (see the
  * migration plan's Stage 2) — but unlike Toolbar.jsx/RightInspector.jsx,
- * this component does NOT reimplement the wiring logic in React. The
- * underlying controls (~30 sliders/radios/selects/toggles/color pickers)
- * are individually wired by initSidebarInspector() via plain
- * document.getElementById() lookups and a single subscribe('*', ...)
- * resync — logic that's already independent of how the DOM nodes got
- * there. Reimplementing all of it as controlled React state would be a
- * large rewrite of delicate, already-correct code for zero behavioral
- * benefit, and risks exactly the kind of subtle regression the migration
- * plan says to avoid. Instead, this component renders the exact same
- * markup (converted 1:1 to JSX — same ids, structure) that used to live
- * directly in index.html, then calls the existing initSidebarInspector()
- * once after mount so it finds the same DOM nodes at the same ids it
- * always has. numericControl.js and colorPicker.js (its two dependencies)
- * are untouched apart from their own Tailwind class-string updates (Stage 5).
+ * this component does NOT reimplement the slider/radio/select wiring logic
+ * in React. Those controls are individually wired by initSidebarInspector()
+ * via plain document.getElementById() lookups and a single
+ * subscribe('*', ...) resync — logic that's already independent of how the
+ * DOM nodes got there. Reimplementing all of it as controlled React state
+ * would be a large rewrite of delicate, already-correct code for zero
+ * behavioral benefit. Instead, this component renders the exact same markup
+ * (converted 1:1 to JSX — same ids, structure) that used to live directly in
+ * index.html, then calls the existing initSidebarInspector() once after
+ * mount so it finds the same DOM nodes at the same ids it always has.
+ * numericControl.js is untouched apart from its own Tailwind class-string
+ * updates (Stage 5).
  *
  * Radios/checkboxes/selects here are intentionally uncontrolled
  * (defaultChecked/defaultValue) — initSidebarInspector()'s own
@@ -29,13 +27,78 @@
  * the `.accordion-item` (now also carrying Tailwind's `group` marker) —
  * `group-[.collapsed]:` variants on the chevron/body react to that same
  * class instead of a hand-written `.accordion-item.collapsed .foo` rule.
- * Preset buttons and color swatches follow the same pattern via
- * `[&.active]:` for their JS-toggled `active` class.
+ * Preset buttons follow the same pattern via `[&.active]:` for their
+ * JS-toggled `active` class.
+ *
+ * COLOR CONTROLS are the one exception to "don't reimplement in React":
+ * the previous hand-rolled vanilla color-picker popover (src/js/components/
+ * colorPicker.js + src/js/utils/clickOutside.js, now deleted) had a
+ * persistent history of outside-click/Cancel reliability bugs rooted in its
+ * own hand-written document-listener dismissal logic and its lack of any
+ * temporary-vs-committed value distinction. It's been replaced with
+ * <ColorPickerField> — a real React component built on @radix-ui/react-popover
+ * (the same battle-tested primitive shadcn/ui's own Popover wraps) and
+ * react-colorful (the engine behind the actual shadcn-registry color-picker
+ * components, e.g. Kibo UI's) for real HEX/RGB/HSL/alpha editing. Each
+ * instance reads its committed value directly from useEditorStore and writes
+ * back through the same updateState() this file's other controls already
+ * use — no second color-state system.
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { initSidebarInspector } from '../js/components/sidebarInspector.js';
 import { BADGE_BASE_CLASSES } from '../js/components/numericControl.js';
+import { getFallbackColorFor } from '../js/utils/colorFallbacks.js';
+import { useEditorStore } from '../store/editorStore.js';
+import { updateState } from '../js/state.js';
 import { ToggleSwitch } from './ToggleSwitch.jsx';
+import { ColorPickerField } from './ColorPickerField.jsx';
+
+// Which color fields have a genuine, pre-existing global opacity concept to
+// bridge the picker's alpha slider to (see ColorPickerField.jsx's own doc
+// comment) — activeWordColor/inactiveWordColor deliberately share the SAME
+// textOpacity field, exactly like the sidebar's own "Text Opacity" slider
+// already applies to both; outlineColor and (individual-mode) shadowColor
+// have no opacity field in the existing architecture at all, so they're
+// simply absent from this map rather than inventing one.
+const FIELD_OPACITY_MAP = {
+  activeWordColor: { field: 'textOpacity', label: 'Text Opacity (shared)' },
+  inactiveWordColor: { field: 'textOpacity', label: 'Text Opacity (shared)' },
+  backgroundColor: { field: 'backgroundOpacity', label: 'Background Opacity' },
+  unifiedShadowColor: { field: 'unifiedShadowOpacity', label: 'Shadow Opacity' },
+  keywordColor: { field: 'keywordOpacity', label: 'Keyword Opacity' }
+};
+
+/**
+ * One <ColorPickerField> wired to a specific appState color field —
+ * resolves its committed value (with preset fallback), its matching opacity
+ * field (if any per FIELD_OPACITY_MAP), single-open-at-a-time coordination,
+ * and writes live changes back through updateState exactly like every other
+ * control in this sidebar.
+ */
+function SidebarColorField({ fieldKey, label, openField, setOpenField }) {
+  const committed = useEditorStore((s) => s[fieldKey]);
+  const opacityMapping = FIELD_OPACITY_MAP[fieldKey];
+  const opacityValue = useEditorStore((s) => (opacityMapping ? s[opacityMapping.field] : null));
+
+  const resolvedHex = committed || getFallbackColorFor(fieldKey);
+
+  return (
+    <ColorPickerField
+      triggerId={`color-${fieldKey}`}
+      label={label}
+      value={resolvedHex}
+      opacity={opacityMapping ? (opacityValue ?? 100) : null}
+      opacityLabel={opacityMapping?.label}
+      open={openField === fieldKey}
+      onOpenChange={(isOpen) => setOpenField(isOpen ? fieldKey : null)}
+      onChange={(hex6, opacity) => {
+        const updates = { [fieldKey]: hex6 };
+        if (opacityMapping && opacity !== null) updates[opacityMapping.field] = opacity;
+        updateState(updates, { recordHistory: false });
+      }}
+    />
+  );
+}
 
 const SETTINGS_GROUP = 'flex flex-col gap-1.5';
 const GROUP_LABEL = 'text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]';
@@ -56,12 +119,10 @@ const RADIO_TAB_SPAN = `block px-2.5 py-1.5 text-[11px] font-bold text-[var(--te
 const COLOR_PICKER_GRID = 'grid grid-cols-4 gap-2.5';
 const COLOR_PICKER_ITEM = 'flex flex-col items-center gap-1.5';
 const COLOR_PICKER_ITEM_LABEL = 'text-[10px] font-semibold text-[var(--text-secondary)] text-center';
-const COLOR_SWATCH_TRIGGER = `color-swatch-trigger w-8 h-8 rounded-full border-2 border-[var(--border-color)] cursor-pointer p-0
-  transition-[transform,border-color] duration-150 hover:scale-[1.08] hover:border-[var(--border-color-hover)]`;
 // 'accordion-item'/'accordion-header' carry no styling of their own — kept
 // as stable selector hooks for sidebarInspector.js's querySelectorAll('.accordion-header')
 // + closest('.accordion-item') collapse-toggle wiring, exactly like
-// 'color-swatch-trigger' and 'word-chip' elsewhere in this migration.
+// 'word-chip' elsewhere in this migration.
 const ACCORDION_ITEM = `accordion-item group bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] overflow-hidden
   transition-colors duration-200 hover:border-[var(--border-color-hover)]`;
 const ACCORDION_HEADER = `accordion-header w-full py-3.5 px-4 bg-transparent border-0 flex items-center justify-between text-[var(--text-primary)]
@@ -100,6 +161,12 @@ export function SidebarInspector() {
   useEffect(() => {
     initSidebarInspector();
   }, []);
+
+  // Which color field's picker is open, if any — coordinated here (rather
+  // than each ColorPickerField owning independent open state) so opening one
+  // swatch's picker always discards/closes any other that was still open,
+  // exactly like the old vanilla picker's single-popover-at-a-time behavior.
+  const [openColorField, setOpenColorField] = useState(null);
 
   return (
     <div>
@@ -270,24 +337,24 @@ export function SidebarInspector() {
             <label className={GROUP_LABEL}>Custom Palette</label>
             <div className={COLOR_PICKER_GRID}>
               <div className={COLOR_PICKER_ITEM}>
-                <label id="label-color-active-word" className={COLOR_PICKER_ITEM_LABEL}>Active</label>
-                <button type="button" className={COLOR_SWATCH_TRIGGER} id="color-active-word" data-color-key="activeWordColor" aria-haspopup="true" aria-labelledby="label-color-active-word" />
+                <label className={COLOR_PICKER_ITEM_LABEL}>Active</label>
+                <SidebarColorField fieldKey="activeWordColor" label="Active Word Color" openField={openColorField} setOpenField={setOpenColorField} />
               </div>
               <div className={COLOR_PICKER_ITEM}>
-                <label id="label-color-inactive-word" className={COLOR_PICKER_ITEM_LABEL}>Text</label>
-                <button type="button" className={COLOR_SWATCH_TRIGGER} id="color-inactive-word" data-color-key="inactiveWordColor" aria-haspopup="true" aria-labelledby="label-color-inactive-word" />
+                <label className={COLOR_PICKER_ITEM_LABEL}>Text</label>
+                <SidebarColorField fieldKey="inactiveWordColor" label="Inactive Word Color" openField={openColorField} setOpenField={setOpenColorField} />
               </div>
               <div className={COLOR_PICKER_ITEM}>
-                <label id="label-color-outline" className={COLOR_PICKER_ITEM_LABEL}>Outline</label>
-                <button type="button" className={COLOR_SWATCH_TRIGGER} id="color-outline" data-color-key="outlineColor" aria-haspopup="true" aria-labelledby="label-color-outline" />
+                <label className={COLOR_PICKER_ITEM_LABEL}>Outline</label>
+                <SidebarColorField fieldKey="outlineColor" label="Outline Color" openField={openColorField} setOpenField={setOpenColorField} />
               </div>
               <div className={COLOR_PICKER_ITEM}>
-                <label id="label-color-background" className={COLOR_PICKER_ITEM_LABEL}>Box</label>
-                <button type="button" className={COLOR_SWATCH_TRIGGER} id="color-background" data-color-key="backgroundColor" aria-haspopup="true" aria-labelledby="label-color-background" />
+                <label className={COLOR_PICKER_ITEM_LABEL}>Box</label>
+                <SidebarColorField fieldKey="backgroundColor" label="Background Color" openField={openColorField} setOpenField={setOpenColorField} />
               </div>
               <div className={COLOR_PICKER_ITEM} id="shadow-color-item">
-                <label id="label-color-shadow" className={COLOR_PICKER_ITEM_LABEL}>Shadow</label>
-                <button type="button" className={COLOR_SWATCH_TRIGGER} id="color-shadow" data-color-key="shadowColor" aria-haspopup="true" aria-labelledby="label-color-shadow" />
+                <label className={COLOR_PICKER_ITEM_LABEL}>Shadow</label>
+                <SidebarColorField fieldKey="shadowColor" label="Shadow Color" openField={openColorField} setOpenField={setOpenColorField} />
               </div>
             </div>
           </div>
@@ -351,8 +418,8 @@ export function SidebarInspector() {
               <label className={GROUP_LABEL}>Unified Shadow Color</label>
               <div className={COLOR_PICKER_GRID}>
                 <div className={COLOR_PICKER_ITEM}>
-                  <label id="label-color-unified-shadow" className={COLOR_PICKER_ITEM_LABEL}>Shadow</label>
-                  <button type="button" className={COLOR_SWATCH_TRIGGER} id="color-unified-shadow" data-color-key="unifiedShadowColor" aria-haspopup="true" aria-labelledby="label-color-unified-shadow" />
+                  <label className={COLOR_PICKER_ITEM_LABEL}>Shadow</label>
+                  <SidebarColorField fieldKey="unifiedShadowColor" label="Unified Shadow Color" openField={openColorField} setOpenField={setOpenColorField} />
                 </div>
               </div>
             </div>
@@ -496,8 +563,8 @@ export function SidebarInspector() {
             <label className={GROUP_LABEL}>Keyword Color</label>
             <div className={COLOR_PICKER_GRID}>
               <div className={COLOR_PICKER_ITEM}>
-                <label id="label-color-keyword" className={COLOR_PICKER_ITEM_LABEL}>Color</label>
-                <button type="button" className={COLOR_SWATCH_TRIGGER} id="color-keyword" data-color-key="keywordColor" aria-haspopup="true" aria-labelledby="label-color-keyword" />
+                <label className={COLOR_PICKER_ITEM_LABEL}>Color</label>
+                <SidebarColorField fieldKey="keywordColor" label="Keyword Color" openField={openColorField} setOpenField={setOpenColorField} />
               </div>
             </div>
           </div>

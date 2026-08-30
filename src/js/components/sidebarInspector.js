@@ -2,29 +2,9 @@
  * Left Sidebar Inspector UI Component for Caption Studio
  */
 import { appState, updateState, subscribe, getStyleParams } from '../state.js';
-import { getCSSPreviewFromConfig, CREATOR_PROFILES, resolveUnifiedShadowParams } from '../../../shared/captionConfig.js';
-import { initColorPicker, syncColorSwatches } from './colorPicker.js';
+import { getCSSPreviewFromConfig, resolveUnifiedShadowParams, CREATOR_PROFILES } from '../../../shared/captionConfig.js';
 import { initNumericControl } from './numericControl.js';
-
-const COLOR_FALLBACK_MAP = {
-  activeWordColor: (cssConfig) => cssConfig.highlightColor || '#FEF08A',
-  inactiveWordColor: (cssConfig) => cssConfig.inactiveColor || '#FFFFFF',
-  outlineColor: (cssConfig) => cssConfig.outlineColor || '#000000',
-  backgroundColor: (cssConfig) => (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') ? cssConfig.backgroundColor : '#000000',
-  shadowColor: () => getCurrentProfile().colors.shadowHex || '#000000',
-  unifiedShadowColor: () => resolveUnifiedShadowParams({}).colorHex,
-  keywordColor: (cssConfig) => cssConfig.keywordColor || '#EF4444'
-};
-
-function getFallbackColorFor(fieldKey) {
-  const cssConfig = getCSSPreviewFromConfig(getStyleParams());
-  const resolver = COLOR_FALLBACK_MAP[fieldKey];
-  return resolver ? resolver(cssConfig) : '#000000';
-}
-
-function getCurrentProfile() {
-  return CREATOR_PROFILES[appState.currentPreset] || CREATOR_PROFILES['bold-yellow'];
-}
+import { getCurrentProfile } from '../utils/colorFallbacks.js';
 
 /**
  * Outline/shadow size sliders are null by default (meaning "use the active
@@ -81,14 +61,10 @@ const numeric = {};
 // SidebarInspector.jsx's `useEffect(() => { initSidebarInspector(); }, [])`.
 // A plain effect like that normally only runs once — but Vite/React Fast
 // Refresh can remount a component (re-running its effects, with no cleanup
-// to undo the first run) when its OWN source file changes, while colorPicker.js's
-// module-level state (popoverEl, activeFieldKey, etc.) persists unchanged
-// across that remount. Without this guard, each such remount during a dev
-// session attaches a second, third, ... set of click listeners on top of the
-// still-live first set — most visibly on the color-swatch triggers, where an
-// even total flips open+close calls into a net no-op, making the popover's
-// own close button/outside-click seem to stop working after enough edits to
-// this file accumulate in one dev session. A real page load (or production
+// to undo the first run) whenever this file's own source changes. Without
+// this guard, each such remount during a dev session attaches a second,
+// third, ... set of listeners on top of the still-live first set (most
+// visibly on numericControl.js's sliders). A real page load (or production
 // build, which never Fast-Refreshes) only ever calls this once anyway, so
 // the guard is a no-op there.
 let initialized = false;
@@ -197,8 +173,10 @@ export function initSidebarInspector() {
     });
   });
 
-  // 4. Custom Color Picker Popovers (preset palette + visual picker + hex + recently used)
-  initColorPicker({ getFallbackColor: getFallbackColorFor });
+  // 4. Custom Color Picker Popovers — now real React <ColorPickerField>
+  // components rendered directly in SidebarInspector.jsx's JSX (see the
+  // shadcn/ui + react-colorful replacement), reading/writing useEditorStore
+  // directly instead of being wired up here via getElementById.
 
   // 4b. Outline, Shadow & Opacity Controls
   numeric.outlineSize = initNumericControl({
@@ -433,8 +411,9 @@ function syncSidebarUI() {
   numeric.fontSize?.sync(appState.fontSize);
   numeric.wordSpacing?.sync(appState.wordSpacing);
 
-  // Colors
-  syncColorSwatches(getFallbackColorFor);
+  // Colors: each <ColorPickerField> now reads directly from useEditorStore
+  // via SidebarInspector.jsx's own subscription, so there's nothing to sync
+  // here anymore.
 
   // Outline, Shadow & Opacity
   numeric.outlineSize?.sync(appState.outlineSize ?? getFallbackOutlineSize());
