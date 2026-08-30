@@ -9,10 +9,22 @@
  * reading current chip text at submit time) is identical either way.
  */
 
+import { appState, updateState } from '../state.js';
+
 /**
  * Builds one contentEditable word chip, wired exactly as before: marks
  * itself `.edited` when its text diverges from the original word, and
  * treats Enter as "done editing" (blur) rather than inserting a newline.
+ *
+ * On every keystroke it also pushes the live text into the matching word
+ * inside appState.phrases (see applyLiveWordEdit below) so the graphics
+ * preview — which renders from appState.phrases, not from this chip DOM —
+ * reflects the edit immediately. It deliberately does NOT touch
+ * appState.words: RightInspector's chip-rebuild effect depends on `words`,
+ * and replacing that array on every keystroke would tear down and rebuild
+ * every chip, clobbering the contentEditable caret mid-type. appState.words
+ * stays the committed source read by collectEditedWords at regenerate time,
+ * unchanged from its prior behavior.
  */
 // 'word-chip' itself carries no styling (kept only as a stable selector hook
 // for collectEditedWords below); all visual styling comes from the Tailwind
@@ -36,6 +48,7 @@ export function buildWordChip(wordObj, idx) {
     } else {
       chip.classList.remove(...WORD_CHIP_EDITED_CLASSES);
     }
+    applyLiveWordEdit(idx, currentText);
   });
 
   chip.addEventListener('keydown', (e) => {
@@ -45,7 +58,66 @@ export function buildWordChip(wordObj, idx) {
     }
   });
 
+  // Selecting a chip is this word's "edit target": scrub the preview to its
+  // own timestamp (when it isn't already the one on screen) so the canvas is
+  // already showing this word, and any edit typed next is visible without
+  // the user having to separately hunt for the right point in the video.
+  chip.addEventListener('focus', () => {
+    const previewVideo = document.getElementById('preview-video');
+    if (!previewVideo || typeof wordObj.start !== 'number') return;
+    const end = typeof wordObj.end === 'number' ? wordObj.end : wordObj.start;
+    if (previewVideo.currentTime < wordObj.start || previewVideo.currentTime > end) {
+      previewVideo.currentTime = wordObj.start;
+    }
+  });
+
   return chip;
+}
+
+/**
+ * Live-preview sync: finds the word inside appState.phrases whose
+ * `wordIndex` matches this chip's position in the original flat transcript
+ * (phraseGrouper.js stamps every phrase-embedded word with the index it had
+ * in the flat word list it was grouped from — that index is already a
+ * stable identity, unaffected by later text edits, so no new ID field is
+ * needed), replaces just that word's text, and pushes the result through
+ * updateState so the graphics preview's existing subscribe('*', ...)
+ * re-render (see preview.js's initPreviewWorkspace) picks it up immediately.
+ *
+ * Rolling Stack keeps each word as its own object inside a chunk's `words`
+ * array even when multiple words render adjacently as one visual stack line
+ * (see shared/rollingStack.js) — replacing only the matched word object here
+ * means sibling words in the same chunk/phrase are left untouched.
+ *
+ * recordHistory is off: phrase text isn't part of the undo-tracked style
+ * slice, and pushing a snapshot on every keystroke would flood the
+ * style-undo stack and clear its redo history while the user is typing.
+ */
+function applyLiveWordEdit(flatWordIndex, newText) {
+  const phrases = appState.phrases;
+  if (!Array.isArray(phrases) || !phrases.length) return;
+
+  const idx = Number(flatWordIndex);
+  let phraseIdx = -1;
+  let wordIdx = -1;
+  for (let p = 0; p < phrases.length; p++) {
+    const w = (phrases[p].words || []).findIndex((word) => word.wordIndex === idx);
+    if (w !== -1) {
+      phraseIdx = p;
+      wordIdx = w;
+      break;
+    }
+  }
+  if (phraseIdx === -1) return;
+
+  const targetPhrase = phrases[phraseIdx];
+  const nextWords = targetPhrase.words.slice();
+  nextWords[wordIdx] = { ...nextWords[wordIdx], text: newText };
+
+  const nextPhrases = phrases.slice();
+  nextPhrases[phraseIdx] = { ...targetPhrase, words: nextWords };
+
+  updateState({ phrases: nextPhrases }, { recordHistory: false });
 }
 
 /**
