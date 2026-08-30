@@ -110,10 +110,33 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     if (!ffmpegPath) return reject(new Error('FFmpeg static binary path could not be resolved.'));
     if (!segments.length) return reject(new Error('compositeGraphicsCaptionTrack: no segments to composite.'));
 
+    // Each `-loop 1` still-image input generates frames at its OWN default
+    // rate (independent of the source video's), and `-t <duration>` then
+    // truncates that stream to the nearest frame boundary AT THAT RATE. For
+    // an ordinary word-boundary-scale segment (hundreds of ms or more) the
+    // resulting sub-frame rounding error is a single-digit-ms rounding error,
+    // invisible against the segment's own length. But the short segments an
+    // entrance animation introduces (see graphicsFrameGenerator.js's
+    // ANIMATION_SAMPLE_STEP_SECONDS) are only tens of ms long, so that same
+    // per-segment rounding error is a much larger fraction of the segment —
+    // and concat sums segment durations one after another, so those errors
+    // ACCUMULATE across a whole animation window's worth of short segments,
+    // visibly shifting the whole caption track out of sync with the source
+    // video by the time the window ends (confirmed by direct pixel
+    // comparison during this feature's own verification). Forcing every
+    // image input to the SAME explicit, fixed frame rate and rounding every
+    // declared duration to an exact multiple of that rate's frame period
+    // eliminates the rounding step entirely — durations sum to exact frame
+    // counts, so no drift can ever accumulate, regardless of how many
+    // segments a video has.
+    const COMPOSITOR_FPS = 50;
+    const FRAME_QUANTUM = 1 / COMPOSITOR_FPS;
+    const quantizeDuration = (raw) => Math.max(FRAME_QUANTUM, Math.round(raw / FRAME_QUANTUM) * FRAME_QUANTUM);
+
     const inputArgs = ['-y', '-i', inputVideoPath];
     segments.forEach((segment) => {
-      const duration = Math.max(0.001, segment.end - segment.start);
-      inputArgs.push('-loop', '1', '-t', duration.toFixed(3), '-i', segment.file);
+      const duration = quantizeDuration(Math.max(0.001, segment.end - segment.start));
+      inputArgs.push('-loop', '1', '-r', String(COMPOSITOR_FPS), '-t', duration.toFixed(3), '-i', segment.file);
     });
 
     // Normalize every segment input to the same pixel format before concat

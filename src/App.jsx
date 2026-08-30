@@ -16,7 +16,7 @@
  * is still the untouched appState + preview.js/canvasTransform.js pipeline
  * this state simply gates visibility for.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { appState, updateState, DEFAULT_DEMO_VIDEO_URL, getStyleParams } from './js/state.js';
 import { fetchJson, describeFetchError } from './js/utils/apiRequest.js';
 import { collectEditedWords } from './js/components/transcriptEditorState.js';
@@ -29,6 +29,18 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 export function App() {
   const videoFileInputRef = useRef(null);
+
+  // Dev-only test hook: lets automated (Playwright) tests inject deterministic
+  // phrases/words without depending on the real Whisper transcription result
+  // or an externally-hosted demo video — never included in a production build
+  // (import.meta.env.DEV is statically false there, so bundlers dead-code-
+  // eliminate this whole block).
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      window.__appState = appState;
+      window.__updateState = updateState;
+    }
+  }, []);
 
   const [viewState, setViewState] = useState('upload'); // 'upload' | 'processing' | 'video'
   const [processingTitle, setProcessingTitle] = useState('Transcribing Audio...');

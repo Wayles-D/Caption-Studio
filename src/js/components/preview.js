@@ -143,7 +143,7 @@ function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, p
  * canvas, makes sure the base font is loading, and hands off to the shared
  * graphics renderer's drawRollingStackFrame.
  */
-function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, cssConfig, params) {
+function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, currentTime, cssConfig, params) {
   const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
   const prepped = prepareGraphicsCanvas(canvas, fontFamily, cssConfig.profile.fontWeight, fontSizePx);
@@ -154,6 +154,7 @@ function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, cssConfig, pa
     canvasHeight: prepped.targetH,
     cssPixelWidth: prepped.cssPixelWidth,
     windowChunks,
+    currentTime,
     cssConfig,
     params,
     alignment: params.rollingStackAlignment,
@@ -434,7 +435,7 @@ export function syncVideoSubtitles() {
       const chunks = buildRollingStackChunks(activePhrase.words);
       const windowChunks = resolveRollingStackWindow(chunks, currentTime, appState.rollingStackLayerCount);
       if (windowChunks.length) {
-        const box = drawGraphicsRollingStackCanvasFrame(captionsCanvas, windowChunks, cssConfig, params);
+        const box = drawGraphicsRollingStackCanvasFrame(captionsCanvas, windowChunks, currentTime, cssConfig, params);
         captionsCanvas.classList.add('active');
         updateCanvasTransformOverlay(box, activePhrase, 'rolling-stack');
       }

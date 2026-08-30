@@ -56,6 +56,13 @@ export const STYLE_DEFAULTS = {
   rollingStackLayerCount: 2,
   rollingStackAlignment: "center",
   animationMode: "karaoke",
+  // Entrance animation for the caption BLOCK as a whole — a separate concept
+  // from animationMode above (which only governs per-word highlight timing,
+  // e.g. karaoke/pop/instant/typewriter). See shared/captionAnimation.js.
+  captionAnimationType: "none",
+  captionAnimationDuration: 0.25,
+  captionAnimationEasing: "ease-out",
+  captionAnimationIntensity: 1,
   textCase: "uppercase",
   position: "bottom",
   marginV: 300,

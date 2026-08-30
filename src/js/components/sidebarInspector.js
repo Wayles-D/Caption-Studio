@@ -268,6 +268,32 @@ export function initSidebarInspector() {
     onChange: (v) => updateState({ popScale: v })
   });
 
+  // 5b. Caption Entrance Animation (shared/captionAnimation.js) — a separate
+  // concept from Animation Mode/popScale above (per-word highlight timing);
+  // this controls how the whole caption block enters.
+  const captionAnimationTypeSelect = document.getElementById('caption-animation-type-select');
+  if (captionAnimationTypeSelect) {
+    captionAnimationTypeSelect.addEventListener('change', (e) => {
+      updateState({ captionAnimationType: e.target.value });
+    });
+  }
+
+  // Duration is authored in whole milliseconds in the UI (matches every
+  // other ms-domain slider in this file) but stored/consumed in seconds
+  // (matches word.start/end's own unit) — converted at this one boundary.
+  numeric.captionAnimationDuration = initNumericControl({
+    sliderId: 'input-caption-animation-duration', badgeId: 'val-caption-animation-duration',
+    min: 50, max: 1000, step: 10, unit: 'ms',
+    onChange: (v) => updateState({ captionAnimationDuration: v / 1000 })
+  });
+
+  const captionAnimationEasingSelect = document.getElementById('caption-animation-easing-select');
+  if (captionAnimationEasingSelect) {
+    captionAnimationEasingSelect.addEventListener('change', (e) => {
+      updateState({ captionAnimationEasing: e.target.value });
+    });
+  }
+
   // 6. Subtitle Position & Spacing Inputs
   const positionRadios = document.getElementsByName('sub-pos');
 
@@ -451,6 +477,17 @@ function syncSidebarUI() {
   });
 
   numeric.popScale?.sync(appState.popScale);
+
+  // Caption Entrance Animation
+  const captionAnimationTypeSelect = document.getElementById('caption-animation-type-select');
+  if (captionAnimationTypeSelect && captionAnimationTypeSelect.value !== appState.captionAnimationType) {
+    captionAnimationTypeSelect.value = appState.captionAnimationType || 'none';
+  }
+  numeric.captionAnimationDuration?.sync(Math.round((appState.captionAnimationDuration ?? 0.25) * 1000));
+  const captionAnimationEasingSelect = document.getElementById('caption-animation-easing-select');
+  if (captionAnimationEasingSelect && captionAnimationEasingSelect.value !== appState.captionAnimationEasing) {
+    captionAnimationEasingSelect.value = appState.captionAnimationEasing || 'ease-out';
+  }
 
   // Position & Margin
   const positionRadios = document.getElementsByName('sub-pos');

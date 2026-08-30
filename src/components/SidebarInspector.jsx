@@ -510,6 +510,49 @@ export function SidebarInspector() {
           </div>
         </AccordionSection>
 
+        {/* 3b. Caption Entrance Animation Section — deliberately separate from
+            "Animation Mode" above: that section controls per-word highlight
+            TIMING (karaoke/pop/instant/typewriter); this controls how the
+            caption BLOCK as a whole enters (see shared/captionAnimation.js). */}
+        <AccordionSection
+          title="Caption Animation"
+          icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>}
+        >
+          <div className={SETTINGS_GROUP}>
+            <label htmlFor="caption-animation-type-select" className={GROUP_LABEL}>Entrance Animation</label>
+            <select id="caption-animation-type-select" className={SELECT} defaultValue="none">
+              <option value="none">None</option>
+              <option value="fade">Fade</option>
+              <option value="pop">Pop</option>
+              <option value="scale">Scale</option>
+              <option value="slide-up">Slide Up</option>
+              <option value="slide-down">Slide Down</option>
+              <option value="slide-left">Slide Left</option>
+              <option value="slide-right">Slide Right</option>
+            </select>
+            <p className={FIELD_HINT}>How each caption enters the frame. Applies to the whole caption block (text, keyword styling, shadow, outline together) — not an individual word.</p>
+          </div>
+
+          <div className={SETTINGS_GROUP} id="caption-animation-duration-group">
+            <div className={LABEL_JUSTIFY}>
+              <span className={GROUP_LABEL}>Duration</span>
+              <span className={BADGE_BASE_CLASSES} id="val-caption-animation-duration">250ms</span>
+            </div>
+            <input type="range" id="input-caption-animation-duration" min="50" max="1000" step="10" defaultValue="250" className={SLIDER} />
+            <p className={FIELD_HINT}>Automatically clamped to a caption's own on-screen duration, so a short caption never keeps animating past its own end.</p>
+          </div>
+
+          <div className={SETTINGS_GROUP} id="caption-animation-easing-group">
+            <label htmlFor="caption-animation-easing-select" className={GROUP_LABEL}>Easing</label>
+            <select id="caption-animation-easing-select" className={SELECT} defaultValue="ease-out">
+              <option value="linear">Linear</option>
+              <option value="ease-in">Ease In</option>
+              <option value="ease-out">Ease Out</option>
+              <option value="ease-in-out">Ease In Out</option>
+            </select>
+          </div>
+        </AccordionSection>
+
         {/* 4. Position & Offset Section */}
         <AccordionSection
           title="Position & Spacing"

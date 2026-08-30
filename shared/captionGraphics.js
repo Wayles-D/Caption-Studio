@@ -53,6 +53,7 @@ import {
 } from './captionConfig.js';
 import { resolveFontFace } from './fontRegistry.js';
 import { chunkRawText } from './rollingStack.js';
+import { getAnimationTransform } from './captionAnimation.js';
 
 /**
  * Whether the graphics engine currently knows how to render this resolved
@@ -376,12 +377,28 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   if (!computed) return;
   const { lines, lineHeightPx, blockTop, centerX, centerY } = computed;
 
+  // Entrance animation (shared/captionAnimation.js) — anchored to the whole
+  // PHRASE's own [start,end), not any individual word's, so it fires once
+  // when the caption block first appears, independent of animationMode's
+  // per-word highlight timing. Resolves to the identity transform (no-op)
+  // whenever captionAnimationType is 'none', reproducing prior output exactly.
+  const anim = getAnimationTransform(params, currentTime, activePhrase.start, activePhrase.end);
+
   ctx.save();
-  if (rotationDeg) {
+  // Slide offset is applied in plain screen space, BEFORE rotation, so a
+  // manually-rotated caption still slides in along a straight screen-space
+  // line rather than along its own tilted axis (see this module's animation
+  // integration notes).
+  if (anim.offsetXRatio || anim.offsetYRatio) {
+    ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+  }
+  if (rotationDeg || anim.scale !== 1) {
     ctx.translate(centerX, centerY);
-    ctx.rotate((rotationDeg * Math.PI) / 180);
+    if (rotationDeg) ctx.rotate((rotationDeg * Math.PI) / 180);
+    if (anim.scale !== 1) ctx.scale(anim.scale, anim.scale);
     ctx.translate(-centerX, -centerY);
   }
+  ctx.globalAlpha = anim.alpha;
 
   lines.forEach((line, lineIdx) => {
     const lineY = blockTop + lineIdx * lineHeightPx + lineHeightPx * 0.8; // ~baseline within the line box
@@ -762,7 +779,7 @@ function paintRollingStackLines(ctx, positionedLines) {
  * own (see this file's module doc). Falls back to drawing without a shadow
  * if it isn't provided, rather than silently guessing at one.
  */
-function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, cssConfig, params, geometry, alignment, createOffscreenCanvas }) {
+function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, currentTime, cssConfig, params, geometry, alignment, createOffscreenCanvas }) {
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   if (!windowChunks || !windowChunks.length) return;
 
@@ -776,21 +793,47 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     targetCtx.translate(-centerX, -centerY);
   };
 
+  // Entrance animation (shared/captionAnimation.js), anchored to the CURRENT
+  // (last/active) chunk's own [start,end) — Rolling Stack's window changes
+  // exactly when the active chunk changes (see shared/rollingStack.js), so
+  // "this chunk's start" is the moment the composition now on screen first
+  // appeared. Per this feature's spec, animation treats the whole composited
+  // stack as ONE visual unit (Rolling Stack's own layout is never touched by
+  // it) — it fires once per window change, not once per word/line.
+  const activeChunk = windowChunks[windowChunks.length - 1];
+  const anim = getAnimationTransform(params, currentTime, activeChunk.start, activeChunk.end);
+  const animating = anim.alpha !== 1 || anim.scale !== 1 || anim.offsetXRatio !== 0 || anim.offsetYRatio !== 0;
+
+  const paintComposite = (targetCtx, drawIntoCtx) => {
+    const layout = layoutRollingStackLines(targetCtx, windowChunks, cssConfig, params, geometry, alignment);
+    targetCtx.save();
+    applyRotation(targetCtx, layout.centerX, layout.centerY);
+    drawIntoCtx(targetCtx, layout);
+    targetCtx.restore();
+    return layout;
+  };
+
   if (shadowMode === 'unified' && createOffscreenCanvas) {
     const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
     const offCtx = offscreen.getContext('2d');
-    const layout = layoutRollingStackLines(offCtx, windowChunks, cssConfig, params, geometry, alignment);
-    offCtx.save();
-    applyRotation(offCtx, layout.centerX, layout.centerY);
-    paintRollingStackLines(offCtx, layout.lines);
-    offCtx.restore();
+    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines));
 
     // The offscreen canvas already contains the rotated composition (rotated
     // while painting, above) — drawImage below is a plain, unrotated pixel
-    // copy, so the shadow it casts is the correctly-rotated silhouette too.
+    // copy, so the shadow/animation transform it casts/applies is the
+    // correctly-rotated silhouette too.
     const uni = resolveUnifiedShadowParams(params);
     const textOpacity = params.textOpacity ?? 100;
     ctx.save();
+    if (anim.offsetXRatio || anim.offsetYRatio) {
+      ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+    }
+    if (anim.scale !== 1) {
+      ctx.translate(layout.centerX, layout.centerY);
+      ctx.scale(anim.scale, anim.scale);
+      ctx.translate(-layout.centerX, -layout.centerY);
+    }
+    ctx.globalAlpha = anim.alpha;
     ctx.shadowColor = applyOpacityToColor(uni.colorHex, (uni.opacity * textOpacity) / 100);
     ctx.shadowBlur = (uni.blurAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
     ctx.shadowOffsetX = (uni.offsetXAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
@@ -800,11 +843,34 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     return;
   }
 
-  const layout = layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry, alignment);
-  ctx.save();
-  applyRotation(ctx, layout.centerX, layout.centerY);
-  paintRollingStackLines(ctx, layout.lines);
-  ctx.restore();
+  if (animating && createOffscreenCanvas) {
+    // Individual/None shadow mode: still composite to an offscreen canvas
+    // while animating so the WHOLE stack (already-correct per-chunk
+    // shadows/outlines included) moves/fades/scales as one unit rather than
+    // each line independently — see this function's animation doc comment.
+    // Skipped entirely when not animating (anim === identity), so the
+    // ordinary direct-paint path below stays byte-for-byte the same as
+    // before this feature existed whenever captionAnimationType is 'none'.
+    const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
+    const offCtx = offscreen.getContext('2d');
+    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines));
+
+    ctx.save();
+    if (anim.offsetXRatio || anim.offsetYRatio) {
+      ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+    }
+    if (anim.scale !== 1) {
+      ctx.translate(layout.centerX, layout.centerY);
+      ctx.scale(anim.scale, anim.scale);
+      ctx.translate(-layout.centerX, -layout.centerY);
+    }
+    ctx.globalAlpha = anim.alpha;
+    ctx.drawImage(offscreen, 0, 0);
+    ctx.restore();
+    return;
+  }
+
+  paintComposite(ctx, (c, l) => paintRollingStackLines(c, l.lines));
 }
 
 /**
@@ -839,15 +905,16 @@ export function measureRollingStackFrame(ctx, opts) {
  * @param {number} opts.canvasHeight
  * @param {number} opts.cssPixelWidth
  * @param {Array} opts.windowChunks - Output of resolveRollingStackWindow (shared/rollingStack.js), oldest first, current last.
+ * @param {number} opts.currentTime - Seconds; used to resolve the entrance-animation progress for the active chunk (see shared/captionAnimation.js).
  * @param {object} opts.cssConfig - Result of getCSSPreviewFromConfig(params).
  * @param {object} opts.params
  * @param {'left'|'center'|'right'} [opts.alignment='center']
- * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode; see renderRollingStackResolvedFrame.
+ * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode, and whenever an entrance animation is active; see renderRollingStackResolvedFrame.
  */
 export function drawRollingStackFrame(ctx, opts) {
-  const { canvasWidth, canvasHeight, cssPixelWidth, windowChunks, cssConfig, params, alignment, createOffscreenCanvas } = opts;
+  const { canvasWidth, canvasHeight, cssPixelWidth, windowChunks, currentTime, cssConfig, params, alignment, createOffscreenCanvas } = opts;
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
-  renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, cssConfig, params, geometry, alignment, createOffscreenCanvas });
+  renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, currentTime, cssConfig, params, geometry, alignment, createOffscreenCanvas });
 }
 
 /**
@@ -865,7 +932,7 @@ export function drawRollingStackFrame(ctx, opts) {
  * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode; see renderRollingStackResolvedFrame.
  */
 export function drawRollingStackFrameForExport(ctx, opts) {
-  const { canvasWidth, canvasHeight, windowChunks, cssConfig, params, alignment, createOffscreenCanvas } = opts;
+  const { canvasWidth, canvasHeight, windowChunks, currentTime, cssConfig, params, alignment, createOffscreenCanvas } = opts;
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, PHONE_FRAME_CSS_WIDTH);
-  renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, cssConfig, params, geometry, alignment, createOffscreenCanvas });
+  renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, currentTime, cssConfig, params, geometry, alignment, createOffscreenCanvas });
 }

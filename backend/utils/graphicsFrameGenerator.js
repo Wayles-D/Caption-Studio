@@ -26,6 +26,7 @@ import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams } from '../../shared/captionTransform.js';
+import { resolveAnimationConfig } from '../../shared/captionAnimation.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
 /**
@@ -66,6 +67,58 @@ function computeBoundarySlices(phrase) {
   return slices;
 }
 
+// Fixed sampling rate used ONLY inside an active entrance-animation window —
+// deliberately independent of the source video's own frame rate (an exact
+// per-video-frame match isn't required for a smooth-looking ramp, and tying
+// it to a possibly-high source fps would blow the PNG-count budget this
+// module's boundary-slice design exists to protect — see this file's own
+// header comment). 60ms (~16-17fps) is dense enough that a linear/eased
+// alpha or scale ramp reads as continuous motion, not a slideshow.
+const ANIMATION_SAMPLE_STEP_SECONDS = 0.06;
+
+/**
+ * Subdivides whichever boundary/window slices overlap an entrance
+ * animation's own [animStart, animEnd) window into several fixed-step
+ * sub-slices, leaving every slice OUTSIDE that window untouched. This is
+ * what actually makes a caption's entrance animation visible in the
+ * exported video: computeBoundarySlices/buildRollingStackWindowSlices are
+ * intentionally coarse (one static PNG per word/chunk boundary, per this
+ * module's memory-budget rationale) — animation frames need much finer
+ * granularity, but ONLY for the brief window where the caption is actually
+ * moving/fading, not for its entire (often multi-second) remaining lifetime.
+ *
+ * @param {{start:number,end:number}[]} slices - Time-ordered, non-overlapping, contiguous.
+ * @param {number} animStart
+ * @param {number} animEnd
+ * @returns {{start:number,end:number}[]}
+ */
+function subdivideSlicesForAnimation(slices, animStart, animEnd) {
+  if (!(animEnd > animStart)) return slices;
+
+  const result = [];
+  for (const slice of slices) {
+    const overlapStart = Math.max(slice.start, animStart);
+    const overlapEnd = Math.min(slice.end, animEnd);
+
+    if (!(overlapEnd > overlapStart)) {
+      result.push(slice);
+      continue;
+    }
+
+    if (slice.start < overlapStart) result.push({ start: slice.start, end: overlapStart });
+
+    let t = overlapStart;
+    while (t < overlapEnd) {
+      const next = Math.min(t + ANIMATION_SAMPLE_STEP_SECONDS, overlapEnd);
+      if (next - t >= 0.001) result.push({ start: t, end: next });
+      t = next;
+    }
+
+    if (slice.end > overlapEnd) result.push({ start: overlapEnd, end: slice.end });
+  }
+  return result;
+}
+
 /**
  * Renders one transparent PNG per timing slice of `phrase` and writes them
  * into `outDir`. Each slice's frame is drawn at that slice's start time
@@ -89,7 +142,21 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
 
   fs.mkdirSync(outDir, { recursive: true });
 
-  const slices = computeBoundarySlices(phrase);
+  let slices = computeBoundarySlices(phrase);
+
+  // Entrance animation (shared/captionAnimation.js) needs several sampled
+  // frames across its own short window, not the single static frame each
+  // boundary slice normally gets — see subdivideSlicesForAnimation's doc
+  // comment. The SAME clamp-to-lifetime rule getAnimationProgress applies at
+  // draw time is applied here too, so the number of subdivided slices always
+  // matches how long the animation will actually run.
+  const animation = resolveAnimationConfig(params);
+  if (animation.type !== 'none') {
+    const animStart = phrase.start;
+    const animEnd = animStart + Math.min(animation.duration, phrase.end - phrase.start);
+    slices = subdivideSlicesForAnimation(slices, animStart, animEnd);
+  }
+
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
@@ -142,15 +209,33 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
   fs.mkdirSync(outDir, { recursive: true });
 
   const layerCount = params.rollingStackLayerCount || 2;
-  const slices = buildRollingStackWindowSlices(phrase, layerCount);
+  const windowSlices = buildRollingStackWindowSlices(phrase, layerCount);
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
+
+  const animation = resolveAnimationConfig(params);
+
+  // Each window slice's own active (last) chunk is what entered the frame at
+  // that slice's start — see shared/captionGraphics.js's
+  // renderRollingStackResolvedFrame doc comment. Unlike sentence mode (one
+  // phrase-wide animation window), Rolling Stack re-triggers the entrance
+  // once per window change, so each slice gets its OWN animation window,
+  // subdivided independently, then flattened back into one time-ordered list.
+  const slices = windowSlices.flatMap((slice) => {
+    if (animation.type === 'none') return [slice];
+    const activeChunk = slice.chunks[slice.chunks.length - 1];
+    const animStart = activeChunk.start;
+    const animEnd = animStart + Math.min(animation.duration, activeChunk.end - activeChunk.start);
+    return subdivideSlicesForAnimation([{ start: slice.start, end: slice.end }], animStart, animEnd)
+      .map((sub) => ({ ...sub, chunks: slice.chunks }));
+  });
 
   return slices.map((slice) => {
     drawRollingStackFrameForExport(ctx, {
       canvasWidth,
       canvasHeight,
       windowChunks: slice.chunks,
+      currentTime: slice.start,
       cssConfig,
       params,
       alignment: params.rollingStackAlignment,
