@@ -25,7 +25,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
-import { resolvePhraseParams } from '../../shared/captionTransform.js';
+import { resolvePhraseParams, resolveWordOverride } from '../../shared/captionTransform.js';
 import { resolveAnimationConfig } from '../../shared/captionAnimation.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
@@ -120,6 +120,33 @@ function subdivideSlicesForAnimation(slices, animStart, animEnd) {
 }
 
 /**
+ * Keyword editing scope's per-word animation (see shared/captionTransform.js's
+ * resolveWordOverride and shared/captionGraphics.js's per-word paint blocks)
+ * needs the exact same export-side subdivision treatment as the caption/
+ * Rolling-Stack-window-level animation above — otherwise a word's own
+ * animation would render as a single static frame in the exported video even
+ * though it animates correctly in the live preview (the same bug class
+ * already found and fixed once for caption-level animation). Every word that
+ * carries its own animation override gets its OWN [start, start+duration)
+ * window subdivided independently, on top of whatever the caller already
+ * produced — subdivideSlicesForAnimation leaves everything outside a given
+ * window untouched, so calling it once per animated word composes safely
+ * regardless of how many (if any) words in a phrase have one.
+ */
+function subdivideForWordAnimations(slices, words, params) {
+  let result = slices;
+  (words || []).forEach((w) => {
+    const override = resolveWordOverride(params, w.wordIndex);
+    if (!override || !override.animationType || override.animationType === 'none') return;
+    const lifetime = Math.max(0, (w.end ?? w.start) - w.start);
+    const duration = Math.min(override.animationDuration || 0.25, lifetime);
+    if (duration <= 0) return;
+    result = subdivideSlicesForAnimation(result, w.start, w.start + duration);
+  });
+  return result;
+}
+
+/**
  * Renders one transparent PNG per timing slice of `phrase` and writes them
  * into `outDir`. Each slice's frame is drawn at that slice's start time
  * (equivalent to any instant within [start, end) since, by construction, no
@@ -156,6 +183,7 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
     const animEnd = animStart + Math.min(animation.duration, phrase.end - phrase.start);
     slices = subdivideSlicesForAnimation(slices, animStart, animEnd);
   }
+  slices = subdivideForWordAnimations(slices, phrase.words, params);
 
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
@@ -222,12 +250,18 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
   // once per window change, so each slice gets its OWN animation window,
   // subdivided independently, then flattened back into one time-ordered list.
   const slices = windowSlices.flatMap((slice) => {
-    if (animation.type === 'none') return [slice];
-    const activeChunk = slice.chunks[slice.chunks.length - 1];
-    const animStart = activeChunk.start;
-    const animEnd = animStart + Math.min(animation.duration, activeChunk.end - activeChunk.start);
-    return subdivideSlicesForAnimation([{ start: slice.start, end: slice.end }], animStart, animEnd)
-      .map((sub) => ({ ...sub, chunks: slice.chunks }));
+    let subSlices = [{ start: slice.start, end: slice.end }];
+    if (animation.type !== 'none') {
+      const activeChunk = slice.chunks[slice.chunks.length - 1];
+      const animStart = activeChunk.start;
+      const animEnd = animStart + Math.min(animation.duration, activeChunk.end - activeChunk.start);
+      subSlices = subdivideSlicesForAnimation(subSlices, animStart, animEnd);
+    }
+    // Per-word animation (keyword scope) — only the words actually in THIS
+    // window (not the whole phrase) can matter for this slice's own range.
+    const wordsInWindow = slice.chunks.flatMap((c) => c.words || []);
+    subSlices = subdivideForWordAnimations(subSlices, wordsInWindow, params);
+    return subSlices.map((sub) => ({ ...sub, chunks: slice.chunks }));
   });
 
   return slices.map((slice) => {

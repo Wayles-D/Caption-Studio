@@ -302,15 +302,20 @@ body.light-theme {
 .caption-transform-rotate-line {
   position: absolute;
   left: 50%;
-  top: -28px;
+  /* Tall enough to clear the toolbar below even when it wraps onto two rows
+     (see .caption-transform-toolbar's flex-wrap) — the keyword scope
+     buttons + animation select can't all fit on one row within the
+     phone-frame's own width, unlike the original 2-button caption toolbar
+     this was originally sized for. */
+  top: -64px;
   width: 1.5px;
-  height: 28px;
+  height: 64px;
   background: #6366F1;
   pointer-events: none;
 }
 
 .caption-transform-handle.rotate {
-  top: -28px;
+  top: -64px;
   left: 50%;
   cursor: grab;
   background: #6366F1;
@@ -322,14 +327,19 @@ body.light-theme {
   left: 50%;
   transform: translate(-50%, -8px);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 4px 6px;
   background: rgba(17, 17, 24, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   pointer-events: auto;
-  white-space: nowrap;
+  /* Wraps onto a second row instead of spilling past the phone-frame's own
+     edges — the keyword scope group (3 buttons + an animation select) is
+     wider than the original 2-button caption toolbar this was sized for. */
+  max-width: 300px;
   font-size: 11px;
   color: #E5E7EB;
 }
@@ -342,6 +352,7 @@ body.light-theme {
   color: #9CA3AF;
   cursor: pointer;
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .caption-transform-scope-btn.active {
@@ -357,4 +368,33 @@ body.light-theme {
   color: #E5E7EB;
   cursor: pointer;
   font-size: 11px;
+}
+
+.caption-transform-keyword-multiselect-label {
+  padding: 3px 6px;
+  color: #9CA3AF;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.caption-transform-keyword-animation-select {
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #E5E7EB;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+/* "Select Keywords" mode's per-instance highlight markers (see
+   canvasTransform.js's renderKeywordMultiSelectMarkers) — deliberately
+   pointer-events:none so they never intercept a click meant for the
+   hit-area underneath them. */
+.caption-transform-keyword-marker {
+  position: absolute;
+  border: 2px solid #F59E0B;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.15);
+  pointer-events: none;
 }

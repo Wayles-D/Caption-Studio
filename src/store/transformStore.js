@@ -12,7 +12,15 @@
  *   phrase keeps resolving from the global fields.
  * - `transformApplyScope` — the editor's current This/All choice, read at
  *   edit-time to decide which of the two gets written; not itself consumed
- *   by the renderer.
+ *   by the renderer. CAPTION-level only — see `keywordApplyScope` below.
+ * - `keywordApplyScope` — the keyword-editing counterpart to
+ *   `transformApplyScope`, kept as its OWN field (not a repurposing of
+ *   transformApplyScope) so nothing about caption-level scope can be
+ *   disturbed by the keyword-scope feature. 'this' (default) | 'all' |
+ *   'select'. Only meaningful when the current on-canvas selection is a
+ *   KEYWORD word (see src/js/components/canvasTransform.js's
+ *   selectedIsKeyword) — a selected caption or plain normal word ignores it
+ *   entirely, exactly like transformApplyScope is ignored for word edits.
  *
  * Still undo-tracked alongside editorStore's fields — see
  * src/js/state.js's STYLE_KEYS, which spans both stores — so this being a
@@ -23,7 +31,8 @@ import { create } from 'zustand';
 export const TRANSFORM_DEFAULTS = {
   rotation: 0,
   captionTransforms: {},
-  transformApplyScope: "all"
+  transformApplyScope: "all",
+  keywordApplyScope: "this"
 };
 
 export const useTransformStore = create(() => ({ ...TRANSFORM_DEFAULTS }));

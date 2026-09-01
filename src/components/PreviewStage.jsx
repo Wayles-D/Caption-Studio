@@ -116,6 +116,29 @@ export function PreviewStage({
               <div className="caption-transform-toolbar" id="caption-transform-toolbar">
                 <button type="button" className="caption-transform-scope-btn" data-scope="this" id="btn-transform-scope-this">This Caption</button>
                 <button type="button" className="caption-transform-scope-btn" data-scope="all" id="btn-transform-scope-all">All Captions</button>
+                {/* Keyword scope — shown instead of the caption buttons above
+                    whenever the current on-canvas selection is specifically a
+                    keyword word (see canvasTransform.js's currentSelectionTarget).
+                    Hidden by default; toggled via the `hidden` attribute, not a
+                    CSS class, to match how every other conditional element in
+                    this toolbar already works. */}
+                <button type="button" className="caption-transform-scope-btn" data-scope="this" id="btn-transform-scope-this-keyword" hidden>This Keyword</button>
+                <button type="button" className="caption-transform-scope-btn" data-scope="all" id="btn-transform-scope-all-keywords" hidden>All Keywords</button>
+                <button type="button" className="caption-transform-scope-btn" data-scope="select" id="btn-transform-scope-select-keywords" hidden>Select Keywords</button>
+                {/* "Select Keywords" mode's own small affordance, swapped in
+                    for the three buttons above while active. */}
+                <span className="caption-transform-keyword-multiselect-label" id="caption-transform-keyword-multiselect-label" hidden>0 selected</span>
+                <button type="button" className="caption-transform-reset-btn" id="btn-transform-keyword-multiselect-done" hidden>Done</button>
+                <select className="caption-transform-keyword-animation-select" id="select-keyword-transform-animation" hidden defaultValue="none">
+                  <option value="none">No animation</option>
+                  <option value="fade">Fade</option>
+                  <option value="pop">Pop</option>
+                  <option value="scale">Scale</option>
+                  <option value="slide-up">Slide Up</option>
+                  <option value="slide-down">Slide Down</option>
+                  <option value="slide-left">Slide Left</option>
+                  <option value="slide-right">Slide Right</option>
+                </select>
                 <button type="button" className="caption-transform-reset-btn" id="btn-transform-reset">Reset</button>
                 <span className="caption-transform-rotation-label" id="caption-transform-rotation-label" />
               </div>

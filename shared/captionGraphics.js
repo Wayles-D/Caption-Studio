@@ -428,8 +428,8 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
       // shared/captionTransform.js's getWordTransformKey doc comment) —
       // word.originalIndex is only its position within THIS phrase, so the
       // override lookup must go through the source word object.
-      const globalWordIndex = activePhrase.words[word.originalIndex]?.wordIndex;
-      const override = resolveWordOverride(params, globalWordIndex);
+      const sourceWord = activePhrase.words[word.originalIndex];
+      const override = resolveWordOverride(params, sourceWord?.wordIndex);
       if (override) {
         // Additive, on-canvas-only transform (see
         // src/js/components/canvasTransform.js) applied around this word's
@@ -443,6 +443,28 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
         if (override.rotationDeg) ctx.rotate((override.rotationDeg * Math.PI) / 180);
         if (override.fontScale && override.fontScale !== 1) ctx.scale(override.fontScale, override.fontScale);
         ctx.translate(-pivotX, -pivotY);
+
+        // Per-word entrance animation (keyword editing scope) — same
+        // shared/captionAnimation.js engine the caption/Rolling-Stack-window
+        // level animation uses, just anchored to THIS WORD's own [start,end)
+        // instead of the whole phrase's. Composes with (doesn't replace) the
+        // caption-level animation already applied around the whole block
+        // further up this function.
+        if (override.animationType && override.animationType !== 'none' && sourceWord) {
+          const wordAnim = getAnimationTransform(
+            { captionAnimationType: override.animationType, captionAnimationDuration: override.animationDuration, captionAnimationEasing: override.animationEasing, captionAnimationIntensity: override.animationIntensity },
+            currentTime, sourceWord.start, sourceWord.end
+          );
+          if (wordAnim.scale !== 1) {
+            ctx.translate(pivotX, pivotY);
+            ctx.scale(wordAnim.scale, wordAnim.scale);
+            ctx.translate(-pivotX, -pivotY);
+          }
+          if (wordAnim.offsetXRatio || wordAnim.offsetYRatio) {
+            ctx.translate(wordAnim.offsetXRatio * canvasWidth, wordAnim.offsetYRatio * canvasHeight);
+          }
+          ctx.globalAlpha *= wordAnim.alpha;
+        }
       }
 
       paintText(ctx, word.text, word.centerX, word.baselineY, {
@@ -494,6 +516,10 @@ export function measureSentenceFrame(ctx, opts) {
   const words = computed.lines.flatMap((line) =>
     line.words.map((w) => ({
       wordIndex: activePhrase.words[w.originalIndex]?.wordIndex,
+      // isKeyword: needed by the on-canvas keyword scope UI (see
+      // src/js/components/canvasTransform.js) — read straight off the
+      // source word, same indirection as wordIndex above.
+      isKeyword: !!activePhrase.words[w.originalIndex]?.isKeyword,
       x: w.x,
       y: w.y,
       width: w.width,
@@ -843,6 +869,13 @@ function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
   return rawWords.map((w, i) => {
     const rect = {
       wordIndex: w.wordIndex,
+      // isKeyword/start/end: needed by the on-canvas selection layer (keyword
+      // scope UI, see src/js/components/canvasTransform.js) and by this
+      // word's own per-word animation window (see paintRollingStackLines) —
+      // both just read straight off the raw source word, never painted.
+      isKeyword: !!w.isKeyword,
+      start: w.start,
+      end: w.end,
       text: displayWords[i] ?? (w.word || w.text || '').trim(),
       x: cursor,
       y: lineTop,
@@ -854,7 +887,7 @@ function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
   });
 }
 
-function paintRollingStackLines(ctx, positionedLines, params) {
+function paintRollingStackLines(ctx, positionedLines, params, currentTime, canvasWidth, canvasHeight) {
   positionedLines.forEach((line) => {
     const words = line.words || [];
     const hasWordOverride = words.some((w) => resolveWordOverride(params, w.wordIndex));
@@ -878,6 +911,25 @@ function paintRollingStackLines(ctx, positionedLines, params) {
         if (override.rotationDeg) ctx.rotate((override.rotationDeg * Math.PI) / 180);
         if (override.fontScale && override.fontScale !== 1) ctx.scale(override.fontScale, override.fontScale);
         ctx.translate(-pivotX, -pivotY);
+
+        // Per-word entrance animation (keyword editing scope) — see the
+        // matching addition in sentence mode's renderResolvedFrame for the
+        // full rationale; anchored to this word's own [start,end).
+        if (override.animationType && override.animationType !== 'none' && word.start != null) {
+          const wordAnim = getAnimationTransform(
+            { captionAnimationType: override.animationType, captionAnimationDuration: override.animationDuration, captionAnimationEasing: override.animationEasing, captionAnimationIntensity: override.animationIntensity },
+            currentTime, word.start, word.end
+          );
+          if (wordAnim.scale !== 1) {
+            ctx.translate(pivotX, pivotY);
+            ctx.scale(wordAnim.scale, wordAnim.scale);
+            ctx.translate(-pivotX, -pivotY);
+          }
+          if (wordAnim.offsetXRatio || wordAnim.offsetYRatio) {
+            ctx.translate(wordAnim.offsetXRatio * canvasWidth, wordAnim.offsetYRatio * canvasHeight);
+          }
+          ctx.globalAlpha *= wordAnim.alpha;
+        }
       }
       // Same baseline y (line.y) every word in the line shared before this
       // split — only the per-word x anchor (now the word's own center,
@@ -947,7 +999,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
   if (shadowMode === 'unified' && createOffscreenCanvas) {
     const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
     const offCtx = offscreen.getContext('2d');
-    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params));
+    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight));
 
     // The offscreen canvas already contains the rotated composition (rotated
     // while painting, above) — drawImage below is a plain, unrotated pixel
@@ -984,7 +1036,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     // before this feature existed whenever captionAnimationType is 'none'.
     const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
     const offCtx = offscreen.getContext('2d');
-    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params));
+    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight));
 
     ctx.save();
     if (anim.offsetXRatio || anim.offsetYRatio) {
@@ -1001,7 +1053,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     return;
   }
 
-  paintComposite(ctx, (c, l) => paintRollingStackLines(c, l.lines, params));
+  paintComposite(ctx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight));
 }
 
 /**

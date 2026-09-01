@@ -83,11 +83,16 @@ export function getWordTransformKey(wordIndex) {
 
 /**
  * Looks up a single word's on-canvas transform override, if any —
- * `{ offsetXPx?, offsetYPx?, rotationDeg?, fontScale? }`, applied at paint
- * time around that word's own rendered pivot, additively on top of whatever
- * phrase/global transform already placed the block it's part of. Returns
- * null (not baseParams) since callers apply this per-word inside a paint
- * loop, not as a whole-params merge like resolvePhraseParams.
+ * `{ offsetXPx?, offsetYPx?, rotationDeg?, fontScale?, animationType?,
+ * animationDuration?, animationEasing?, animationIntensity? }`, applied at
+ * paint time around that word's own rendered pivot, additively on top of
+ * whatever phrase/global transform already placed the block it's part of.
+ * The animation* fields (keyword-scope editing feature) are resolved through
+ * the exact same shared/captionAnimation.js engine the caption/Rolling-Stack-
+ * window-level animation uses, just anchored to this word's own [start,end)
+ * — see shared/captionGraphics.js's per-word paint blocks. Returns null (not
+ * baseParams) since callers apply this per-word inside a paint loop, not as
+ * a whole-params merge like resolvePhraseParams.
  */
 export function resolveWordOverride(baseParams, wordIndex) {
   const overrides = baseParams && baseParams.captionTransforms;
