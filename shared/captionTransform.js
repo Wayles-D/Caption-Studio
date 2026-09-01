@@ -56,3 +56,41 @@ export function resolvePhraseParams(baseParams, phrase) {
 
   return merged;
 }
+
+/**
+ * A stable per-WORD key, independent of any phrase. Deliberately NOT
+ * `${phraseKey}:${wordIndex}` — phraseGrouper.js's `wordIndex` is already the
+ * word's position in the ENTIRE flat transcript (stamped once, before the
+ * transcript is split into phrases), so it alone is a globally unique,
+ * stable identity that survives text edits and doesn't require the word's
+ * owning phrase to be in scope to look itself up — Rolling Stack's renderer
+ * (shared/captionGraphics.js's paintRollingStackLines) never receives a
+ * phrase, only `windowChunks` (each chunk's `words` already carry their own
+ * `wordIndex`, see shared/rollingStack.js's buildRollingStackChunks).
+ *
+ * The `w` prefix guarantees no collision with getPhraseTransformKey's plain
+ * numeric strings in the same captionTransforms map.
+ *
+ * A word-level override is always scoped to that one word specifically —
+ * there is no "all captions" equivalent for an individual word occurrence,
+ * so unlike phrase overrides, word overrides are never read/written any
+ * differently based on transformApplyScope (see
+ * src/js/components/canvasTransform.js's applyWordTransformFields).
+ */
+export function getWordTransformKey(wordIndex) {
+  return `w${wordIndex}`;
+}
+
+/**
+ * Looks up a single word's on-canvas transform override, if any —
+ * `{ offsetXPx?, offsetYPx?, rotationDeg?, fontScale? }`, applied at paint
+ * time around that word's own rendered pivot, additively on top of whatever
+ * phrase/global transform already placed the block it's part of. Returns
+ * null (not baseParams) since callers apply this per-word inside a paint
+ * loop, not as a whole-params merge like resolvePhraseParams.
+ */
+export function resolveWordOverride(baseParams, wordIndex) {
+  const overrides = baseParams && baseParams.captionTransforms;
+  if (!overrides || wordIndex == null) return null;
+  return overrides[getWordTransformKey(wordIndex)] || null;
+}

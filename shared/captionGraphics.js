@@ -54,6 +54,7 @@ import {
 import { resolveFontFace } from './fontRegistry.js';
 import { chunkRawText } from './rollingStack.js';
 import { getAnimationTransform } from './captionAnimation.js';
+import { resolveWordOverride } from './captionTransform.js';
 
 /**
  * Whether the graphics engine currently knows how to render this resolved
@@ -361,6 +362,27 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
   const blockTop = yEdge === 'top' ? anchorY : yEdge === 'center' ? anchorY - totalHeight / 2 : anchorY - totalHeight;
   const blockWidth = Math.max(...lines.map((l) => l.width));
 
+  // Resolve each word's own top-left rect + baseline within the block, in
+  // the SAME pre-rotation local coordinate space the block's own box is
+  // reported in (see measureSentenceFrame) — this is the one place that walk
+  // is done; renderResolvedFrame's paint loop and measureSentenceFrame's
+  // per-word hit-test rects both read it back off `line.words[i]` instead of
+  // recomputing the cursor walk a second time.
+  lines.forEach((line, lineIdx) => {
+    const lineTop = blockTop + lineIdx * lineHeightPx;
+    const baselineY = lineTop + lineHeightPx * 0.8;
+    let cursorX = anchorX - line.width / 2;
+    line.words.forEach((word) => {
+      word.x = cursorX;
+      word.y = lineTop;
+      word.height = lineHeightPx;
+      word.centerX = cursorX + word.width / 2;
+      word.centerY = lineTop + lineHeightPx / 2;
+      word.baselineY = baselineY;
+      cursorX += word.width + wordSpacingPx;
+    });
+  });
+
   return { lines, lineHeightPx, totalHeight, blockTop, blockWidth, centerX: anchorX, centerY: blockTop + totalHeight / 2 };
 }
 
@@ -369,13 +391,13 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   if (!activePhrase || !activePhrase.words || !activePhrase.words.length) return;
 
   const {
-    fontSizePx, wordSpacingPx, outlineWidthPx, outlineColor, hasShadow,
-    shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, rotationDeg
+    fontSizePx, outlineWidthPx, outlineColor, hasShadow,
+    shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, rotationDeg
   } = geometry;
 
   const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
   if (!computed) return;
-  const { lines, lineHeightPx, blockTop, centerX, centerY } = computed;
+  const { lines, centerX, centerY } = computed;
 
   // Entrance animation (shared/captionAnimation.js) — anchored to the whole
   // PHRASE's own [start,end), not any individual word's, so it fires once
@@ -400,13 +422,30 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   }
   ctx.globalAlpha = anim.alpha;
 
-  lines.forEach((line, lineIdx) => {
-    const lineY = blockTop + lineIdx * lineHeightPx + lineHeightPx * 0.8; // ~baseline within the line box
-    let cursorX = anchorX - line.width / 2;
-
+  lines.forEach((line) => {
     line.words.forEach((word) => {
-      const wordCenterX = cursorX + word.width / 2;
-      paintText(ctx, word.text, wordCenterX, lineY, {
+      // wordIndex is the word's position in the ENTIRE flat transcript (see
+      // shared/captionTransform.js's getWordTransformKey doc comment) —
+      // word.originalIndex is only its position within THIS phrase, so the
+      // override lookup must go through the source word object.
+      const globalWordIndex = activePhrase.words[word.originalIndex]?.wordIndex;
+      const override = resolveWordOverride(params, globalWordIndex);
+      if (override) {
+        // Additive, on-canvas-only transform (see
+        // src/js/components/canvasTransform.js) applied around this word's
+        // own pivot, on top of whatever the block's own rotation/position
+        // already did — a sibling word with no override is entirely
+        // untouched by this ctx.save/restore pair.
+        ctx.save();
+        const pivotX = word.centerX;
+        const pivotY = word.centerY;
+        ctx.translate(pivotX + (override.offsetXPx || 0), pivotY + (override.offsetYPx || 0));
+        if (override.rotationDeg) ctx.rotate((override.rotationDeg * Math.PI) / 180);
+        if (override.fontScale && override.fontScale !== 1) ctx.scale(override.fontScale, override.fontScale);
+        ctx.translate(-pivotX, -pivotY);
+      }
+
+      paintText(ctx, word.text, word.centerX, word.baselineY, {
         font: word.font,
         color: word.color,
         scale: word.scale,
@@ -420,7 +459,8 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
         shadowOffsetYPx,
         shadowColor
       });
-      cursorX += word.width + wordSpacingPx;
+
+      if (override) ctx.restore();
     });
   });
 
@@ -444,6 +484,22 @@ export function measureSentenceFrame(ctx, opts) {
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
   const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
   if (!computed) return null;
+  // Per-word rects, in the same pre-rotation local coordinate space as the
+  // block box below — see src/js/components/canvasTransform.js's word hit
+  // testing, which resolves a click to one of these instead of always the
+  // whole block. wordIndex is the word's stable, text-edit-proof identity
+  // (its position in the ENTIRE flat transcript — see
+  // shared/captionTransform.js's getWordTransformKey), not its position
+  // within this one phrase/line.
+  const words = computed.lines.flatMap((line) =>
+    line.words.map((w) => ({
+      wordIndex: activePhrase.words[w.originalIndex]?.wordIndex,
+      x: w.x,
+      y: w.y,
+      width: w.width,
+      height: w.height
+    }))
+  );
   return {
     x: computed.centerX - computed.blockWidth / 2,
     y: computed.blockTop,
@@ -452,7 +508,8 @@ export function measureSentenceFrame(ctx, opts) {
     centerX: computed.centerX,
     centerY: computed.centerY,
     rotationDeg: geometry.rotationDeg,
-    pxScale: geometry.pxScale
+    pxScale: geometry.pxScale,
+    words
   };
 }
 
@@ -715,7 +772,7 @@ function layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry,
     ctx.font = spec.font;
     const width = ctx.measureText(spec.text).width;
     const lineHeightPx = spec.fontSizePx * (parseFloat(cssConfig.profile.lineSpacing) || 1.25);
-    return { ...spec, width, lineHeightPx };
+    return { ...spec, width, lineHeightPx, chunk };
   });
 
   const containerWidth = Math.max(...lines.map((l) => l.width));
@@ -732,8 +789,10 @@ function layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry,
   let cursorY = blockTop;
   const positionedLines = lines.map((line) => {
     const lineY = cursorY + line.lineHeightPx * 0.8; // ~baseline within the line box
+    const lineTop = cursorY;
     cursorY += line.lineHeightPx + layerGapPx;
-    return { ...line, x: lineX, y: lineY, textAlign };
+    const words = computeChunkWordRects(ctx, line, textAlign, lineX, lineTop);
+    return { ...line, x: lineX, y: lineY, top: lineTop, textAlign, words };
   });
 
   // Horizontal bbox center is anchorX regardless of `alignment`: left/right
@@ -751,9 +810,81 @@ function layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry,
   };
 }
 
-function paintRollingStackLines(ctx, positionedLines) {
+/**
+ * Sub-divides one already-measured chunk line into per-word rects — a chunk
+ * (shared/rollingStack.js's buildRollingStackChunks) can join several
+ * consecutive same-isKeyword words into one rendered line (e.g. "came
+ * together"), so word-level selection/transform (see
+ * src/js/components/canvasTransform.js) needs each original word's own x
+ * position within that joined text, not just the chunk's line as a whole.
+ * `line.chunk.words` are the SAME word objects buildRollingStackChunks
+ * grouped (each already carrying its own stable, transcript-wide
+ * `wordIndex`) — line.text is that chunk's already case-transformed joined
+ * text (see resolveRollingStackChunkSpec/chunkRawText, which always joins
+ * with a single space), so splitting it back on spaces recovers each word's
+ * on-screen text without re-deriving the case transform here.
+ */
+function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
+  const rawWords = line.chunk?.words || [];
+  if (!rawWords.length) return [];
+
+  ctx.font = line.font;
+  const displayWords = line.text.split(' ');
+  const spaceWidth = ctx.measureText(' ').width;
+  const widths = rawWords.map((w, i) =>
+    ctx.measureText(displayWords[i] ?? (w.word || w.text || '').trim()).width
+  );
+
+  let cursor;
+  if (textAlign === 'left') cursor = lineX;
+  else if (textAlign === 'right') cursor = lineX - line.width;
+  else cursor = lineX - line.width / 2;
+
+  return rawWords.map((w, i) => {
+    const rect = {
+      wordIndex: w.wordIndex,
+      text: displayWords[i] ?? (w.word || w.text || '').trim(),
+      x: cursor,
+      y: lineTop,
+      width: widths[i],
+      height: line.lineHeightPx
+    };
+    cursor += widths[i] + spaceWidth;
+    return rect;
+  });
+}
+
+function paintRollingStackLines(ctx, positionedLines, params) {
   positionedLines.forEach((line) => {
-    paintText(ctx, line.text, line.x, line.y, line);
+    const words = line.words || [];
+    const hasWordOverride = words.some((w) => resolveWordOverride(params, w.wordIndex));
+
+    // Fast path: identical to the original single fillText call whenever no
+    // word in this line has an active override, so ordinary Rolling Stack
+    // output (the overwhelming majority of frames, including single-word
+    // chunks with no override) is byte-for-byte unchanged by this feature.
+    if (!hasWordOverride || !words.length) {
+      paintText(ctx, line.text, line.x, line.y, line);
+      return;
+    }
+
+    words.forEach((word) => {
+      const override = resolveWordOverride(params, word.wordIndex);
+      const pivotX = word.x + word.width / 2;
+      const pivotY = word.y + word.height / 2;
+      if (override) {
+        ctx.save();
+        ctx.translate(pivotX + (override.offsetXPx || 0), pivotY + (override.offsetYPx || 0));
+        if (override.rotationDeg) ctx.rotate((override.rotationDeg * Math.PI) / 180);
+        if (override.fontScale && override.fontScale !== 1) ctx.scale(override.fontScale, override.fontScale);
+        ctx.translate(-pivotX, -pivotY);
+      }
+      // Same baseline y (line.y) every word in the line shared before this
+      // split — only the per-word x anchor (now the word's own center,
+      // textAlign forced to 'center' to match) changes.
+      paintText(ctx, word.text, pivotX, line.y, { ...line, textAlign: 'center' });
+      if (override) ctx.restore();
+    });
   });
 }
 
@@ -816,7 +947,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
   if (shadowMode === 'unified' && createOffscreenCanvas) {
     const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
     const offCtx = offscreen.getContext('2d');
-    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines));
+    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params));
 
     // The offscreen canvas already contains the rotated composition (rotated
     // while painting, above) — drawImage below is a plain, unrotated pixel
@@ -853,7 +984,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     // before this feature existed whenever captionAnimationType is 'none'.
     const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
     const offCtx = offscreen.getContext('2d');
-    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines));
+    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params));
 
     ctx.save();
     if (anim.offsetXRatio || anim.offsetYRatio) {
@@ -870,7 +1001,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     return;
   }
 
-  paintComposite(ctx, (c, l) => paintRollingStackLines(c, l.lines));
+  paintComposite(ctx, (c, l) => paintRollingStackLines(c, l.lines, params));
 }
 
 /**
@@ -883,6 +1014,19 @@ export function measureRollingStackFrame(ctx, opts) {
   if (!windowChunks || !windowChunks.length) return null;
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
   const layout = layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry, alignment);
+  // Per-chunk (line) rects, each carrying its own words' rects — see
+  // computeChunkWordRects. A chunk usually IS a single word (a keyword/
+  // normal isKeyword flip typically lands on one word at a time), but when
+  // several consecutive same-isKeyword words share one chunk/line, `words`
+  // still resolves each one individually by its own stable wordIndex.
+  const chunks = layout.lines.map((line, chunkIndex) => ({
+    chunkIndex,
+    x: line.textAlign === 'left' ? line.x : line.textAlign === 'right' ? line.x - line.width : line.x - line.width / 2,
+    y: line.top,
+    width: line.width,
+    height: line.lineHeightPx,
+    words: line.words
+  }));
   return {
     x: layout.centerX - layout.blockWidth / 2,
     y: layout.blockTop,
@@ -891,7 +1035,8 @@ export function measureRollingStackFrame(ctx, opts) {
     centerX: layout.centerX,
     centerY: layout.centerY,
     rotationDeg: geometry.rotationDeg,
-    pxScale: geometry.pxScale
+    pxScale: geometry.pxScale,
+    chunks
   };
 }
 
