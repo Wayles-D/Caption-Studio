@@ -67,16 +67,15 @@ function loadKeywordDrivenFontFaces(cssConfig) {
 }
 
 /**
- * Shared-graphics-renderer preview path (shared/captionGraphics.js). Live by
- * default for the presets in GRAPHICS_RENDERER_DEFAULT_PRESETS (currently
- * 'bold-yellow' and 'caps-white') — the SAME renderer backend/utils/
- * graphicsExport.js now uses for those presets' actual video export, so
- * preview and export can no longer visually disagree for them. Every other
- * preset still renders via the CSS/DOM path below unchanged.
- * window.__USE_GRAPHICS_CAPTIONS__ remains as a dev override to preview the
- * renderer on a preset/mode it technically supports (canDrawCaptionFrame)
- * but hasn't been promoted to the default list yet — that combination is
- * NOT wired to export, so it's for visual inspection only, never for real use.
+ * Shared-graphics-renderer preview path (shared/captionGraphics.js). Live for
+ * every mode/preset canDrawCaptionFrame() accepts (== isGraphicsRendererDefault,
+ * see that function's doc comment) — the SAME renderer backend/utils/
+ * graphicsFrameGenerator.js uses for actual video export, so preview and
+ * export can never visually disagree. Selection/transform editing (see
+ * src/js/components/canvasTransform.js) rides along automatically whenever
+ * this path is live, since caption mode/preset only ever decides layout, not
+ * editability. Only the remaining Unified-Shadow-in-sentence-mode gap still
+ * falls through to the legacy CSS/DOM path below.
  */
 const canvasFontsReadyCache = new Set();
 
@@ -420,7 +419,26 @@ export function syncVideoSubtitles() {
   // exactly like Sentence mode's word spans below — only the "how many
   // words are shown at once, and which text unit drives timing" differs.
   if (appState.captionMode === 'word') {
-    renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsText);
+    // Reuses the SAME sentence-mode graphics renderer as a synthetic
+    // "phrase" containing just the one word currently on screen — see
+    // shared/captionGraphics.js's canDrawCaptionFrame SCOPE note. This is
+    // what gives Word Mode the exact same selection/transform/word-edit/
+    // keyword-scope UI as every other mode instead of a separate,
+    // unimplemented code path; `activePhrase` (the real, full phrase) is
+    // still what's passed to updateCanvasTransformOverlay so "This Caption"/
+    // "All Captions" scope keys off the real caption, not the one-word
+    // stand-in. Falls back to the legacy CSS renderer only when the
+    // graphics renderer doesn't cover this cssConfig at all (Unified Shadow).
+    const activeWord = activePhrase.words.find((w) => currentTime >= w.start && currentTime <= w.end);
+    if (activeWord && canDrawCaptionFrame(cssConfig) && captionsCanvas) {
+      const singleWordPhrase = { words: [activeWord], breakAfterIndices: [], start: activePhrase.start, end: activePhrase.end };
+      const box = drawGraphicsCanvasFrame(captionsCanvas, singleWordPhrase, currentTime, cssConfig, params);
+      captionsCanvas.classList.add('active');
+      captionsText.style.visibility = 'hidden';
+      updateCanvasTransformOverlay(box, activePhrase, 'sentence');
+    } else {
+      renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsText);
+    }
     return;
   }
 
@@ -446,12 +464,11 @@ export function syncVideoSubtitles() {
     return;
   }
 
-  // Graphics-renderer path — see drawGraphicsCanvasFrame's doc comment for
-  // which presets this is live for by default, and the dev-flag override.
-  // Falls straight through to the existing CSS/DOM rendering below whenever
-  // neither applies.
-  const useGraphicsRenderer = isGraphicsRendererDefault(cssConfig)
-    || (window.__USE_GRAPHICS_CAPTIONS__ && canDrawCaptionFrame(cssConfig));
+  // Graphics-renderer path — live for every preset now (see
+  // isGraphicsRendererDefault's doc comment); falls straight through to the
+  // existing CSS/DOM rendering below only for the remaining Unified-Shadow
+  // gap canDrawCaptionFrame still excludes.
+  const useGraphicsRenderer = isGraphicsRendererDefault(cssConfig);
   if (useGraphicsRenderer && captionsCanvas) {
     const box = drawGraphicsCanvasFrame(captionsCanvas, activePhrase, currentTime, cssConfig, params);
     captionsCanvas.classList.add('active');

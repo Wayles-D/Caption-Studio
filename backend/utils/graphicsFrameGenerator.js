@@ -32,10 +32,10 @@ import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 /**
  * Whether a job with this style should render via the graphics pipeline
  * instead of ASS — delegates entirely to the shared
- * isGraphicsRendererDefault, the SAME check the frontend preview
- * uses to decide when to switch off the CSS/DOM renderer, so export can
- * never go live for a preset the preview hasn't (see
- * shared/captionGraphics.js's GRAPHICS_RENDERER_DEFAULT_PRESETS).
+ * isGraphicsRendererDefault, the SAME check the frontend preview uses to
+ * decide when to switch off the CSS/DOM renderer, so export can never go
+ * live for a mode/preset the preview hasn't (see
+ * shared/captionGraphics.js's canDrawCaptionFrame).
  */
 export function canGenerateGraphicsFrames(params) {
   const cssConfig = getCSSPreviewFromConfig(params);
@@ -284,6 +284,30 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
 }
 
 /**
+ * Word Mode's frame generator — export counterpart to Word Mode's preview
+ * path (see src/js/components/preview.js's syncVideoSubtitles), which draws
+ * the SAME sentence-mode renderer fed a synthetic one-word "phrase" rather
+ * than a separate renderer, so export can't visually disagree with preview.
+ * Slices `phrase` into one single-word mini-phrase per transcript word
+ * (each spanning just that word's own [start, end)) and renders each via
+ * generatePhraseCaptionFrames — since only one word is ever on screen at a
+ * time in this mode, unlike sentence mode's one-PNG-per-boundary-slice.
+ *
+ * @param {object} phrase - { start, end, words: [{word|text, start, end, isKeyword?, wordIndex}] }
+ * @param {object} params
+ * @param {number} canvasWidth
+ * @param {number} canvasHeight
+ * @param {string} outDir
+ * @returns {{start:number, end:number, file:string}[]}
+ */
+export function generateWordModePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
+  return phrase.words.flatMap((w) => {
+    const singleWordPhrase = { words: [w], breakAfterIndices: [], start: w.start, end: w.end };
+    return generatePhraseCaptionFrames(singleWordPhrase, params, canvasWidth, canvasHeight, outDir);
+  });
+}
+
+/**
  * Writes one fully-transparent PNG at the given resolution — the "nothing is
  * captioned right now" filler segment used to bridge gaps between phrases
  * (and before the first / after the last) when building a full-video caption
@@ -328,6 +352,8 @@ export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHe
   const cssConfig = getCSSPreviewFromConfig(params);
   const generatePhraseFrames = cssConfig.captionMode === 'rolling-stack'
     ? generateRollingStackPhraseFrames
+    : cssConfig.captionMode === 'word'
+    ? generateWordModePhraseFrames
     : generatePhraseCaptionFrames;
 
   const segments = [];

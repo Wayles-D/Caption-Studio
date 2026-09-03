@@ -26,20 +26,23 @@
  * shared/captionConfig.js's getASSStyleFromConfig for the still-authoritative
  * ASS-domain geometry every other preset continues to use unchanged.
  *
- * SCOPE: 'sentence' mode covers non-keyword-driven, non-boxed presets with
- * the 'individual'/'none' shadow system — currently 'bold-yellow' and
- * 'caps-white' (see GRAPHICS_RENDERER_DEFAULT_PRESETS). 'rolling-stack' mode
- * (see drawRollingStackFrame/drawRollingStackFrameForExport below) covers
- * ANY preset, including keyword-driven ones — Rolling Stack inherently needs
- * distinct normal/keyword typography, resolved through the same
- * resolveWordStyleMetadata every keyword-driven sentence-mode preset already
- * uses, independent of that preset's own keywordDriven flag. Boxed
- * backgrounds ('bg-black' — no box-fill/padding drawing yet), Unified
- * Shadow, and Word Mode are intentionally NOT implemented in EITHER mode —
- * canDrawCaptionFrame() below returns false for anything outside this scope
- * so callers can fall back to the existing CSS/ASS renderers untouched.
- * Widen the scope incrementally per the migration plan — not by silently
- * guessing at unimplemented styling.
+ * SCOPE: 'sentence' and 'rolling-stack' modes both cover every preset now,
+ * including keyword-driven ones and boxed backgrounds — 'sentence' mode's
+ * per-word typography is resolved through the exact same resolveWordStyleMetadata
+ * Rolling Stack and the CSS/DOM renderer already use (see computeSentenceLines),
+ * and box-fill/padding is drawn from the same cssConfig.backgroundColor /
+ * cssConfig.text.padding / cssConfig.text.borderRadius both modes already
+ * resolve (see resolveGeometry's isBoxed/boxPadXPx/boxPadYPx/borderRadiusPx
+ * fields and fillBoxBackground). Word Mode reuses this SAME sentence-mode renderer by
+ * feeding it a synthetic one-word "phrase" (see
+ * src/js/components/preview.js's syncVideoSubtitles) rather than a separate
+ * code path — selection/editing is therefore uniform across every caption
+ * mode and preset; only layout (sentence vs. stacked vs. single-word) and
+ * Rolling Stack's own chunk-grouping differ. Unified Shadow mode is the one
+ * remaining sentence-mode gap (still deferred to the ASS pipeline's own
+ * offscreen-composited silhouette — see canDrawCaptionFrame) since Rolling
+ * Stack's offscreen-composite technique for it is Rolling-Stack-specific
+ * layout, not a shared behavior to reuse here.
  */
 import {
   applyCaseTransform,
@@ -67,53 +70,40 @@ import { resolveWordOverride } from './captionTransform.js';
  */
 export function canDrawCaptionFrame(cssConfig) {
   if (!cssConfig) return false;
-  if (!['sentence', 'rolling-stack'].includes(cssConfig.captionMode)) return false;
-  // Keyword-driven presets are out of scope for sentence mode (still on the
-  // ASS path — see the migration plan), but Rolling Stack REQUIRES keyword
-  // typography to differ from normal typography regardless of the base
-  // preset's own keywordDriven flag, so it's never excluded on that basis.
-  if (cssConfig.keywordDriven && cssConfig.captionMode !== 'rolling-stack') return false;
-  // Unified shadow: sentence mode still defers to the ASS pipeline's own
+  // 'word' mode is not a separate layout — see src/js/components/preview.js's
+  // syncVideoSubtitles, which feeds this exact sentence-mode renderer a
+  // synthetic one-word "phrase" so Word Mode gets the SAME selection/
+  // transform/keyword editing as every other mode instead of a second,
+  // unimplemented code path.
+  if (!['sentence', 'rolling-stack', 'word'].includes(cssConfig.captionMode)) return false;
+  // Unified shadow: sentence/word mode still defers to the ASS pipeline's own
   // offscreen-composited silhouette layer (unchanged, already correct — see
   // backend/utils/ffmpeg.js). Rolling Stack's graphics renderer implements
   // Unified mode itself (see renderRollingStackResolvedFrame's own
   // offscreen-composite technique), so it's never excluded on that basis.
   if (cssConfig.shadowMode === 'unified' && cssConfig.captionMode !== 'rolling-stack') return false;
-  if (cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent') return false; // boxed presets (e.g. bg-black) — no box-fill drawing yet
   return true;
 }
 
 /**
- * Sentence-mode presets actually verified end-to-end (preview AND export,
- * both driven by this renderer, visually compared) — see the migration
- * plan. This is intentionally a separate, narrower gate than
- * canDrawCaptionFrame(): that function describes what the renderer's CODE
- * currently supports in principle (mode/keyword/shadow/box scope), this
- * constant describes which SENTENCE-mode presets have actually been
- * validated enough to turn on for real users by default. Widening
- * canDrawCaptionFrame's scope (e.g. adding box-fill support) does NOT, by
- * itself, enable a preset here — add it explicitly once verified. Rolling
- * Stack mode doesn't use this list at all — see isGraphicsRendererDefault.
- */
-export const GRAPHICS_RENDERER_DEFAULT_PRESETS = ['bold-yellow', 'caps-white'];
-
-/**
  * Whether this resolved style should use the graphics renderer BY DEFAULT
- * (no opt-in flag required). Rolling Stack mode is always default when in
- * scope — there is no legacy rendering worth preferring over it (the
- * previous CSS/ASS Rolling Stack positioned its two layers independently
- * rather than as one bounded composition), so it isn't gated by preset.
- * Sentence mode stays gated to GRAPHICS_RENDERER_DEFAULT_PRESETS. Both the
- * preview (src/js/components/preview.js) and the export gate
+ * (no opt-in flag required). This is now identical to canDrawCaptionFrame —
+ * every mode/preset this renderer's code can draw IS the default for it, the
+ * same way Rolling Stack has always worked (no separate preset allowlist).
+ * caption mode/style choice affects LAYOUT only; it must never gate whether
+ * a caption is editable (selection/transform/word-drilldown — see
+ * src/js/components/canvasTransform.js, which reads generic box/word
+ * geometry and has no mode/preset branches of its own). A preset that isn't
+ * genuinely supported yet belongs in canDrawCaptionFrame's own scope check
+ * (currently just Unified Shadow in sentence mode), not a second gate here.
+ * Both the preview (src/js/components/preview.js) and the export gate
  * (backend/utils/graphicsFrameGenerator.js's canGenerateGraphicsFrames) call
  * this exact function, so "what's live" can never drift between the two.
  *
  * @param {object} cssConfig - Result of getCSSPreviewFromConfig(params).
  */
 export function isGraphicsRendererDefault(cssConfig) {
-  if (!canDrawCaptionFrame(cssConfig)) return false;
-  if (cssConfig.captionMode === 'rolling-stack') return true;
-  return GRAPHICS_RENDERER_DEFAULT_PRESETS.includes(cssConfig.profile?.id);
+  return canDrawCaptionFrame(cssConfig);
 }
 
 function toPx(cssLength, basisPx) {
@@ -230,7 +220,75 @@ function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, reference
   // visual center, and the feature spec requires rotation around center.
   const rotationDeg = parseFloat(params.rotation) || 0;
 
-  return { pxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge, rotationDeg };
+  // Boxed background (e.g. Boxed Black) — cssConfig.text.padding/borderRadius
+  // are the SAME CSS values the legacy DOM renderer already applies to
+  // #captions-text's `display:inline-block` box (see getCSSPreviewFromConfig's
+  // cssPadding/profile.cssBorderRadius), so the canvas fill below reproduces
+  // that exact box rather than inventing separate box-fill geometry. Padding
+  // is a two-value shorthand ("Ypx Xpx", vertical then horizontal — see
+  // getCSSPreviewFromConfig's cssPadding); a single "0" (unboxed) parses to
+  // 0/0 the same way.
+  const isBoxed = !!(cssConfig.backgroundColor && cssConfig.backgroundColor !== 'transparent');
+  const paddingParts = String(cssConfig.text.padding || '0').trim().split(/\s+/).map((v) => parseFloat(v) || 0);
+  const boxPadYPx = (paddingParts[0] || 0) * pxScale;
+  const boxPadXPx = (paddingParts.length > 1 ? paddingParts[1] : paddingParts[0] || 0) * pxScale;
+  const borderRadiusPx = (parseFloat(cssConfig.text.borderRadius) || 0) * pxScale;
+  const backgroundColor = cssConfig.backgroundColor;
+
+  return { pxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge, rotationDeg, isBoxed, boxPadXPx, boxPadYPx, borderRadiusPx, backgroundColor };
+}
+
+/**
+ * Draws a filled rounded rect behind the text block — the canvas counterpart
+ * of the legacy DOM renderer's `background` + `border-radius` on
+ * #captions-text (see getCSSPreviewFromConfig's cssBackground/cssBorderRadius),
+ * used by both sentence mode and Rolling Stack whenever geometry.isBoxed
+ * (e.g. Boxed Black) so a boxed preset looks the same regardless of which
+ * mode/renderer draws it. Manual arc path rather than ctx.roundRect(), which
+ * @napi-rs/canvas (the server-side export renderer) does not implement.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{x:number,y:number,width:number,height:number}} rect - Already padding-inflated (see getBoxFillRect).
+ * @param {object} geometry - resolveGeometry's result (reads borderRadiusPx/backgroundColor).
+ */
+function fillBoxBackground(ctx, rect, geometry) {
+  const { x, y, width, height } = rect;
+  const r = Math.max(0, Math.min(geometry.borderRadiusPx, width / 2, height / 2));
+  ctx.save();
+  ctx.fillStyle = geometry.backgroundColor;
+  ctx.beginPath();
+  if (r <= 0) {
+    ctx.rect(x, y, width, height);
+  } else {
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + width, y, x + width, y + height, r);
+    ctx.arcTo(x + width, y + height, x, y + height, r);
+    ctx.arcTo(x, y + height, x, y, r);
+    ctx.arcTo(x, y, x + width, y, r);
+    ctx.closePath();
+  }
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Inflates an unpadded text-block rect (as computed by computeSentenceLines/
+ * layoutRollingStackLines) by geometry's box padding — the box BOTH the
+ * background fill and the reported selection-overlay box use whenever
+ * geometry.isBoxed, so what's visibly boxed is exactly what's selectable,
+ * matching the legacy DOM renderer's own `display:inline-block; padding`
+ * box (see fillBoxBackground). Returns the unpadded rect unchanged when not
+ * boxed, so every non-boxed preset's box math is completely untouched.
+ */
+function getBoxFillRect(rect, geometry) {
+  if (!geometry.isBoxed) return rect;
+  const { boxPadXPx, boxPadYPx } = geometry;
+  return {
+    x: rect.x - boxPadXPx,
+    y: rect.y - boxPadYPx,
+    width: rect.width + boxPadXPx * 2,
+    height: rect.height + boxPadYPx * 2
+  };
 }
 
 /**
@@ -239,8 +297,9 @@ function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, reference
  * any Canvas2D implementation). Only handles the base active/inactive
  * highlight model (karaoke/instant color swap, pop scale, typewriter
  * reveal) — the same three branches syncVideoSubtitles() implements for
- * non-keyword-driven presets; canDrawCaptionFrame excludes keyword-driven
- * presets, which use a different, not-yet-implemented model.
+ * non-keyword-driven presets. Keyword-driven presets use a different model
+ * entirely (resolveWordStyleMetadata) — see computeSentenceLines's own
+ * keywordDriven branch, which never calls this function.
  */
 function resolveWordDrawSpec(word, drawCtx) {
   const { currentTime, mode, keywordsEnabled, keywordColor, activeHighlight, inactiveColor, params, profile } = drawCtx;
@@ -339,9 +398,66 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
 
   const resolvedFontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const wordUnits = activePhrase.words.map((w, idx) => {
-    const spec = resolveWordDrawSpec(w, drawCtx);
     const caseForWord = resolveWordTextCase(!!w.isKeyword, keywordsEnabled, params.textCase, cssConfig.keywordTextCase);
     const text = applyCaseTransform(w.word || w.text || '', caseForWord, idx === 0);
+
+    // Keyword-driven presets (e.g. WAYLES) derive a word's ENTIRE appearance
+    // (font/weight/italic/scale/color/shadow/outline) from
+    // resolveWordStyleMetadata — the exact same function Rolling Stack
+    // (resolveRollingStackChunkSpec) and the legacy CSS/DOM renderer
+    // (preview.js's syncVideoSubtitles) already call, so a keyword-driven
+    // preset's canvas output matches its CSS output exactly (see this
+    // module's SCOPE note) instead of falling back to the plain
+    // active/inactive model below. metadata.animation ('pop') is
+    // deliberately not read here — same simplification Rolling Stack's own
+    // resolveRollingStackChunkSpec documents ("No animation").
+    if (cssConfig.keywordDriven) {
+      const isWordActive = currentTime >= w.start && currentTime <= w.end;
+      const metadata = resolveWordStyleMetadata(w, {
+        keywordStyleConfig: cssConfig.keywordStyleConfig,
+        keywordsEnabled,
+        activeHighlightEnabled: cssConfig.activeHighlightEnabled,
+        isWordActive,
+        mode,
+        activeHighlightColorHex: activeHighlight,
+        inactiveColorHex: inactiveColor,
+        baseFontFamily: profile.fontFamily,
+        baseFontWeight: profile.fontWeight
+      });
+      // Matches preview.js's own opacity composition exactly: global Text
+      // Opacity only ever applies to keyword words, composed with the
+      // dedicated Keyword Opacity control; normal words are unaffected by
+      // either (activeHighlight/inactiveColor above already have global
+      // opacity baked in — see getCSSPreviewFromConfig).
+      const opacity = metadata.isKeyword
+        ? (params.textOpacity ?? 100) * (cssConfig.keywordStyleConfig.opacity ?? 100) / 100
+        : 100;
+      const wordFontFamily = (metadata.fontFamily || resolvedFontFamily || 'Poppins').toString();
+      const wordFontWeight = metadata.fontWeight || profile.fontWeight;
+      const ownFontSizePx = fontSizePx * (metadata.fontScale || 1);
+      const emphasisOffsetPx = (KEYWORD_EMPHASIS_ASS_DEPTH / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+      const useEmphasisOutline = !!metadata.outline;
+      const useEmphasisShadow = !!metadata.shadow;
+      return {
+        originalIndex: idx,
+        text,
+        visible: true,
+        color: applyOpacityToColor(metadata.colorHex, opacity),
+        scale: 1,
+        ownFontSizePx,
+        syntheticBold: needsSyntheticBold(wordFontFamily, parseInt(wordFontWeight, 10) || 0),
+        font: buildFontString({ fontFamily: wordFontFamily, fontWeight: wordFontWeight, italic: metadata.italic, fontSizePx: ownFontSizePx }),
+        outlineWidthPx: useEmphasisOutline ? emphasisOffsetPx : undefined,
+        outlineColor: useEmphasisOutline ? KEYWORD_EMPHASIS_OUTLINE_COLOR : undefined,
+        hasShadow: useEmphasisShadow || undefined,
+        shadowBlurPx: useEmphasisShadow ? emphasisOffsetPx * KEYWORD_EMPHASIS_BLUR_RATIO : undefined,
+        shadowOffsetXPx: useEmphasisShadow ? emphasisOffsetPx : undefined,
+        shadowOffsetYPx: useEmphasisShadow ? emphasisOffsetPx : undefined,
+        shadowColor: useEmphasisShadow ? KEYWORD_EMPHASIS_SHADOW_COLOR : undefined
+      };
+    }
+
+    const spec = resolveWordDrawSpec(w, drawCtx);
     return {
       originalIndex: idx,
       text,
@@ -422,6 +538,15 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   }
   ctx.globalAlpha = anim.alpha;
 
+  // Boxed background (e.g. Boxed Black) — drawn INSIDE the same rotation
+  // transform as the text so a rotated boxed caption's fill rotates with it,
+  // matching the legacy CSS renderer's single `display:inline-block`
+  // element (background + text always move together there too).
+  if (geometry.isBoxed) {
+    const rawRect = { x: centerX - computed.blockWidth / 2, y: computed.blockTop, width: computed.blockWidth, height: computed.totalHeight };
+    fillBoxBackground(ctx, getBoxFillRect(rawRect, geometry), geometry);
+  }
+
   lines.forEach((line) => {
     line.words.forEach((word) => {
       // wordIndex is the word's position in the ENTIRE flat transcript (see
@@ -467,19 +592,25 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
         }
       }
 
+      // A keyword-driven word carries its own outline/shadow/fontSize (see
+      // computeSentenceLines's keywordDriven branch) whenever it opts into
+      // the keyword tier's "soft emphasis" (shadowByDefault/outlineByDefault
+      // — see resolveWordStyleMetadata); every other word (including every
+      // word of a non-keyword-driven preset) falls back to the frame-level
+      // Shadow/Outline slider values exactly as before this feature existed.
       paintText(ctx, word.text, word.centerX, word.baselineY, {
         font: word.font,
         color: word.color,
         scale: word.scale,
         syntheticBold: word.syntheticBold,
-        fontSizePx,
-        outlineWidthPx,
-        outlineColor,
-        hasShadow,
-        shadowBlurPx,
-        shadowOffsetXPx,
-        shadowOffsetYPx,
-        shadowColor
+        fontSizePx: word.ownFontSizePx ?? fontSizePx,
+        outlineWidthPx: word.outlineWidthPx ?? outlineWidthPx,
+        outlineColor: word.outlineColor ?? outlineColor,
+        hasShadow: word.hasShadow ?? hasShadow,
+        shadowBlurPx: word.shadowBlurPx ?? shadowBlurPx,
+        shadowOffsetXPx: word.shadowOffsetXPx ?? shadowOffsetXPx,
+        shadowOffsetYPx: word.shadowOffsetYPx ?? shadowOffsetYPx,
+        shadowColor: word.shadowColor ?? shadowColor
       });
 
       if (override) ctx.restore();
@@ -526,11 +657,19 @@ export function measureSentenceFrame(ctx, opts) {
       height: w.height
     }))
   );
+  // Boxed background (e.g. Boxed Black): report the PADDED box — the same
+  // one fillBoxBackground draws and the user actually sees — so the
+  // selection overlay covers the visible box, not just the unpadded text.
+  // Per-word rects above stay unpadded (real glyph positions for hit-testing).
+  const outerRect = getBoxFillRect(
+    { x: computed.centerX - computed.blockWidth / 2, y: computed.blockTop, width: computed.blockWidth, height: computed.totalHeight },
+    geometry
+  );
   return {
-    x: computed.centerX - computed.blockWidth / 2,
-    y: computed.blockTop,
-    width: computed.blockWidth,
-    height: computed.totalHeight,
+    x: outerRect.x,
+    y: outerRect.y,
+    width: outerRect.width,
+    height: outerRect.height,
     centerX: computed.centerX,
     centerY: computed.centerY,
     rotationDeg: geometry.rotationDeg,
@@ -991,6 +1130,15 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     const layout = layoutRollingStackLines(targetCtx, windowChunks, cssConfig, params, geometry, alignment);
     targetCtx.save();
     applyRotation(targetCtx, layout.centerX, layout.centerY);
+    // Boxed background (e.g. Boxed Black) — same treatment as sentence
+    // mode's renderResolvedFrame (see fillBoxBackground's doc comment):
+    // drawn first, inside the rotation transform, so it rotates with the
+    // text and (in Unified Shadow mode below) becomes part of the
+    // offscreen silhouette the shadow is cast from.
+    if (geometry.isBoxed) {
+      const rawRect = { x: layout.centerX - layout.blockWidth / 2, y: layout.blockTop, width: layout.blockWidth, height: layout.totalHeight };
+      fillBoxBackground(targetCtx, getBoxFillRect(rawRect, geometry), geometry);
+    }
     drawIntoCtx(targetCtx, layout);
     targetCtx.restore();
     return layout;
@@ -1079,11 +1227,17 @@ export function measureRollingStackFrame(ctx, opts) {
     height: line.lineHeightPx,
     words: line.words
   }));
+  // Boxed background: report the padded box, same as measureSentenceFrame —
+  // per-chunk/word rects above stay unpadded (real glyph positions).
+  const outerRect = getBoxFillRect(
+    { x: layout.centerX - layout.blockWidth / 2, y: layout.blockTop, width: layout.blockWidth, height: layout.totalHeight },
+    geometry
+  );
   return {
-    x: layout.centerX - layout.blockWidth / 2,
-    y: layout.blockTop,
-    width: layout.blockWidth,
-    height: layout.totalHeight,
+    x: outerRect.x,
+    y: outerRect.y,
+    width: outerRect.width,
+    height: outerRect.height,
     centerX: layout.centerX,
     centerY: layout.centerY,
     rotationDeg: geometry.rotationDeg,

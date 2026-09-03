@@ -103,9 +103,9 @@ export function PreviewStage({
             <div className="captions-text" id="captions-text" />
           </div>
           {/* Shared Canvas2D graphics-renderer overlay (see shared/captionGraphics.js).
-              Hidden/inert unless window.__USE_GRAPHICS_CAPTIONS__ is set — an internal
-              dev flag for comparing the new renderer against the CSS overlay above
-              during migration; it renders nothing by default and does not replace it. */}
+              Live for every caption mode/preset canDrawCaptionFrame() accepts
+              (currently everything except Unified Shadow, which still falls
+              through to the CSS overlay above); hidden/inert otherwise. */}
           <canvas className="captions-canvas" id="captions-canvas" />
           {/* On-canvas caption transform overlay (editor-only UI — see
               src/js/components/canvasTransform.js). Never rendered into the
