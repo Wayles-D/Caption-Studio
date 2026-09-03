@@ -38,11 +38,10 @@
  * src/js/components/preview.js's syncVideoSubtitles) rather than a separate
  * code path — selection/editing is therefore uniform across every caption
  * mode and preset; only layout (sentence vs. stacked vs. single-word) and
- * Rolling Stack's own chunk-grouping differ. Unified Shadow mode is the one
- * remaining sentence-mode gap (still deferred to the ASS pipeline's own
- * offscreen-composited silhouette — see canDrawCaptionFrame) since Rolling
- * Stack's offscreen-composite technique for it is Rolling-Stack-specific
- * layout, not a shared behavior to reuse here.
+ * Rolling Stack's own chunk-grouping differ. Unified Shadow mode is handled
+ * by every mode via its own offscreen-composite branch (paintSentenceComposite
+ * for sentence/word, renderRollingStackResolvedFrame for Rolling Stack) — see
+ * canDrawCaptionFrame — so callers must supply createOffscreenCanvas.
  */
 import {
   applyCaseTransform,
@@ -76,12 +75,11 @@ export function canDrawCaptionFrame(cssConfig) {
   // transform/keyword editing as every other mode instead of a second,
   // unimplemented code path.
   if (!['sentence', 'rolling-stack', 'word'].includes(cssConfig.captionMode)) return false;
-  // Unified shadow: sentence/word mode still defers to the ASS pipeline's own
-  // offscreen-composited silhouette layer (unchanged, already correct — see
-  // backend/utils/ffmpeg.js). Rolling Stack's graphics renderer implements
-  // Unified mode itself (see renderRollingStackResolvedFrame's own
-  // offscreen-composite technique), so it's never excluded on that basis.
-  if (cssConfig.shadowMode === 'unified' && cssConfig.captionMode !== 'rolling-stack') return false;
+  // Unified shadow is implemented by every mode now — sentence/word mode via
+  // renderResolvedFrame's own offscreen-composite branch (see
+  // paintSentenceComposite), Rolling Stack via renderRollingStackResolvedFrame
+  // — both requiring the caller to supply createOffscreenCanvas (see
+  // drawCaptionFrame/drawCaptionFrameForExport/drawRollingStackFrame).
   return true;
 }
 
@@ -502,41 +500,26 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
   return { lines, lineHeightPx, totalHeight, blockTop, blockWidth, centerX: anchorX, centerY: blockTop + totalHeight / 2 };
 }
 
-function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry }) {
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-  if (!activePhrase || !activePhrase.words || !activePhrase.words.length) return;
+/**
+ * Paints the sentence-mode block's boxed background + every word (with
+ * per-word on-canvas transform/animation overrides) into `targetCtx`, with
+ * NO phrase-level rotation/animation transform and NO Unified shadow — those
+ * are applied by the caller around either this function's direct ctx (the
+ * ordinary None/Individual shadow path) or a drop-shadowed drawImage of an
+ * offscreen canvas this function painted into (the Unified shadow path) —
+ * see renderResolvedFrame. Rotation IS applied here (baked into whichever
+ * surface this paints onto), matching Rolling Stack's own
+ * paintComposite/renderRollingStackResolvedFrame split.
+ */
+function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, activePhrase, params, currentTime, canvasWidth, canvasHeight, geometry }) {
+  const { fontSizePx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, rotationDeg } = geometry;
 
-  const {
-    fontSizePx, outlineWidthPx, outlineColor, hasShadow,
-    shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, rotationDeg
-  } = geometry;
-
-  const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
-  if (!computed) return;
-  const { lines, centerX, centerY } = computed;
-
-  // Entrance animation (shared/captionAnimation.js) — anchored to the whole
-  // PHRASE's own [start,end), not any individual word's, so it fires once
-  // when the caption block first appears, independent of animationMode's
-  // per-word highlight timing. Resolves to the identity transform (no-op)
-  // whenever captionAnimationType is 'none', reproducing prior output exactly.
-  const anim = getAnimationTransform(params, currentTime, activePhrase.start, activePhrase.end);
-
-  ctx.save();
-  // Slide offset is applied in plain screen space, BEFORE rotation, so a
-  // manually-rotated caption still slides in along a straight screen-space
-  // line rather than along its own tilted axis (see this module's animation
-  // integration notes).
-  if (anim.offsetXRatio || anim.offsetYRatio) {
-    ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+  targetCtx.save();
+  if (rotationDeg) {
+    targetCtx.translate(centerX, centerY);
+    targetCtx.rotate((rotationDeg * Math.PI) / 180);
+    targetCtx.translate(-centerX, -centerY);
   }
-  if (rotationDeg || anim.scale !== 1) {
-    ctx.translate(centerX, centerY);
-    if (rotationDeg) ctx.rotate((rotationDeg * Math.PI) / 180);
-    if (anim.scale !== 1) ctx.scale(anim.scale, anim.scale);
-    ctx.translate(-centerX, -centerY);
-  }
-  ctx.globalAlpha = anim.alpha;
 
   // Boxed background (e.g. Boxed Black) — drawn INSIDE the same rotation
   // transform as the text so a rotated boxed caption's fill rotates with it,
@@ -544,7 +527,7 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   // element (background + text always move together there too).
   if (geometry.isBoxed) {
     const rawRect = { x: centerX - computed.blockWidth / 2, y: computed.blockTop, width: computed.blockWidth, height: computed.totalHeight };
-    fillBoxBackground(ctx, getBoxFillRect(rawRect, geometry), geometry);
+    fillBoxBackground(targetCtx, getBoxFillRect(rawRect, geometry), geometry);
   }
 
   lines.forEach((line) => {
@@ -561,34 +544,35 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
         // own pivot, on top of whatever the block's own rotation/position
         // already did — a sibling word with no override is entirely
         // untouched by this ctx.save/restore pair.
-        ctx.save();
+        targetCtx.save();
         const pivotX = word.centerX;
         const pivotY = word.centerY;
-        ctx.translate(pivotX + (override.offsetXPx || 0), pivotY + (override.offsetYPx || 0));
-        if (override.rotationDeg) ctx.rotate((override.rotationDeg * Math.PI) / 180);
-        if (override.fontScale && override.fontScale !== 1) ctx.scale(override.fontScale, override.fontScale);
-        ctx.translate(-pivotX, -pivotY);
+        targetCtx.translate(pivotX + (override.offsetXPx || 0), pivotY + (override.offsetYPx || 0));
+        if (override.rotationDeg) targetCtx.rotate((override.rotationDeg * Math.PI) / 180);
+        if (override.fontScale && override.fontScale !== 1) targetCtx.scale(override.fontScale, override.fontScale);
+        targetCtx.translate(-pivotX, -pivotY);
 
         // Per-word entrance animation (keyword editing scope) — same
         // shared/captionAnimation.js engine the caption/Rolling-Stack-window
         // level animation uses, just anchored to THIS WORD's own [start,end)
         // instead of the whole phrase's. Composes with (doesn't replace) the
         // caption-level animation already applied around the whole block
-        // further up this function.
+        // (either directly, or via the Unified-shadow offscreen composite —
+        // see renderResolvedFrame).
         if (override.animationType && override.animationType !== 'none' && sourceWord) {
           const wordAnim = getAnimationTransform(
             { captionAnimationType: override.animationType, captionAnimationDuration: override.animationDuration, captionAnimationEasing: override.animationEasing, captionAnimationIntensity: override.animationIntensity },
             currentTime, sourceWord.start, sourceWord.end
           );
           if (wordAnim.scale !== 1) {
-            ctx.translate(pivotX, pivotY);
-            ctx.scale(wordAnim.scale, wordAnim.scale);
-            ctx.translate(-pivotX, -pivotY);
+            targetCtx.translate(pivotX, pivotY);
+            targetCtx.scale(wordAnim.scale, wordAnim.scale);
+            targetCtx.translate(-pivotX, -pivotY);
           }
           if (wordAnim.offsetXRatio || wordAnim.offsetYRatio) {
-            ctx.translate(wordAnim.offsetXRatio * canvasWidth, wordAnim.offsetYRatio * canvasHeight);
+            targetCtx.translate(wordAnim.offsetXRatio * canvasWidth, wordAnim.offsetYRatio * canvasHeight);
           }
-          ctx.globalAlpha *= wordAnim.alpha;
+          targetCtx.globalAlpha *= wordAnim.alpha;
         }
       }
 
@@ -598,7 +582,7 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
       // — see resolveWordStyleMetadata); every other word (including every
       // word of a non-keyword-driven preset) falls back to the frame-level
       // Shadow/Outline slider values exactly as before this feature existed.
-      paintText(ctx, word.text, word.centerX, word.baselineY, {
+      paintText(targetCtx, word.text, word.centerX, word.baselineY, {
         font: word.font,
         color: word.color,
         scale: word.scale,
@@ -613,10 +597,98 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
         shadowColor: word.shadowColor ?? shadowColor
       });
 
-      if (override) ctx.restore();
+      if (override) targetCtx.restore();
     });
   });
 
+  targetCtx.restore();
+}
+
+function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas }) {
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  if (!activePhrase || !activePhrase.words || !activePhrase.words.length) return;
+
+  const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
+  if (!computed) return;
+  const { lines, centerX, centerY } = computed;
+
+  const shadowMode = resolveShadowMode(params);
+
+  // Entrance animation (shared/captionAnimation.js) — anchored to the whole
+  // PHRASE's own [start,end), not any individual word's, so it fires once
+  // when the caption block first appears, independent of animationMode's
+  // per-word highlight timing. Resolves to the identity transform (no-op)
+  // whenever captionAnimationType is 'none', reproducing prior output exactly.
+  const anim = getAnimationTransform(params, currentTime, activePhrase.start, activePhrase.end);
+
+  const paintArgs = { lines, centerX, centerY, computed, activePhrase, params, currentTime, canvasWidth, canvasHeight, geometry };
+
+  // Unified shadow: the whole block (boxed background + every word, per-word
+  // overrides/animations included) is first painted onto an offscreen canvas
+  // with no per-glyph shadow, then that ONE offscreen image is drawn onto the
+  // real canvas with a single drop-shadow — producing one combined
+  // silhouette-shaped shadow behind the entire caption (not one blurred copy
+  // per word, which would show visible gaps at larger blur radii). Same
+  // technique as Rolling Stack's renderRollingStackResolvedFrame; requires
+  // `createOffscreenCanvas` (supplied by the caller — this module has no DOM/
+  // Node canvas-construction of its own). Falls back to the direct-paint path
+  // (still shadowless, since geometry only sets hasShadow for 'individual')
+  // if it isn't provided, rather than silently guessing at a shadow.
+  if (shadowMode === 'unified' && createOffscreenCanvas) {
+    const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
+    const offCtx = offscreen.getContext('2d');
+    paintSentenceComposite(offCtx, paintArgs);
+
+    // The offscreen canvas already contains the rotated composition (rotation
+    // is baked in while painting, above) — drawImage below is a plain,
+    // unrotated pixel copy, so the shadow/animation transform it casts/
+    // applies is the correctly-rotated silhouette too.
+    const uni = resolveUnifiedShadowParams(params);
+    const textOpacity = params.textOpacity ?? 100;
+    ctx.save();
+    if (anim.offsetXRatio || anim.offsetYRatio) {
+      ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+    }
+    if (anim.scale !== 1) {
+      ctx.translate(centerX, centerY);
+      ctx.scale(anim.scale, anim.scale);
+      ctx.translate(-centerX, -centerY);
+    }
+    ctx.globalAlpha = anim.alpha;
+    ctx.shadowColor = applyOpacityToColor(uni.colorHex, (uni.opacity * textOpacity) / 100);
+    ctx.shadowBlur = (uni.blurAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+    ctx.shadowOffsetX = (uni.offsetXAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+    ctx.shadowOffsetY = (uni.offsetYAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+    ctx.drawImage(offscreen, 0, 0);
+    ctx.restore();
+    return;
+  }
+
+  // None/Individual shadow mode (byte-for-byte the same output as before the
+  // Unified-shadow branch above existed): rotation and the phrase-level
+  // entrance animation are applied directly around the live paint, no
+  // offscreen composite needed since there's no single silhouette shadow to
+  // cast.
+  ctx.save();
+  // Slide offset is applied in plain screen space, BEFORE rotation, so a
+  // manually-rotated caption still slides in along a straight screen-space
+  // line rather than along its own tilted axis (see this module's animation
+  // integration notes).
+  if (anim.offsetXRatio || anim.offsetYRatio) {
+    ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+  }
+  if (anim.scale !== 1) {
+    ctx.translate(centerX, centerY);
+    ctx.scale(anim.scale, anim.scale);
+    ctx.translate(-centerX, -centerY);
+  }
+  ctx.globalAlpha = anim.alpha;
+  // Rotation itself is applied inside paintSentenceComposite (baked around
+  // the same center point) — for a uniform scale this commutes with rotation
+  // around a shared center, so applying scale here and rotation inside
+  // paintSentenceComposite reproduces the prior single-combined-transform
+  // output exactly.
+  paintSentenceComposite(ctx, paintArgs);
   ctx.restore();
 }
 
@@ -767,11 +839,12 @@ function paintText(ctx, text, x, y, style) {
  * @param {number} opts.currentTime - Seconds, same clock as word.start/end.
  * @param {object} opts.cssConfig - Result of getCSSPreviewFromConfig(params).
  * @param {object} opts.params - The same raw params object passed into getCSSPreviewFromConfig.
+ * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode; see renderResolvedFrame/paintSentenceComposite.
  */
 export function drawCaptionFrame(ctx, opts) {
-  const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, cssPixelWidth } = opts;
+  const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, cssPixelWidth, createOffscreenCanvas } = opts;
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
-  renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry });
+  renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas });
 }
 
 /**
@@ -791,11 +864,12 @@ export function drawCaptionFrame(ctx, opts) {
  * @param {number} opts.currentTime
  * @param {object} opts.cssConfig - Result of getCSSPreviewFromConfig(params).
  * @param {object} opts.params
+ * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode; see renderResolvedFrame/paintSentenceComposite.
  */
 export function drawCaptionFrameForExport(ctx, opts) {
-  const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params } = opts;
+  const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, createOffscreenCanvas } = opts;
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, PHONE_FRAME_CSS_WIDTH);
-  renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry });
+  renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas });
 }
 
 /* =========================================================================

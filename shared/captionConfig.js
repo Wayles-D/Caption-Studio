@@ -820,7 +820,7 @@ export function getASSStyleFromConfig(params = {}) {
   // via an inline \pos() tag, matching the CSS preview's left/top % + centered
   // transform anchor point exactly (both anchor at the same relative point).
   const posOverrideTag = posKey === 'manual'
-    ? `\\an5\\pos(${Math.round((parseFloat(params.customPosX ?? 50) / 100) * 1080)},${Math.round((parseFloat(params.customPosY ?? 85) / 100) * 1920)})`
+    ? `{\\an5\\pos(${Math.round((parseFloat(params.customPosX ?? 50) / 100) * 1080)},${Math.round((parseFloat(params.customPosY ?? 85) / 100) * 1920)})}`
     : null;
 
   const presetKey = params.preset && CREATOR_PROFILES[params.preset] ? params.preset : 'bold-yellow';

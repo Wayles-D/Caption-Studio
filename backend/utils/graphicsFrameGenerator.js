@@ -195,7 +195,8 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
       activePhrase: phrase,
       currentTime: slice.start,
       cssConfig,
-      params
+      params,
+      createOffscreenCanvas: (w, h) => createCanvas(w, h)
     });
 
     // Named by its own start time (milliseconds), not a per-call index — this

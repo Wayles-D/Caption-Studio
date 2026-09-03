@@ -21,6 +21,15 @@
  *   KEYWORD word (see src/js/components/canvasTransform.js's
  *   selectedIsKeyword) — a selected caption or plain normal word ignores it
  *   entirely, exactly like transformApplyScope is ignored for word edits.
+ * - `animationApplyScope` — a THIRD independent scope axis, this time for
+ *   the on-canvas entrance-animation control specifically. Kept separate
+ *   from both fields above (not a repurposing of either) because animation
+ *   scope cross-cuts word/keyword/caption in a way position scope doesn't:
+ *   'this' (this word/this keyword), 'same-type' (all keywords, or all
+ *   normal words — which one depends on whether the current selection is a
+ *   keyword), 'all-words' (every word regardless of type), 'this-caption',
+ *   'all-captions'. See canvasTransform.js's applyAnimationFields/
+ *   getWordIndexesForAnimationScope for the exact fan-out each value means.
  *
  * Still undo-tracked alongside editorStore's fields — see
  * src/js/state.js's STYLE_KEYS, which spans both stores — so this being a
@@ -32,7 +41,8 @@ export const TRANSFORM_DEFAULTS = {
   rotation: 0,
   captionTransforms: {},
   transformApplyScope: "all",
-  keywordApplyScope: "this"
+  keywordApplyScope: "this",
+  animationApplyScope: "this"
 };
 
 export const useTransformStore = create(() => ({ ...TRANSFORM_DEFAULTS }));

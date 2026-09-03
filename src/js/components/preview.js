@@ -127,7 +127,17 @@ function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, p
     activePhrase,
     currentTime,
     cssConfig,
-    params
+    params,
+    // Unified shadow mode needs to composite the whole caption block
+    // offscreen before applying one drop-shadow to it — see
+    // renderResolvedFrame/paintSentenceComposite's doc comment. A plain
+    // in-DOM <canvas> (never attached) works fine as a scratch surface here.
+    createOffscreenCanvas: (w, h) => {
+      const off = document.createElement('canvas');
+      off.width = w;
+      off.height = h;
+      return off;
+    }
   };
   drawCaptionFrame(prepped.ctx, drawOpts);
   // Same ctx (fonts already loaded into it above) so measureText resolves
@@ -471,8 +481,9 @@ export function syncVideoSubtitles() {
     // unimplemented code path; `activePhrase` (the real, full phrase) is
     // still what's passed to updateCanvasTransformOverlay so "This Caption"/
     // "All Captions" scope keys off the real caption, not the one-word
-    // stand-in. Falls back to the legacy CSS renderer only when the
-    // graphics renderer doesn't cover this cssConfig at all (Unified Shadow).
+    // stand-in. The legacy CSS renderer below is now unreachable in practice
+    // (canDrawCaptionFrame covers every mode/shadow combo) but stays as a
+    // fallback if canDrawCaptionFrame's scope ever narrows again.
     const activeWord = activePhrase.words.find((w) => currentTime >= w.start && currentTime <= w.end);
     if (activeWord && canDrawCaptionFrame(cssConfig) && captionsCanvas) {
       const singleWordPhrase = { words: [activeWord], breakAfterIndices: [], start: activePhrase.start, end: activePhrase.end };
@@ -490,8 +501,8 @@ export function syncVideoSubtitles() {
   // appState.rollingStackLayerCount stacked chunks (see
   // shared/rollingStack.js's resolveRollingStackWindow — Active-Word
   // Selection). Graphics-renderer path first (see canDrawCaptionFrame's
-  // rolling-stack scope note); falls back to the legacy CSS renderer only
-  // for combinations still out of scope (boxed backgrounds, Unified Shadow).
+  // rolling-stack scope note); the legacy CSS renderer branch stays as a
+  // fallback only.
   if (appState.captionMode === 'rolling-stack') {
     if (canDrawCaptionFrame(cssConfig) && captionsCanvas) {
       const chunks = buildRollingStackChunks(activePhrase.words);
@@ -508,10 +519,9 @@ export function syncVideoSubtitles() {
     return;
   }
 
-  // Graphics-renderer path — live for every preset now (see
-  // isGraphicsRendererDefault's doc comment); falls straight through to the
-  // existing CSS/DOM rendering below only for the remaining Unified-Shadow
-  // gap canDrawCaptionFrame still excludes.
+  // Graphics-renderer path — live for every preset now, including Unified
+  // Shadow (see isGraphicsRendererDefault's doc comment); the CSS/DOM
+  // rendering below stays as a fallback only.
   const useGraphicsRenderer = isGraphicsRendererDefault(cssConfig);
   if (useGraphicsRenderer && captionsCanvas) {
     const box = drawGraphicsCanvasFrame(captionsCanvas, activePhrase, currentTime, cssConfig, params);

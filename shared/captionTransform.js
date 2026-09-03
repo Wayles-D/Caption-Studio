@@ -53,6 +53,18 @@ export function resolvePhraseParams(baseParams, phrase) {
   }
   if (override.rotation != null) merged.rotation = override.rotation;
   if (override.fontSize != null) merged.fontSize = override.fontSize;
+  // Caption-level entrance animation, scoped to "This Caption" — the
+  // per-target animation scope feature (src/js/components/canvasTransform.js)
+  // writes these onto THIS phrase's own override exactly like every other
+  // "This Caption" field above; without merging them here, a "This Caption"
+  // animation choice would update captionTransforms correctly but never
+  // actually reach shared/captionAnimation.js's getAnimationTransform (which
+  // only ever reads captionAnimationType/Duration/Easing/Intensity off the
+  // resolved params object), silently doing nothing.
+  if (override.animationType != null) merged.captionAnimationType = override.animationType;
+  if (override.animationDuration != null) merged.captionAnimationDuration = override.animationDuration;
+  if (override.animationEasing != null) merged.captionAnimationEasing = override.animationEasing;
+  if (override.animationIntensity != null) merged.captionAnimationIntensity = override.animationIntensity;
 
   return merged;
 }

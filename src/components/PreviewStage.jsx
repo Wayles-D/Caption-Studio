@@ -142,7 +142,22 @@ export function PreviewStage({
                 <button type="button" className="caption-transform-scope-btn" id="btn-transform-group-start" hidden>Group Words</button>
                 <span className="caption-transform-keyword-multiselect-label" id="caption-transform-group-multiselect-label" hidden>0 selected</span>
                 <button type="button" className="caption-transform-reset-btn" id="btn-transform-group-confirm" hidden>Group</button>
-                <select className="caption-transform-keyword-animation-select" id="select-keyword-transform-animation" hidden defaultValue="none">
+                {/* Visually separates this Animation section from the
+                    position/resize/rotate scope buttons above — both use
+                    "This Keyword"/"This Caption"/etc. labels but drive two
+                    completely independent scope choices (see
+                    canvasTransform.js's animationApplyScope). */}
+                <span className="caption-transform-section-label" id="caption-transform-animation-label" hidden>Animation</span>
+                {/* Animation — connected to the SAME shared animation engine
+                    (shared/captionAnimation.js) the sidebar's Animation
+                    section uses; duration/easing/intensity still come from
+                    those sidebar controls, this only picks the entrance
+                    TYPE and, via the scope buttons below, the TARGET the
+                    type applies to. Available whenever anything is selected
+                    (word, keyword, caption, or group) — not keyword-only.
+                    See canvasTransform.js's updateScopeButtons/
+                    applyAnimationFields. */}
+                <select className="caption-transform-keyword-animation-select" id="select-canvas-animation-type" hidden defaultValue="none">
                   <option value="none">No animation</option>
                   <option value="fade">Fade</option>
                   <option value="pop">Pop</option>
@@ -152,6 +167,18 @@ export function PreviewStage({
                   <option value="slide-left">Slide Left</option>
                   <option value="slide-right">Slide Right</option>
                 </select>
+                {/* Animation scope — which target(s) receive the animation
+                    chosen above, independent of appState.transformApplyScope/
+                    keywordApplyScope (move/resize/rotate's own scope
+                    choices). Label text and which buttons show depend on
+                    the current selection target — see updateScopeButtons.
+                    "This Word"/"This Keyword" share one button (label swaps);
+                    likewise "All Keywords"/"All Normal Words". */}
+                <button type="button" className="caption-transform-scope-btn" id="btn-anim-scope-this" hidden>This Word</button>
+                <button type="button" className="caption-transform-scope-btn" id="btn-anim-scope-same-type" hidden>All Normal Words</button>
+                <button type="button" className="caption-transform-scope-btn" id="btn-anim-scope-all-words" hidden>All Words</button>
+                <button type="button" className="caption-transform-scope-btn" id="btn-anim-scope-this-caption" hidden>This Caption</button>
+                <button type="button" className="caption-transform-scope-btn" id="btn-anim-scope-all-captions" hidden>All Captions</button>
                 <button type="button" className="caption-transform-reset-btn" id="btn-transform-reset">Reset</button>
                 <span className="caption-transform-rotation-label" id="caption-transform-rotation-label" />
               </div>

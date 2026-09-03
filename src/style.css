@@ -321,6 +321,23 @@ body.light-theme {
   background: #6366F1;
 }
 
+/* Disambiguates the Animation section's own scope buttons ("This Keyword"/
+   "This Caption"/etc.) from the visually-identical labels the position/
+   resize/rotate scope buttons above already use — two independent scope
+   systems (see canvasTransform.js's animationApplyScope vs.
+   transformApplyScope/keywordApplyScope) would otherwise look like one
+   confusing/duplicated button row. */
+.caption-transform-section-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.5);
+  padding: 0 2px;
+  flex-basis: 100%;
+  text-align: center;
+}
+
 .caption-transform-toolbar {
   position: absolute;
   bottom: 100%;

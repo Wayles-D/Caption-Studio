@@ -57,7 +57,8 @@ import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/capt
 import { setWordKeyword } from './transcriptEditorState.js';
 
 let overlayEl, hitAreaEl, boxEl, rotateHandleEl, scopeThisBtn, scopeAllBtn, resetBtn, rotationLabelEl;
-let scopeThisKeywordBtn, scopeAllKeywordsBtn, scopeSelectKeywordsBtn, keywordMultiSelectDoneBtn, keywordMultiSelectLabelEl, keywordAnimationSelect;
+let scopeThisKeywordBtn, scopeAllKeywordsBtn, scopeSelectKeywordsBtn, keywordMultiSelectDoneBtn, keywordMultiSelectLabelEl;
+let animationTypeSelect, animScopeThisBtn, animScopeSameTypeBtn, animScopeAllWordsBtn, animScopeThisCaptionBtn, animScopeAllCaptionsBtn, animationSectionLabelEl;
 let keywordToggleBtn, groupStartBtn, groupConfirmBtn, groupMultiSelectLabelEl;
 let selected = false;
 let currentBox = null; // { x, y, width, height, centerX, centerY, rotationDeg, pxScale, phrase, mode, words?, chunks? } in canvas backing-store px
@@ -402,9 +403,26 @@ function applyWordTransformFields(wordIndex, fields, { recordHistory }) {
  * caption, not just the currently visible one, using the real isKeyword
  * flag/wordIndex identity rather than matching on text (per this feature's
  * own requirement).
+ *
+ * appState.words entries don't carry their own `.wordIndex` field (only
+ * phrase-embedded word copies do, stamped by backend/utils/phraseGrouper.js)
+ * — a flat word's ARRAY POSITION doubles as its wordIndex instead (the same
+ * identity convention transcriptEditorState.js's applyLiveWordEdit/
+ * setWordKeyword and collectEditedWords already rely on), so this maps over
+ * the array index, not a non-existent `w.wordIndex` property.
  */
 function getAllKeywordWordIndexes() {
-  return (appState.words || []).filter((w) => w.isKeyword).map((w) => w.wordIndex);
+  return (appState.words || []).reduce((acc, w, i) => { if (w.isKeyword) acc.push(i); return acc; }, []);
+}
+
+/** Word-scope counterpart to getAllKeywordWordIndexes — every NORMAL (non-keyword) word's index across the whole transcript. */
+function getAllNormalWordIndexes() {
+  return (appState.words || []).reduce((acc, w, i) => { if (!w.isKeyword) acc.push(i); return acc; }, []);
+}
+
+/** Every word's index across the whole transcript, regardless of keyword status — backs the "All Words" animation scope. */
+function getAllWordIndexesFlat() {
+  return (appState.words || []).map((_, i) => i);
 }
 
 /** Whether `wordIndex` is currently a keyword, per the actual word data (not appearance) — see getWordCandidates. */
@@ -461,16 +479,112 @@ function resetKeywordScopedTransform(wordIndex) {
 }
 
 /**
- * Clears keyword-scope UI state back to its defaults — called whenever the
- * selection ANCHOR changes (a different word/caption is clicked, or nothing
- * is selected at all) so a scope choice never silently carries over onto an
- * unrelated later edit. Deliberately NOT called between edits to the SAME
- * still-selected keyword, so choosing "All Keywords" once and then dragging
- * several times in a row keeps applying to all of them, as expected.
+ * ANIMATION TARGET + SCOPE — a target/scope system independent of both
+ * transformApplyScope (move/resize/rotate's caption-only scope) and
+ * keywordApplyScope (move/resize/rotate's keyword fan-out): "what is
+ * selected" (selectedWordIndex/selectedGroupId) determines the DEFAULT
+ * target, but appState.animationApplyScope lets the user explicitly widen
+ * it before applying an animation — see this feature's own doc comment in
+ * transformStore.js for the full value list.
+ *
+ * Resolves which wordIndexes an animation field-write should fan out to for
+ * a WORD-level scope value ('this'/'same-type'/'all-words'). 'this-caption'/
+ * 'all-captions' are handled by the caller (applyAnimationFields) instead,
+ * since those escalate to a phrase-level write, not a per-word one.
+ */
+function getWordIndexesForAnimationScope(scope, wordIndex) {
+  if (wordIndex == null) return [];
+  if (scope === 'all-words') return getAllWordIndexesFlat();
+  if (scope === 'same-type') {
+    return isKeywordIndex(wordIndex) ? getAllKeywordWordIndexes() : getAllNormalWordIndexes();
+  }
+  return [wordIndex];
+}
+
+/**
+ * Caption-level counterpart to applyTransformFields, but driven by an
+ * explicit `isAllCaptions` flag instead of reading appState.transformApplyScope
+ * — animation's caption-level scope is its OWN independent choice
+ * (appState.animationApplyScope), not a repurposing of the position/resize/
+ * rotate scope toggle, so a user can have "All Captions" position but "This
+ * Caption" animation (or vice versa) without the two fighting over one
+ * shared field. Otherwise identical semantics to applyTransformFields:
+ * "this caption" writes into captionTransforms[phraseKey]; "all captions"
+ * writes the same field names onto global appState (which
+ * shared/captionAnimation.js's resolveAnimationConfig already reads as the
+ * fallback for any un-overridden phrase) and releases this phrase's own
+ * leftover override so it doesn't keep rendering stale.
+ */
+function applyPhraseAnimationFields(fields, isAllCaptions, { recordHistory }) {
+  const targetPhrase = currentBox?.phrase;
+  if (!targetPhrase) return;
+  if (!isAllCaptions) {
+    const key = getPhraseTransformKey(targetPhrase);
+    const existing = appState.captionTransforms[key] || {};
+    const nextMap = { ...appState.captionTransforms, [key]: { ...existing, ...fields } };
+    updateState({ captionTransforms: nextMap }, { recordHistory });
+    return;
+  }
+  const globalFields = {
+    captionAnimationType: fields.animationType,
+    captionAnimationDuration: fields.animationDuration,
+    captionAnimationEasing: fields.animationEasing,
+    captionAnimationIntensity: fields.animationIntensity
+  };
+  let nextTransforms = appState.captionTransforms;
+  const key = getPhraseTransformKey(targetPhrase);
+  if (key in nextTransforms) {
+    nextTransforms = { ...nextTransforms };
+    delete nextTransforms[key];
+  }
+  updateState({ ...globalFields, captionTransforms: nextTransforms }, { recordHistory });
+}
+
+/**
+ * Single dispatch point for every animation-field write from the canvas
+ * Animation control — the ONE place that decides, from the current
+ * selection (word/keyword/caption/group) plus appState.animationApplyScope,
+ * whether this write targets one word, a same-type/all-words fan-out (each
+ * getting its OWN independent per-word override — see
+ * getWordIndexesForAnimationScope), or the whole caption/all captions
+ * (shared/captionTransform.js's resolvePhraseParams, extended by this
+ * feature to also merge animation fields). Never writes a caption-level
+ * field when a word-level scope is chosen, and never fans out to multiple
+ * words when a caption-level scope is chosen — the two paths are mutually
+ * exclusive per write, matching "an animation belongs to a TARGET, not to
+ * the current caption" (this feature's own architectural rule).
+ */
+function applyAnimationFields(fields, opts) {
+  if (selectedWordIndex != null) {
+    const scope = appState.animationApplyScope;
+    if (scope === 'this-caption' || scope === 'all-captions') {
+      applyPhraseAnimationFields(fields, scope === 'all-captions', opts);
+      return;
+    }
+    getWordIndexesForAnimationScope(scope, selectedWordIndex).forEach((idx) => applyWordTransformFields(idx, fields, opts));
+    return;
+  }
+  // Whole caption/group selected — word-only scope values ('this'/
+  // 'same-type'/'all-words') are meaningless without a word selected, so
+  // only the all-captions/not-all-captions distinction matters here.
+  applyPhraseAnimationFields(fields, appState.animationApplyScope === 'all-captions', opts);
+}
+
+/**
+ * Clears keyword-scope AND animation-scope UI state back to their defaults
+ * — called whenever the selection ANCHOR changes (a different word/caption
+ * is clicked, or nothing is selected at all) so neither scope choice ever
+ * silently carries over onto an unrelated later edit. Deliberately NOT
+ * called between edits to the SAME still-selected word/keyword, so choosing
+ * "All Keywords"/"All Words" once and then editing several times in a row
+ * keeps applying to all of them, as expected.
  */
 function resetKeywordScopeState() {
   if (appState.keywordApplyScope !== 'this') {
     updateState({ keywordApplyScope: 'this' }, { recordHistory: false });
+  }
+  if (appState.animationApplyScope !== 'this') {
+    updateState({ animationApplyScope: 'this' }, { recordHistory: false });
   }
   isSelectingKeywords = false;
   keywordMultiSelection = null;
@@ -730,6 +844,28 @@ function currentSelectionTarget() {
 }
 
 /**
+ * What the animation type dropdown should currently display — the
+ * currently-selected word's own override if one is selected, else the
+ * current caption/group's phrase-level override, falling back to the global
+ * appState.captionAnimationType either way (the exact same fallback chain
+ * shared/captionAnimation.js's resolveAnimationConfig and
+ * shared/captionTransform.js's resolvePhraseParams already use for
+ * rendering, so the dropdown never shows a value the renderer wouldn't
+ * actually use).
+ */
+function getCurrentAnimationTypeForDisplay() {
+  if (selectedWordIndex != null) {
+    const override = appState.captionTransforms[getWordTransformKey(selectedWordIndex)];
+    return override?.animationType || 'none';
+  }
+  if (currentBox?.phrase) {
+    const override = appState.captionTransforms[getPhraseTransformKey(currentBox.phrase)];
+    if (override?.animationType != null) return override.animationType;
+  }
+  return appState.captionAnimationType || 'none';
+}
+
+/**
  * Syncs every scope-related toolbar element to the current selection target
  * + scope state. Only ONE of the three button groups (caption / keyword /
  * keyword-multiselect-in-progress) is ever visible at once — "Do not show
@@ -767,12 +903,75 @@ function updateScopeButtons() {
     }
   }
 
-  if (keywordAnimationSelect) {
-    keywordAnimationSelect.hidden = target !== 'keyword' || suppressForMultiSelect;
-    if (target === 'keyword' && !suppressForMultiSelect) {
-      const override = appState.captionTransforms[getWordTransformKey(selectedWordIndex)];
-      const current = override?.animationType || 'none';
-      if (keywordAnimationSelect.value !== current) keywordAnimationSelect.value = current;
+  // ANIMATION section — available for every selection target (word,
+  // keyword, caption, or group), not just keywords: caption mode/style must
+  // not determine whether editing is available, and the same applies to
+  // animation specifically (this feature's own architectural rule). Exactly
+  // which SCOPE buttons show depends on the target — see each button block
+  // below — but the type select itself is always visible whenever anything
+  // is selected.
+  const showAnimationSection = (target === 'word' || target === 'keyword' || target === 'caption' || target === 'group') && !suppressForMultiSelect;
+  const isWordTarget = target === 'word' || target === 'keyword';
+
+  if (animationSectionLabelEl) animationSectionLabelEl.hidden = !showAnimationSection;
+
+  if (animationTypeSelect) {
+    animationTypeSelect.hidden = !showAnimationSection;
+    if (showAnimationSection) {
+      const current = getCurrentAnimationTypeForDisplay();
+      if (animationTypeSelect.value !== current) animationTypeSelect.value = current;
+    }
+  }
+
+  // "This Word"/"This Keyword" — same scope value ('this'), label swaps to
+  // match the actual selection so it never reads as the wrong noun.
+  if (animScopeThisBtn) {
+    const show = showAnimationSection && isWordTarget;
+    animScopeThisBtn.hidden = !show;
+    if (show) {
+      animScopeThisBtn.textContent = target === 'keyword' ? 'This Keyword' : 'This Word';
+      animScopeThisBtn.classList.toggle('active', appState.animationApplyScope === 'this');
+    }
+  }
+
+  // "All Keywords"/"All Normal Words" — same scope value ('same-type'),
+  // fans out to every OTHER instance of the selected word's own type (see
+  // getWordIndexesForAnimationScope), each animating independently.
+  if (animScopeSameTypeBtn) {
+    const show = showAnimationSection && isWordTarget;
+    animScopeSameTypeBtn.hidden = !show;
+    if (show) {
+      animScopeSameTypeBtn.textContent = target === 'keyword' ? 'All Keywords' : 'All Normal Words';
+      animScopeSameTypeBtn.classList.toggle('active', appState.animationApplyScope === 'same-type');
+    }
+  }
+
+  // "All Words" — every word regardless of type, each animating
+  // independently. Only offered from a NORMAL word (per this feature's own
+  // spec: a keyword's list is This Keyword/All Keywords/This Caption/All
+  // Captions — "All Words" isn't one of its options).
+  if (animScopeAllWordsBtn) {
+    const show = showAnimationSection && target === 'word';
+    animScopeAllWordsBtn.hidden = !show;
+    if (show) animScopeAllWordsBtn.classList.toggle('active', appState.animationApplyScope === 'all-words');
+  }
+
+  // "This Caption"/"All Captions" — escalates a word-level selection to the
+  // whole caption/all captions (or is simply the default/only choice when a
+  // caption/group is already the selection — see applyAnimationFields).
+  if (animScopeThisCaptionBtn) {
+    animScopeThisCaptionBtn.hidden = !showAnimationSection;
+    if (showAnimationSection) {
+      const isActive = isWordTarget
+        ? appState.animationApplyScope === 'this-caption'
+        : appState.animationApplyScope !== 'all-captions';
+      animScopeThisCaptionBtn.classList.toggle('active', isActive);
+    }
+  }
+  if (animScopeAllCaptionsBtn) {
+    animScopeAllCaptionsBtn.hidden = !showAnimationSection;
+    if (showAnimationSection) {
+      animScopeAllCaptionsBtn.classList.toggle('active', appState.animationApplyScope === 'all-captions');
     }
   }
 
@@ -1262,7 +1461,13 @@ export function initCanvasTransform() {
   scopeSelectKeywordsBtn = document.getElementById('btn-transform-scope-select-keywords');
   keywordMultiSelectDoneBtn = document.getElementById('btn-transform-keyword-multiselect-done');
   keywordMultiSelectLabelEl = document.getElementById('caption-transform-keyword-multiselect-label');
-  keywordAnimationSelect = document.getElementById('select-keyword-transform-animation');
+  animationSectionLabelEl = document.getElementById('caption-transform-animation-label');
+  animationTypeSelect = document.getElementById('select-canvas-animation-type');
+  animScopeThisBtn = document.getElementById('btn-anim-scope-this');
+  animScopeSameTypeBtn = document.getElementById('btn-anim-scope-same-type');
+  animScopeAllWordsBtn = document.getElementById('btn-anim-scope-all-words');
+  animScopeThisCaptionBtn = document.getElementById('btn-anim-scope-this-caption');
+  animScopeAllCaptionsBtn = document.getElementById('btn-anim-scope-all-captions');
   keywordToggleBtn = document.getElementById('btn-transform-toggle-keyword');
   groupStartBtn = document.getElementById('btn-transform-group-start');
   groupConfirmBtn = document.getElementById('btn-transform-group-confirm');
@@ -1546,17 +1751,56 @@ export function initCanvasTransform() {
     groupConfirmBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
     groupConfirmBtn.addEventListener('click', () => finishGroupSelection(true));
   }
-  if (keywordAnimationSelect) {
-    keywordAnimationSelect.addEventListener('pointerdown', (e) => e.stopPropagation());
-    keywordAnimationSelect.addEventListener('change', (e) => {
-      if (selectedWordIndex == null) return;
+  if (animationTypeSelect) {
+    animationTypeSelect.addEventListener('pointerdown', (e) => e.stopPropagation());
+    animationTypeSelect.addEventListener('change', (e) => {
+      // Duration/easing/intensity still come from the sidebar's existing
+      // global controls (this feature's own requirement: reuse the existing
+      // engine, don't duplicate its controls) — the canvas only chooses the
+      // TYPE and the TARGET/SCOPE; applyAnimationFields decides where these
+      // exact same field values actually get written.
       const fields = {
         animationType: e.target.value,
         animationDuration: appState.captionAnimationDuration,
         animationEasing: appState.captionAnimationEasing,
         animationIntensity: appState.captionAnimationIntensity
       };
-      applyKeywordScopedTransformFields(selectedWordIndex, fields, { recordHistory: true });
+      applyAnimationFields(fields, { recordHistory: true });
+    });
+  }
+  if (animScopeThisBtn) {
+    animScopeThisBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    animScopeThisBtn.addEventListener('click', () => {
+      updateState({ animationApplyScope: 'this' }, { recordHistory: false });
+      updateScopeButtons();
+    });
+  }
+  if (animScopeSameTypeBtn) {
+    animScopeSameTypeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    animScopeSameTypeBtn.addEventListener('click', () => {
+      updateState({ animationApplyScope: 'same-type' }, { recordHistory: false });
+      updateScopeButtons();
+    });
+  }
+  if (animScopeAllWordsBtn) {
+    animScopeAllWordsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    animScopeAllWordsBtn.addEventListener('click', () => {
+      updateState({ animationApplyScope: 'all-words' }, { recordHistory: false });
+      updateScopeButtons();
+    });
+  }
+  if (animScopeThisCaptionBtn) {
+    animScopeThisCaptionBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    animScopeThisCaptionBtn.addEventListener('click', () => {
+      updateState({ animationApplyScope: 'this-caption' }, { recordHistory: false });
+      updateScopeButtons();
+    });
+  }
+  if (animScopeAllCaptionsBtn) {
+    animScopeAllCaptionsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    animScopeAllCaptionsBtn.addEventListener('click', () => {
+      updateState({ animationApplyScope: 'all-captions' }, { recordHistory: false });
+      updateScopeButtons();
     });
   }
 }
