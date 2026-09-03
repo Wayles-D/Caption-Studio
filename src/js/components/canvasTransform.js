@@ -454,12 +454,35 @@ function getPhoneFrame() {
   return document.querySelector('.phone-frame');
 }
 
+// Extra breathing room (CSS px, converted to the box's own backing-store px
+// via pxScale) drawn around the whole-caption/group selection box only — a
+// purely visual/interaction adjustment so the border and resize/rotate
+// handles aren't glued to the text and don't crowd clicking a word inside
+// it. Deliberately not applied to a single selected WORD's box (wordBoxFor),
+// which should keep hugging that one word tightly, and never touches
+// currentBox itself — hit-testing (findWordAtPoint/pointInRotatedBox) and
+// the graphics renderer keep reading the real, unpadded measurement.
+const CAPTION_SELECTION_PADDING_CSS_PX = 16;
+
+function inflateBox(box, paddingCssPx) {
+  const pad = paddingCssPx * (box.pxScale || 1);
+  return {
+    ...box,
+    x: box.x - pad,
+    y: box.y - pad,
+    width: box.width + pad * 2,
+    height: box.height + pad * 2
+  };
+}
+
 /**
  * The box currently shown/dragged: the selected word's own rect (see
  * wordBoxFor) when selectedWordIndex is set, otherwise the whole caption's
- * box — the ONLY box that existed before word-level selection. Every drag/
- * resize/rotate/position function reads this instead of currentBox directly
- * so the same code path naturally serves both selection targets.
+ * box, padded for display (see inflateBox above) — the ONLY box that existed
+ * before word-level selection. Every drag/resize/rotate/position function
+ * reads this instead of currentBox directly so the same code path naturally
+ * serves both selection targets; the padding is symmetric around the same
+ * center, so it doesn't change what a drag/resize/rotate gesture computes.
  */
 function getDisplayBox() {
   if (!currentBox) return null;
@@ -467,7 +490,7 @@ function getDisplayBox() {
     const word = getWordCandidates(currentBox).find((w) => w.wordIndex === selectedWordIndex);
     if (word) return wordBoxFor(word, currentBox);
   }
-  return currentBox;
+  return inflateBox(currentBox, CAPTION_SELECTION_PADDING_CSS_PX);
 }
 
 function positionBoxElement() {
