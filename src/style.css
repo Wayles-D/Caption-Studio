@@ -398,3 +398,37 @@ body.light-theme {
   background: rgba(245, 158, 11, 0.15);
   pointer-events: none;
 }
+
+/* Explicit word-grouping's own multi-select marker — same shape/behavior as
+   the keyword marker above, distinct color so the two multi-select modes
+   never look ambiguous if either is ever mid-session. */
+.caption-transform-group-marker {
+  position: absolute;
+  border: 2px solid #6366F1;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.15);
+  pointer-events: none;
+}
+
+/* Transcript editor keyword indication — shown only while the sidebar's "AI
+   Keywords" toggle (appState.enableKeywordHighlighting) is on (see
+   transcriptEditorState.js's buildWordChip); toggling it off removes this
+   class without touching the underlying isKeyword data. */
+.word-chip-keyword {
+  border-color: #F59E0B !important;
+  background: rgba(245, 158, 11, 0.12) !important;
+}
+
+.word-chip-keyword-toggle {
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #9CA3AF);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.word-chip-keyword-toggle.active {
+  color: #F59E0B;
+}

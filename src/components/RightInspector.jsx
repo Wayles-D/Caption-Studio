@@ -31,6 +31,11 @@ export function RightInspector({ onRegenerateCaptions }) {
   const animationMode = useEditorStore((s) => s.animationMode);
   const words = useEditorStore((s) => s.words);
   const isProcessing = useEditorStore((s) => s.isProcessing);
+  // Rebuilding chips is also how a keyword indication (word-chip-keyword
+  // class, applied in buildWordChip) gets shown/hidden when the sidebar's
+  // "AI Keywords" toggle changes, and how a manual keyword toggle's chip
+  // refreshes its own star button — see transcriptEditorState.js.
+  const enableKeywordHighlighting = useEditorStore((s) => s.enableKeywordHighlighting);
 
   const chipsContainerRef = useRef(null);
 
@@ -41,7 +46,7 @@ export function RightInspector({ onRegenerateCaptions }) {
     words.forEach((wordObj, idx) => {
       container.appendChild(buildWordChip(wordObj, idx));
     });
-  }, [words]);
+  }, [words, enableKeywordHighlighting]);
 
   const mins = Math.floor((videoDuration || 0) / 60);
   const secs = Math.floor((videoDuration || 0) % 60);

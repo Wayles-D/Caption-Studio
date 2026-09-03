@@ -54,9 +54,11 @@
  */
 import { appState, updateState } from '../state.js';
 import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
+import { setWordKeyword } from './transcriptEditorState.js';
 
 let overlayEl, hitAreaEl, boxEl, rotateHandleEl, scopeThisBtn, scopeAllBtn, resetBtn, rotationLabelEl;
 let scopeThisKeywordBtn, scopeAllKeywordsBtn, scopeSelectKeywordsBtn, keywordMultiSelectDoneBtn, keywordMultiSelectLabelEl, keywordAnimationSelect;
+let keywordToggleBtn, groupStartBtn, groupConfirmBtn, groupMultiSelectLabelEl;
 let selected = false;
 let currentBox = null; // { x, y, width, height, centerX, centerY, rotationDeg, pxScale, phrase, mode, words?, chunks? } in canvas backing-store px
 
@@ -65,6 +67,16 @@ let currentBox = null; // { x, y, width, height, centerX, centerY, rotationDeg, 
 // `selected` means "something is highlighted" (word OR caption); this says
 // WHICH of the two kinds it is.
 let selectedWordIndex = null;
+
+// The GROUP currently selected/displayed when selectedWordIndex is null —
+// either a caption's own default group key (getPhraseTransformKey(phrase),
+// reused as-is so "This Caption"/"All Captions" scope keeps meaning exactly
+// what it always has for the common, untouched case — see isFullPhraseGroup)
+// or a custom id created by the explicit grouping flow below. null means
+// nothing is selected at all. See getEffectiveGroupId's doc comment for how
+// a word's actual group membership is derived from this plus per-word
+// `groupId` overrides.
+let selectedGroupId = null;
 
 // "Select Keywords" mode state — see initCanvasTransform's scope-button
 // wiring and the hitAreaEl pointerdown handler's isSelectingKeywords branch.
@@ -75,7 +87,15 @@ let isSelectingKeywords = false;
 let keywordMultiSelection = null; // Set<number> | null
 let keywordMarkerEls = [];
 
-let drag = null; // { kind: 'move'|'resize'|'rotate', pointerId, phrase, wordIndex? }
+// Explicit word-grouping's own pick-multiple-words mode — same shape as
+// "Select Keywords" above but keyword status is deliberately NOT a gate
+// here (any word, normal or keyword, can be picked — see this feature's own
+// requirement that keyword status must never determine group membership).
+let isSelectingGroup = false;
+let groupMultiSelection = null; // Set<number> | null
+let groupMarkerEls = [];
+
+let drag = null; // { kind: 'move'|'resize'|'rotate', pointerId, phrase, wordIndex?, groupId?, groupMembers?, groupStart? }
 
 /**
  * Reads the value a CAPTION-level (not word-level) transform field should
@@ -206,6 +226,100 @@ function wordBoxFor(word, box) {
     rotationDeg: (box.rotationDeg || 0) + ownRotation,
     pxScale: box.pxScale,
     wordIndex: word.wordIndex
+  };
+}
+
+/**
+ * DYNAMIC GROUPING — a group bounding box represents the words CURRENTLY in
+ * that group, based on their current positions, not the caption's original
+ * boundaries (see this feature's own requirement).
+ *
+ * A word's effective group id is:
+ *   - whatever `groupId` its own transform override says, if it has one
+ *     (a string = explicit custom group from the grouping flow below, or
+ *     `null` = explicitly detached/standalone, e.g. after being dragged
+ *     individually out of its caption's default group — see endDrag), or
+ *   - otherwise, its caption's own default group — reusing
+ *     getPhraseTransformKey(phrase) AS THE GROUP ID, so an untouched
+ *     caption's "group" is byte-identical to its existing phrase-transform
+ *     identity (isFullPhraseGroup below is what keeps This Caption/All
+ *     Captions scope meaning exactly what it always has for this default
+ *     case).
+ *
+ * Keyword vs. normal status never enters into this — only the explicit
+ * `groupId` override (or its absence) does, per this feature's requirement.
+ */
+function getEffectiveGroupId(wordIndex, phrase) {
+  if (wordIndex == null) return null;
+  const override = appState.captionTransforms[getWordTransformKey(wordIndex)];
+  if (override && Object.prototype.hasOwnProperty.call(override, 'groupId')) return override.groupId;
+  return phrase ? getPhraseTransformKey(phrase) : null;
+}
+
+/** Every wordIndex currently on screen (see getWordCandidates) whose effective group id matches `groupId`. */
+function getGroupMemberIndexes(groupId) {
+  if (!currentBox || groupId == null) return [];
+  return getWordCandidates(currentBox)
+    .filter((w) => getEffectiveGroupId(w.wordIndex, currentBox.phrase) === groupId)
+    .map((w) => w.wordIndex);
+}
+
+/**
+ * True only for the common, untouched case: `groupId` IS this caption's own
+ * default group AND every word currently on screen still belongs to it (none
+ * detached, none pulled into a custom group). This is what keeps the
+ * EXISTING whole-caption move/resize/rotate + This Caption/All Captions
+ * scope buttons working byte-for-byte as before for a caption nobody has
+ * touched yet — see applyTransformFields's phrase-level writes, still used
+ * exactly as-is whenever this returns true. The moment any word in the
+ * caption is detached or grouped elsewhere, this flips to false and group
+ * transforms switch to the per-member fan-out path (see beginMove/
+ * onPointerMove/endDrag) so the transform only ever affects the words
+ * actually still in the group.
+ */
+function isFullPhraseGroup(groupId) {
+  if (!currentBox || !currentBox.phrase) return false;
+  const defaultKey = getPhraseTransformKey(currentBox.phrase);
+  if (groupId !== defaultKey) return false;
+  const all = getWordCandidates(currentBox);
+  return all.length > 0 && all.every((w) => getEffectiveGroupId(w.wordIndex, currentBox.phrase) === defaultKey);
+}
+
+/**
+ * The group's own bounding box, computed fresh from its CURRENT members'
+ * CURRENT (offset/scale-adjusted, via wordBoxFor) positions — never from the
+ * caption's static original layout. A word moved out (different/`null`
+ * groupId) is excluded automatically since getGroupMemberIndexes no longer
+ * returns it; a word moved further away just shifts the min/max bounds this
+ * frame, since wordBoxFor always reflects its live offset.
+ */
+function computeGroupBox(groupId) {
+  if (!currentBox || groupId == null) return null;
+  const candidates = getWordCandidates(currentBox).filter(
+    (w) => getEffectiveGroupId(w.wordIndex, currentBox.phrase) === groupId
+  );
+  if (!candidates.length) return null;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  candidates.forEach((w) => {
+    const box = wordBoxFor(w, currentBox);
+    minX = Math.min(minX, box.x);
+    minY = Math.min(minY, box.y);
+    maxX = Math.max(maxX, box.x + box.width);
+    maxY = Math.max(maxY, box.y + box.height);
+  });
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+    centerX: (minX + maxX) / 2,
+    centerY: (minY + maxY) / 2,
+    rotationDeg: currentBox.rotationDeg || 0,
+    pxScale: currentBox.pxScale,
+    phrase: currentBox.phrase,
+    groupId
   };
 }
 
@@ -398,6 +512,64 @@ function renderKeywordMultiSelectMarkers() {
   });
 }
 
+function clearGroupMultiSelectMarkers() {
+  groupMarkerEls.forEach((el) => el.remove());
+  groupMarkerEls = [];
+}
+
+/**
+ * Grouping's own counterpart to renderKeywordMultiSelectMarkers — identical
+ * box math (wordBoxFor + pxScale), different marker class/color (see
+ * style.css's .caption-transform-group-marker) so the two multi-select modes
+ * are visually distinct if either is ever active.
+ */
+function renderGroupMultiSelectMarkers() {
+  clearGroupMultiSelectMarkers();
+  if (!groupMultiSelection || !groupMultiSelection.size || !currentBox || !overlayEl) return;
+  const candidates = getWordCandidates(currentBox);
+  groupMultiSelection.forEach((idx) => {
+    const word = candidates.find((w) => w.wordIndex === idx);
+    if (!word) return;
+    const box = wordBoxFor(word, currentBox);
+    const scale = box.pxScale || 1;
+    const marker = document.createElement('div');
+    marker.className = 'caption-transform-group-marker';
+    marker.style.left = `${box.x / scale}px`;
+    marker.style.top = `${box.y / scale}px`;
+    marker.style.width = `${box.width / scale}px`;
+    marker.style.height = `${box.height / scale}px`;
+    marker.style.transform = box.rotationDeg ? `rotate(${box.rotationDeg}deg)` : '';
+    marker.style.transformOrigin = 'center center';
+    overlayEl.appendChild(marker);
+    groupMarkerEls.push(marker);
+  });
+}
+
+/**
+ * Ends "Group Words" picking. When `commit` is true and at least one word
+ * was picked, stamps a brand-new groupId onto every picked word's transform
+ * override (overriding whatever group/detached state it had before — this
+ * is an explicit, deliberate regrouping) and selects the new group as the
+ * current display target. Always clears the picking UI either way.
+ */
+function finishGroupSelection(commit) {
+  if (commit && groupMultiSelection && groupMultiSelection.size) {
+    const newGroupId = `group-${Date.now()}-${Math.round(Math.random() * 1e4)}`;
+    groupMultiSelection.forEach((idx) => {
+      applyWordTransformFields(idx, { groupId: newGroupId }, { recordHistory: true });
+    });
+    resetKeywordScopeState();
+    selected = true;
+    selectedWordIndex = null;
+    selectedGroupId = newGroupId;
+  }
+  isSelectingGroup = false;
+  groupMultiSelection = null;
+  clearGroupMultiSelectMarkers();
+  positionBoxElement();
+  updateScopeButtons();
+}
+
 function resetWordTransform(wordIndex) {
   const key = getWordTransformKey(wordIndex);
   if (!(key in appState.captionTransforms)) return;
@@ -414,6 +586,18 @@ function resetCurrentTransform() {
     } else {
       resetWordTransform(selectedWordIndex);
     }
+    return;
+  }
+  if (selectedGroupId != null && !isFullPhraseGroup(selectedGroupId)) {
+    // A partial/custom group has no phrase-level field of its own to reset
+    // (see applyTransformFields's full-phrase-only branch below) — resetting
+    // it means releasing each current member's own per-word override
+    // entirely, via the exact same resetWordTransform a lone word's Reset
+    // already uses. This also drops each member's `groupId`, so resetting a
+    // group naturally dissolves it and returns every member to its
+    // caption's plain default group, at its original position — the
+    // sensible "back to how it started" behavior for Reset.
+    getGroupMemberIndexes(selectedGroupId).forEach((idx) => resetWordTransform(idx));
     return;
   }
   if (appState.transformApplyScope === 'this' && currentBox.phrase) {
@@ -477,12 +661,13 @@ function inflateBox(box, paddingCssPx) {
 
 /**
  * The box currently shown/dragged: the selected word's own rect (see
- * wordBoxFor) when selectedWordIndex is set, otherwise the whole caption's
- * box, padded for display (see inflateBox above) — the ONLY box that existed
- * before word-level selection. Every drag/resize/rotate/position function
- * reads this instead of currentBox directly so the same code path naturally
- * serves both selection targets; the padding is symmetric around the same
- * center, so it doesn't change what a drag/resize/rotate gesture computes.
+ * wordBoxFor) when selectedWordIndex is set, otherwise the currently
+ * selected GROUP's box — dynamically recomputed from its current members
+ * (see computeGroupBox), padded for display (see inflateBox above). Every
+ * drag/resize/rotate/position function reads this instead of currentBox
+ * directly so the same code path naturally serves both selection targets;
+ * the padding is symmetric around the same center, so it doesn't change
+ * what a drag/resize/rotate gesture computes.
  */
 function getDisplayBox() {
   if (!currentBox) return null;
@@ -490,7 +675,11 @@ function getDisplayBox() {
     const word = getWordCandidates(currentBox).find((w) => w.wordIndex === selectedWordIndex);
     if (word) return wordBoxFor(word, currentBox);
   }
-  return inflateBox(currentBox, CAPTION_SELECTION_PADDING_CSS_PX);
+  if (selectedGroupId != null) {
+    const groupBox = computeGroupBox(selectedGroupId);
+    if (groupBox) return inflateBox(groupBox, CAPTION_SELECTION_PADDING_CSS_PX);
+  }
+  return null;
 }
 
 function positionBoxElement() {
@@ -520,7 +709,15 @@ function positionBoxElement() {
  * its real isKeyword data (never by appearance).
  */
 function currentSelectionTarget() {
-  if (selectedWordIndex == null) return 'caption';
+  if (selectedWordIndex == null) {
+    // A partial/custom group (some caption words detached, or an explicitly
+    // grouped subset) has no phrase-level field of its own — This Caption/
+    // All Captions scope only makes sense for the full, untouched caption
+    // case (see isFullPhraseGroup), so it's classified separately here to
+    // keep those buttons hidden for it (see updateScopeButtons).
+    if (selectedGroupId != null && currentBox && !isFullPhraseGroup(selectedGroupId)) return 'group';
+    return 'caption';
+  }
   // While actively picking "Select Keywords" instances, the anchor keyword
   // itself may have scrolled off screen (the user is deliberately navigating
   // elsewhere to find more instances to add) — isKeywordIndex can only ever
@@ -542,8 +739,9 @@ function currentSelectionTarget() {
  */
 function updateScopeButtons() {
   const target = currentSelectionTarget();
+  const suppressForMultiSelect = isSelectingKeywords || isSelectingGroup;
 
-  const showCaptionScope = target === 'caption';
+  const showCaptionScope = target === 'caption' && !suppressForMultiSelect;
   if (scopeThisBtn) scopeThisBtn.hidden = !showCaptionScope;
   if (scopeAllBtn) scopeAllBtn.hidden = !showCaptionScope;
   if (showCaptionScope) {
@@ -551,7 +749,7 @@ function updateScopeButtons() {
     scopeAllBtn?.classList.toggle('active', appState.transformApplyScope !== 'this');
   }
 
-  const showKeywordScope = target === 'keyword' && !isSelectingKeywords;
+  const showKeywordScope = target === 'keyword' && !suppressForMultiSelect;
   [scopeThisKeywordBtn, scopeAllKeywordsBtn, scopeSelectKeywordsBtn].forEach((btn) => { if (btn) btn.hidden = !showKeywordScope; });
   if (showKeywordScope) {
     scopeThisKeywordBtn?.classList.toggle('active', appState.keywordApplyScope === 'this');
@@ -570,24 +768,56 @@ function updateScopeButtons() {
   }
 
   if (keywordAnimationSelect) {
-    keywordAnimationSelect.hidden = target !== 'keyword';
-    if (target === 'keyword') {
+    keywordAnimationSelect.hidden = target !== 'keyword' || suppressForMultiSelect;
+    if (target === 'keyword' && !suppressForMultiSelect) {
       const override = appState.captionTransforms[getWordTransformKey(selectedWordIndex)];
       const current = override?.animationType || 'none';
       if (keywordAnimationSelect.value !== current) keywordAnimationSelect.value = current;
     }
   }
 
-  // While picking "Select Keywords" instances, boxEl often falls back to
-  // covering the WHOLE caption (see getDisplayBox — the anchor word is
-  // frequently not part of whatever's on screen right now, since the user is
-  // deliberately navigating elsewhere to find more instances). Sitting on
-  // top of hitAreaEl, it would otherwise swallow every click meant for
-  // findWordAtPoint's own multi-select toggle (see the hitAreaEl pointerdown
-  // handler) before it ever gets there. Making it click-through — except for
-  // the toolbar itself, which keeps its own `pointer-events: auto` (see
-  // style.css) so Done/the scope buttons stay clickable throughout.
-  if (boxEl) boxEl.style.pointerEvents = isSelectingKeywords ? 'none' : '';
+  // Manual keyword mark/unmark — available whenever a specific word is
+  // selected, regardless of its current status, so AI-generated keywords
+  // stay editable and a normal word can be promoted to one (see
+  // setWordKeyword's doc comment: this is the SAME write path the transcript
+  // editor's own toggle uses).
+  if (keywordToggleBtn) {
+    const showToggle = selectedWordIndex != null && !suppressForMultiSelect;
+    keywordToggleBtn.hidden = !showToggle;
+    if (showToggle) {
+      const isKw = isKeywordIndex(selectedWordIndex);
+      keywordToggleBtn.textContent = isKw ? 'Unmark Keyword' : 'Mark as Keyword';
+      keywordToggleBtn.classList.toggle('active', isKw);
+    }
+  }
+
+  // "Group Words" — starts the explicit multi-select flow (see
+  // renderGroupMultiSelectMarkers/the hitAreaEl pointerdown handler's
+  // isSelectingGroup branch). Available for any group-level selection
+  // (a plain caption or an existing custom group), not for a single word.
+  const showGroupStart = (target === 'caption' || target === 'group') && !suppressForMultiSelect;
+  if (groupStartBtn) groupStartBtn.hidden = !showGroupStart;
+
+  if (groupConfirmBtn) groupConfirmBtn.hidden = !isSelectingGroup;
+  if (groupMultiSelectLabelEl) {
+    groupMultiSelectLabelEl.hidden = !isSelectingGroup;
+    if (isSelectingGroup) {
+      const count = groupMultiSelection ? groupMultiSelection.size : 0;
+      groupMultiSelectLabelEl.textContent = `${count} selected`;
+    }
+  }
+
+  // While picking "Select Keywords"/"Group Words" instances, boxEl often
+  // falls back to covering the WHOLE caption (see getDisplayBox — the anchor
+  // word is frequently not part of whatever's on screen right now, since the
+  // user is deliberately navigating elsewhere to find more instances).
+  // Sitting on top of hitAreaEl, it would otherwise swallow every click
+  // meant for findWordAtPoint's own multi-select toggle (see the hitAreaEl
+  // pointerdown handler) before it ever gets there. Making it click-through
+  // — except for the toolbar itself, which keeps its own `pointer-events:
+  // auto` (see style.css) so Done/Group/the scope buttons stay clickable
+  // throughout.
+  if (boxEl) boxEl.style.pointerEvents = suppressForMultiSelect ? 'none' : '';
 }
 
 /**
@@ -628,10 +858,33 @@ export function updateCanvasTransformOverlay(box, phrase, mode) {
   if (!isSelectingKeywords && appState.keywordApplyScope === 'this' &&
       selectedWordIndex != null && !getWordCandidates(currentBox).some((w) => w.wordIndex === selectedWordIndex)) {
     selectedWordIndex = null;
+    // Falls back to CURRENT caption's own default group (not a full
+    // deselect) — a caption IS still on screen, mirroring the exact
+    // rationale above for why word staleness doesn't fully deselect either.
+    selectedGroupId = currentBox.phrase ? getPhraseTransformKey(currentBox.phrase) : null;
     resetKeywordScopeState();
   }
 
+  // GROUP staleness/auto-follow — mirrors the word-level check above. A
+  // selection representing "this caption's plain default group" has no
+  // identity of its own beyond the phrase key, so when the phrase on screen
+  // changes (playback advances to a new caption), selectedGroupId simply no
+  // longer matches the new phrase's default key and is re-pointed at
+  // whichever caption is on screen NOW — this is what makes a plain
+  // whole-caption selection keep following playback exactly as it always
+  // has. A genuinely custom/explicit group (or a default-group id from a
+  // phrase that's since scrolled away) is instead kept ALIVE as long as at
+  // least one of its members is still visible this frame, and only falls
+  // back to the new caption's default group once none of them are.
+  if (selectedWordIndex == null && selectedGroupId != null) {
+    const defaultKeyNow = currentBox.phrase ? getPhraseTransformKey(currentBox.phrase) : null;
+    if (selectedGroupId !== defaultKeyNow && getGroupMemberIndexes(selectedGroupId).length === 0) {
+      selectedGroupId = defaultKeyNow;
+    }
+  }
+
   if (isSelectingKeywords) renderKeywordMultiSelectMarkers();
+  if (isSelectingGroup) renderGroupMultiSelectMarkers();
 
   if (selected && !drag) {
     boxEl.hidden = false;
@@ -682,6 +935,18 @@ function hitTestWordAtClient(clientX, clientY) {
   return findWordAtPoint(x * scale, y * scale, currentBox);
 }
 
+/**
+ * Whether the current group-level selection needs the per-MEMBER fan-out
+ * transform path instead of the original whole-phrase path — true for any
+ * group that ISN'T the untouched, full caption (a partial default group with
+ * some words detached, or an explicit custom group). See isFullPhraseGroup's
+ * own doc comment for why the full-phrase case still goes through the
+ * original applyTransformFields path unchanged.
+ */
+function isPartialGroupTransform() {
+  return selectedWordIndex == null && selectedGroupId != null && !isFullPhraseGroup(selectedGroupId);
+}
+
 function beginMove(e) {
   if (!currentBox) return;
   // Pin the phrase (and, when one is selected, the word) this gesture
@@ -693,11 +958,22 @@ function beginMove(e) {
   // the user actually grabbed.
   const wordIndex = selectedWordIndex;
   const { x, y } = clientToCssPoint(e.clientX, e.clientY);
+  const isGroupFanOut = isPartialGroupTransform();
+  const groupMembers = isGroupFanOut ? getGroupMemberIndexes(selectedGroupId) : null;
+  const groupStart = isGroupFanOut
+    ? new Map(groupMembers.map((idx) => [idx, {
+        offsetXPx: effectiveWordValue(idx, 'offsetXPx', 0),
+        offsetYPx: effectiveWordValue(idx, 'offsetYPx', 0)
+      }]))
+    : null;
   drag = {
     kind: 'move',
     pointerId: e.pointerId,
     phrase: currentBox.phrase,
     wordIndex,
+    groupId: isGroupFanOut ? selectedGroupId : null,
+    groupMembers,
+    groupStart,
     // Word move is a pixel offset relative to where the drag STARTED, not a
     // frame-relative percentage (see onPointerMove) — capture the pointer's
     // own starting CSS position and the word's already-applied offset so the
@@ -719,16 +995,37 @@ function beginResize(e, corner) {
   const centerY = box.centerY / scale;
   const startDist = Math.hypot(x - centerX, y - centerY) || 1;
   const wordIndex = selectedWordIndex;
+  const isGroupFanOut = isPartialGroupTransform();
+  const groupMembers = isGroupFanOut ? getGroupMemberIndexes(selectedGroupId) : null;
+  const groupStart = isGroupFanOut
+    ? new Map(groupMembers.map((idx) => [idx, effectiveWordValue(idx, 'fontScale', 1)]))
+    : null;
   const startFontSize = wordIndex != null
     ? effectiveWordValue(wordIndex, 'fontScale', 1)
     : effectiveValue(currentBox.phrase, 'fontSize', appState.fontSize);
-  drag = { kind: 'resize', pointerId: e.pointerId, startDist, startFontSize, corner, phrase: currentBox.phrase, wordIndex };
+  drag = {
+    kind: 'resize', pointerId: e.pointerId, startDist, startFontSize, corner, phrase: currentBox.phrase, wordIndex,
+    groupId: isGroupFanOut ? selectedGroupId : null, groupMembers, groupStart
+  };
   e.target.setPointerCapture(e.pointerId);
 }
 
 function beginRotate(e) {
   if (!currentBox) return;
-  drag = { kind: 'rotate', pointerId: e.pointerId, phrase: currentBox.phrase, wordIndex: selectedWordIndex };
+  const isGroupFanOut = isPartialGroupTransform();
+  let groupMembers = null, groupStart = null, startAngle = null;
+  if (isGroupFanOut) {
+    groupMembers = getGroupMemberIndexes(selectedGroupId);
+    groupStart = new Map(groupMembers.map((idx) => [idx, effectiveWordValue(idx, 'rotationDeg', 0)]));
+    const box = getDisplayBox();
+    const { x, y } = clientToCssPoint(e.clientX, e.clientY);
+    const scale = box.pxScale || 1;
+    startAngle = (Math.atan2(y - box.centerY / scale, x - box.centerX / scale) * 180) / Math.PI;
+  }
+  drag = {
+    kind: 'rotate', pointerId: e.pointerId, phrase: currentBox.phrase, wordIndex: selectedWordIndex,
+    groupId: isGroupFanOut ? selectedGroupId : null, groupMembers, groupStart, startAngle
+  };
   e.target.setPointerCapture(e.pointerId);
 }
 
@@ -757,6 +1054,24 @@ function onPointerMove(e) {
         offsetXPx: drag.startOffsetXPx + deltaCssX * scale,
         offsetYPx: drag.startOffsetYPx + deltaCssY * scale
       }, { recordHistory: false });
+    } else if (drag.groupMembers) {
+      // GROUP move: translate every current member by the SAME pixel delta
+      // — a plain rigid-body move of only the words actually in this group
+      // right now (see this feature's own requirement that transforming the
+      // group must not affect anything else). Bypasses writeWordFields'
+      // keyword-scope fan-out on purpose: a group drag's intent is "move
+      // these specific word instances", not "apply to every instance of
+      // this keyword across the transcript" — those are orthogonal concerns
+      // (grouping never depends on keyword status either).
+      const deltaCssX = x - drag.startPointerX;
+      const deltaCssY = y - drag.startPointerY;
+      drag.groupMembers.forEach((idx) => {
+        const start = drag.groupStart.get(idx);
+        applyWordTransformFields(idx, {
+          offsetXPx: start.offsetXPx + deltaCssX * scale,
+          offsetYPx: start.offsetYPx + deltaCssY * scale
+        }, { recordHistory: false });
+      });
     } else {
       const { rect } = clientToCssPoint(e.clientX, e.clientY);
       const xPct = Math.max(0, Math.min(100, (x / rect.width) * 100));
@@ -769,16 +1084,39 @@ function onPointerMove(e) {
     if (wordIndex != null) {
       const nextScale = Math.max(0.3, Math.min(4, drag.startFontSize * ratio));
       writeWordFields(wordIndex, { fontScale: nextScale }, { recordHistory: false });
+    } else if (drag.groupMembers) {
+      // Same ratio applied multiplicatively to each member's OWN starting
+      // scale, so members that already had different sizes keep their
+      // relative proportions while the group resizes together.
+      drag.groupMembers.forEach((idx) => {
+        const startScale = drag.groupStart.get(idx) || 1;
+        const nextScale = Math.max(0.3, Math.min(4, startScale * ratio));
+        applyWordTransformFields(idx, { fontScale: nextScale }, { recordHistory: false });
+      });
     } else {
       const nextFontSize = Math.max(6, Math.min(150, Math.round(drag.startFontSize * ratio)));
       applyTransformFields({ fontSize: nextFontSize }, { recordHistory: false, phrase: drag.phrase });
     }
   } else if (drag.kind === 'rotate') {
     const angleDeg = (Math.atan2(y - centerY, x - centerX) * 180) / Math.PI;
-    const rotationDeg = Math.round(angleDeg + 90);
     if (wordIndex != null) {
+      const rotationDeg = Math.round(angleDeg + 90);
       writeWordFields(wordIndex, { rotationDeg }, { recordHistory: false });
+    } else if (drag.groupMembers) {
+      // Each member's rotation increases by the SAME angle delta from its
+      // own starting rotation — keeps members' relative rotation offsets
+      // while the group appears to rotate together (a simplification vs.
+      // full rigid-body rotation around the group's center, which would
+      // also need to reposition each member — out of scope here since the
+      // requirement is only that the transform stays confined to current
+      // members, not a specific rotation physics).
+      const angleDelta = angleDeg - drag.startAngle;
+      drag.groupMembers.forEach((idx) => {
+        const startRot = drag.groupStart.get(idx) || 0;
+        applyWordTransformFields(idx, { rotationDeg: Math.round(startRot + angleDelta) }, { recordHistory: false });
+      });
     } else {
+      const rotationDeg = Math.round(angleDeg + 90);
       applyTransformFields({ rotation: rotationDeg }, { recordHistory: false, phrase: drag.phrase });
     }
   }
@@ -786,8 +1124,29 @@ function onPointerMove(e) {
 
 function endDrag() {
   if (!drag) return;
-  const { kind, phrase, wordIndex } = drag;
+  const { kind, phrase, wordIndex, groupMembers } = drag;
   drag = null;
+
+  if (groupMembers) {
+    // Commit each member's just-set field as its own undo step, re-reading
+    // through effectiveWordValue for the same reason the single-word/
+    // whole-phrase commits below do (the live value during the drag was
+    // written with recordHistory:false).
+    groupMembers.forEach((idx) => {
+      if (kind === 'move') {
+        applyWordTransformFields(idx, {
+          offsetXPx: effectiveWordValue(idx, 'offsetXPx', 0),
+          offsetYPx: effectiveWordValue(idx, 'offsetYPx', 0)
+        }, { recordHistory: true });
+      } else if (kind === 'resize') {
+        applyWordTransformFields(idx, { fontScale: effectiveWordValue(idx, 'fontScale', 1) }, { recordHistory: true });
+      } else if (kind === 'rotate') {
+        applyWordTransformFields(idx, { rotationDeg: effectiveWordValue(idx, 'rotationDeg', 0) }, { recordHistory: true });
+      }
+    });
+    return;
+  }
+
   // Commit the whole gesture as one undo step, mirroring
   // initManualDragPositioning's own drag-then-commit pattern. Re-reads the
   // value through effectiveValue/effectiveWordValue (scope-aware:
@@ -799,15 +1158,29 @@ function endDrag() {
   // step was silently overwriting the drag's own result with a stale global
   // value the instant the pointer was released.
   if (wordIndex != null) {
+    // DYNAMIC GROUPING: an individual word transform is what pulls a word
+    // OUT of whatever group it's currently in — its caption's plain default
+    // group, OR an explicit custom group from the grouping flow — so it
+    // stamps `groupId: null` (standalone) any time this word is transformed
+    // on its own and ISN'T ALREADY standalone, so the group it's leaving
+    // immediately recomputes its bounding box/membership without it (see
+    // computeGroupBox/getGroupMemberIndexes). Only skipped when the word is
+    // already standalone (groupId already exactly `null`), since re-writing
+    // the same value is a harmless no-op anyway.
+    const key = getWordTransformKey(wordIndex);
+    const alreadyStandalone = appState.captionTransforms[key]?.groupId === null;
+    const groupPatch = alreadyStandalone ? {} : { groupId: null };
+
     if (kind === 'move') {
       writeWordFields(wordIndex, {
+        ...groupPatch,
         offsetXPx: effectiveWordValue(wordIndex, 'offsetXPx', 0),
         offsetYPx: effectiveWordValue(wordIndex, 'offsetYPx', 0)
       }, { recordHistory: true });
     } else if (kind === 'resize') {
-      writeWordFields(wordIndex, { fontScale: effectiveWordValue(wordIndex, 'fontScale', 1) }, { recordHistory: true });
+      writeWordFields(wordIndex, { ...groupPatch, fontScale: effectiveWordValue(wordIndex, 'fontScale', 1) }, { recordHistory: true });
     } else if (kind === 'rotate') {
-      writeWordFields(wordIndex, { rotationDeg: effectiveWordValue(wordIndex, 'rotationDeg', 0) }, { recordHistory: true });
+      writeWordFields(wordIndex, { ...groupPatch, rotationDeg: effectiveWordValue(wordIndex, 'rotationDeg', 0) }, { recordHistory: true });
     }
     return;
   }
@@ -846,6 +1219,33 @@ if (import.meta.env.DEV) {
     const scale = currentBox.pxScale || 1;
     return { x: currentBox.x / scale, y: currentBox.y / scale, width: currentBox.width / scale, height: currentBox.height / scale, centerX: currentBox.centerX / scale, centerY: currentBox.centerY / scale };
   };
+  window.__debugGroupState = () => ({
+    selectedWordIndex, selectedGroupId, isSelectingGroup,
+    groupMultiSelection: groupMultiSelection ? Array.from(groupMultiSelection) : null,
+    isFullPhraseGroup: selectedGroupId != null ? isFullPhraseGroup(selectedGroupId) : null,
+    members: selectedGroupId != null ? getGroupMemberIndexes(selectedGroupId) : null
+  });
+  window.__debugGroupBoxRect = () => {
+    if (!currentBox || selectedGroupId == null) return null;
+    const box = computeGroupBox(selectedGroupId);
+    if (!box) return null;
+    const scale = box.pxScale || 1;
+    return { x: box.x / scale, y: box.y / scale, width: box.width / scale, height: box.height / scale, centerX: box.centerX / scale, centerY: box.centerY / scale };
+  };
+  window.__debugEffectiveGroupId = (wordIndex) => (currentBox ? getEffectiveGroupId(wordIndex, currentBox.phrase) : null);
+  // Unlike __debugWordScreenRect (wordBoxFor's offset-adjusted rect, i.e.
+  // where a word actually renders), this returns the word's RAW pre-offset
+  // rect — the coordinates findWordAtPoint hit-tests against (see its own
+  // doc comment: a moved word's hit target intentionally stays at its
+  // original footprint). Automated tests need this to click a spot that
+  // will actually register as a hit on an already-moved word.
+  window.__debugWordRawScreenRect = (wordIndex) => {
+    if (!currentBox) return null;
+    const word = getWordCandidates(currentBox).find((w) => w.wordIndex === wordIndex);
+    if (!word) return null;
+    const scale = currentBox.pxScale || 1;
+    return { x: word.x / scale, y: word.y / scale, width: word.width / scale, height: word.height / scale, centerX: (word.x + word.width / 2) / scale, centerY: (word.y + word.height / 2) / scale };
+  };
 }
 
 export function initCanvasTransform() {
@@ -863,6 +1263,10 @@ export function initCanvasTransform() {
   keywordMultiSelectDoneBtn = document.getElementById('btn-transform-keyword-multiselect-done');
   keywordMultiSelectLabelEl = document.getElementById('caption-transform-keyword-multiselect-label');
   keywordAnimationSelect = document.getElementById('select-keyword-transform-animation');
+  keywordToggleBtn = document.getElementById('btn-transform-toggle-keyword');
+  groupStartBtn = document.getElementById('btn-transform-group-start');
+  groupConfirmBtn = document.getElementById('btn-transform-group-confirm');
+  groupMultiSelectLabelEl = document.getElementById('caption-transform-group-multiselect-label');
   if (!overlayEl || !hitAreaEl || !boxEl) return;
 
   updateScopeButtons();
@@ -895,25 +1299,56 @@ export function initCanvasTransform() {
       return;
     }
 
-    if (word) {
-      // TWO-STEP SELECTION: a word hit doesn't jump straight to word-level
-      // selection — it only drills in if the whole caption/group this word
-      // belongs to is ALREADY the current selection (selected with no word
-      // singled out yet), or if this exact word is already the one selected
-      // (keeps a drag/re-click on it working as before). Any other click on
-      // a word — nothing selected yet, or a DIFFERENT word/caption was
-      // selected — selects the whole current caption/group first, exactly
-      // like clicking the caption's padding does below. This restores
-      // "click a caption to select it as a whole" without touching how an
-      // already-drilled-in word behaves once selected. Keyword vs. normal
-      // status never factors into this — see this file's top doc comment.
-      const alreadyGroupSelected = selected && selectedWordIndex == null;
-      const alreadyThisWordSelected = selectedWordIndex === word.wordIndex;
+    // "Group Words" mode — same toggle-membership pattern as "Select
+    // Keywords" above, but ANY word qualifies (no isKeyword gate): keyword
+    // status must never determine group membership (see this feature's own
+    // requirement).
+    if (isSelectingGroup) {
+      if (word) {
+        if (!groupMultiSelection) groupMultiSelection = new Set();
+        if (groupMultiSelection.has(word.wordIndex)) groupMultiSelection.delete(word.wordIndex);
+        else groupMultiSelection.add(word.wordIndex);
+        renderGroupMultiSelectMarkers();
+        updateScopeButtons();
+      }
+      return;
+    }
 
-      if (alreadyGroupSelected && !alreadyThisWordSelected) {
+    if (word) {
+      // TWO-STEP SELECTION, now group-membership-aware: a word hit doesn't
+      // jump straight to word-level selection — it only drills in if the
+      // GROUP this word currently belongs to (its default caption group, or
+      // a custom group from the explicit grouping flow — see
+      // getEffectiveGroupId) is ALREADY the one on screen, or if this exact
+      // word is already the one selected (keeps a drag/re-click on it
+      // working as before). A word with NO group at all (explicitly
+      // detached/standalone, effective group id `null` — see endDrag) has
+      // no wider group to represent, so a first click selects it directly
+      // instead of forcing a redundant intermediate "group of one" step.
+      // Keyword vs. normal status never factors into any of this — see this
+      // file's top doc comment.
+      const wordGroupId = getEffectiveGroupId(word.wordIndex, currentBox.phrase);
+      const alreadyThisWordSelected = selectedWordIndex === word.wordIndex;
+      const alreadyShowingWordsGroup = selected && selectedWordIndex == null &&
+        wordGroupId != null && selectedGroupId === wordGroupId;
+
+      if (alreadyThisWordSelected) {
+        // Already this exact word's selection — unchanged existing behavior.
+        boxEl.hidden = false;
+        positionBoxElement();
+        updateScopeButtons();
+        beginMove(e);
+        return;
+      }
+
+      if (wordGroupId == null || alreadyShowingWordsGroup) {
+        // Standalone word (drill in immediately), or a second click within
+        // the already-selected group (drill in) — both land on selecting
+        // THIS word specifically.
         resetKeywordScopeState();
         selected = true;
         selectedWordIndex = word.wordIndex;
+        selectedGroupId = null;
         boxEl.hidden = false;
         positionBoxElement();
         updateScopeButtons();
@@ -921,18 +1356,13 @@ export function initCanvasTransform() {
         return;
       }
 
-      if (!alreadyThisWordSelected) {
-        if (selectedWordIndex != null) resetKeywordScopeState();
-        selected = true;
-        selectedWordIndex = null;
-        boxEl.hidden = false;
-        positionBoxElement();
-        updateScopeButtons();
-        beginMove(e);
-        return;
-      }
-
-      // Already this exact word's selection — unchanged existing behavior.
+      // First click on a word belonging to a group not yet on screen —
+      // select that whole group first, exactly like clicking the caption's
+      // padding does below.
+      if (selectedWordIndex != null) resetKeywordScopeState();
+      selected = true;
+      selectedWordIndex = null;
+      selectedGroupId = wordGroupId;
       boxEl.hidden = false;
       positionBoxElement();
       updateScopeButtons();
@@ -949,11 +1379,12 @@ export function initCanvasTransform() {
     };
     if (pointInRotatedBox(x, y, boxCss)) {
       // Missed every individual word's rect but still landed inside the
-      // whole caption's box (e.g. its padding) — this is CURRENT CAPTION
-      // selection: the caption on screen right now, as a unit.
+      // caption's overall padding area — this is CURRENT CAPTION selection:
+      // the caption's plain default group, on screen right now, as a unit.
       if (selectedWordIndex != null) resetKeywordScopeState();
       selected = true;
       selectedWordIndex = null;
+      selectedGroupId = currentBox.phrase ? getPhraseTransformKey(currentBox.phrase) : null;
       boxEl.hidden = false;
       positionBoxElement();
       updateScopeButtons();
@@ -966,6 +1397,7 @@ export function initCanvasTransform() {
     } else {
       selected = false;
       selectedWordIndex = null;
+      selectedGroupId = null;
       resetKeywordScopeState();
       boxEl.hidden = true;
     }
@@ -974,18 +1406,33 @@ export function initCanvasTransform() {
   boxEl.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
 
-    // While the WHOLE caption/group is selected (selectedWordIndex null),
-    // this box spans the entire caption, so it's what actually receives a
-    // click meant to drill into one specific word (see hitTestWordAtClient's
-    // doc comment above). Once a word IS selected this box shrinks to just
-    // that word's own bounds (see getDisplayBox), so any other word is
-    // already outside it and reaches hitAreaEl underneath directly — no
-    // special-casing needed there.
-    if (selectedWordIndex == null) {
+    // While a GROUP is selected (selectedWordIndex null), this box spans the
+    // whole group, so it's what actually receives a click meant to drill
+    // into one specific word (see hitTestWordAtClient's doc comment above).
+    // Once a word IS selected this box shrinks to just that word's own
+    // bounds (see getDisplayBox), so any other word is already outside it
+    // and reaches hitAreaEl underneath directly — no special-casing needed
+    // there.
+    if (selectedWordIndex == null && selectedGroupId != null) {
       const word = hitTestWordAtClient(e.clientX, e.clientY);
       if (word) {
+        const wordGroupId = getEffectiveGroupId(word.wordIndex, currentBox.phrase);
         resetKeywordScopeState();
-        selectedWordIndex = word.wordIndex;
+        if (wordGroupId === selectedGroupId) {
+          // Second click within the currently-shown group — drill into it.
+          selectedWordIndex = word.wordIndex;
+          selectedGroupId = null;
+        } else if (wordGroupId == null) {
+          // Rare overlap: a standalone word's box happens to sit under this
+          // group's box — select it directly, same as hitAreaEl would.
+          selectedWordIndex = word.wordIndex;
+          selectedGroupId = null;
+        } else {
+          // Rare overlap: a DIFFERENT group's word sits under this box —
+          // treat as a fresh first click on that other group.
+          selectedWordIndex = null;
+          selectedGroupId = wordGroupId;
+        }
         positionBoxElement();
         updateScopeButtons();
         beginMove(e);
@@ -1014,10 +1461,12 @@ export function initCanvasTransform() {
   window.addEventListener('pointercancel', endDrag);
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && selected) {
+    if (e.key === 'Escape' && (selected || isSelectingGroup)) {
       selected = false;
       selectedWordIndex = null;
+      selectedGroupId = null;
       resetKeywordScopeState();
+      if (isSelectingGroup) finishGroupSelection(false);
       boxEl.hidden = true;
     }
   });
@@ -1075,6 +1524,27 @@ export function initCanvasTransform() {
       updateState({ keywordApplyScope: 'select' }, { recordHistory: false });
       updateScopeButtons();
     });
+  }
+  if (keywordToggleBtn) {
+    keywordToggleBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    keywordToggleBtn.addEventListener('click', () => {
+      if (selectedWordIndex == null) return;
+      setWordKeyword(selectedWordIndex, !isKeywordIndex(selectedWordIndex));
+      updateScopeButtons();
+    });
+  }
+  if (groupStartBtn) {
+    groupStartBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    groupStartBtn.addEventListener('click', () => {
+      isSelectingGroup = true;
+      groupMultiSelection = new Set();
+      renderGroupMultiSelectMarkers();
+      updateScopeButtons();
+    });
+  }
+  if (groupConfirmBtn) {
+    groupConfirmBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    groupConfirmBtn.addEventListener('click', () => finishGroupSelection(true));
   }
   if (keywordAnimationSelect) {
     keywordAnimationSelect.addEventListener('pointerdown', (e) => e.stopPropagation());

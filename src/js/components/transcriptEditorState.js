@@ -32,7 +32,19 @@ import { appState, updateState } from '../state.js';
 const WORD_CHIP_BASE_CLASSES = 'word-chip bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md px-2 py-[3px] text-xs font-semibold text-[var(--text-primary)] outline-none cursor-text transition-all duration-150';
 const WORD_CHIP_EDITED_CLASSES = ['border-amber-500', 'bg-amber-500/15'];
 
+/**
+ * Word chips are wrapped in a plain (non-editable) span so the keyword
+ * toggle button can sit next to the chip without becoming part of its
+ * contentEditable content — an element nested INSIDE a contentEditable node
+ * is fair game for the user to accidentally select/delete/type around,
+ * which would corrupt both the transcript text and the toggle control. The
+ * editable `.word-chip` itself is unchanged and stays the element
+ * collectEditedWords/applyLiveWordEdit already look for.
+ */
 export function buildWordChip(wordObj, idx) {
+  const wrap = document.createElement('span');
+  wrap.className = 'inline-flex items-center gap-1';
+
   const chip = document.createElement('span');
   chip.className = WORD_CHIP_BASE_CLASSES;
   chip.contentEditable = 'true';
@@ -40,6 +52,14 @@ export function buildWordChip(wordObj, idx) {
   chip.textContent = wordObj.word || '';
   chip.dataset.index = idx;
   chip.dataset.originalText = wordObj.word || '';
+  // Keyword status is purely a DISPLAY concern here (see setWordKeyword's
+  // doc comment) — gated by the "AI Keywords" toggle (appState.
+  // enableKeywordHighlighting) so turning that off hides the indication
+  // without touching wordObj.isKeyword itself. RightInspector.jsx rebuilds
+  // every chip (via this function) whenever either `words` or
+  // `enableKeywordHighlighting` changes, so this class always reflects the
+  // current toggle state.
+  chip.classList.toggle('word-chip-keyword', !!wordObj.isKeyword && !!appState.enableKeywordHighlighting);
 
   chip.addEventListener('input', () => {
     const currentText = chip.textContent.trim();
@@ -71,7 +91,25 @@ export function buildWordChip(wordObj, idx) {
     }
   });
 
-  return chip;
+  // Manual keyword toggle — writes through setWordKeyword (the single
+  // canonical keyword write path also used by canvasTransform.js's on-canvas
+  // toggle), so a change made here is immediately visible on the canvas too.
+  const keywordToggle = document.createElement('button');
+  keywordToggle.type = 'button';
+  keywordToggle.className = 'word-chip-keyword-toggle' + (wordObj.isKeyword ? ' active' : '');
+  keywordToggle.title = wordObj.isKeyword ? 'Unmark as keyword' : 'Mark as keyword';
+  keywordToggle.textContent = '★';
+  // Prevents the button click from stealing focus/caret away from the
+  // contentEditable chip in a way that could disrupt an in-progress edit.
+  keywordToggle.addEventListener('mousedown', (e) => e.preventDefault());
+  keywordToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setWordKeyword(idx, !wordObj.isKeyword);
+  });
+
+  wrap.appendChild(chip);
+  wrap.appendChild(keywordToggle);
+  return wrap;
 }
 
 /**
@@ -118,6 +156,55 @@ function applyLiveWordEdit(flatWordIndex, newText) {
   nextPhrases[phraseIdx] = { ...targetPhrase, words: nextWords };
 
   updateState({ phrases: nextPhrases }, { recordHistory: false });
+}
+
+/**
+ * The single canonical write path for a word's `isKeyword` status — called
+ * from BOTH the transcript editor's manual toggle button (above) and
+ * canvasTransform.js's on-canvas keyword toggle, so there is exactly one
+ * source of truth instead of two independently-maintained keyword flags
+ * (see this feature's own architectural requirement).
+ *
+ * Patches `isKeyword` on every phrase.words[] entry matching this wordIndex
+ * (immutably, same find-by-wordIndex + slice-and-replace pattern as
+ * applyLiveWordEdit above) AND on appState.words[wordIndex] (its flat
+ * position doubles as its wordIndex — see collectEditedWords/
+ * applyLiveWordEdit's own doc comments on this identity). Both copies are
+ * patched together, in one updateState call, because — unlike a rapid-fire
+ * keystroke edit — a keyword toggle is a deliberate, infrequent action, so
+ * there's no caret-clobbering risk in also updating `words` immediately
+ * (RightInspector's chip-rebuild effect depends on it, and SHOULD rebuild
+ * here to refresh the toggle button's/chip's own visual state).
+ */
+export function setWordKeyword(wordIndex, isKeyword) {
+  const idx = Number(wordIndex);
+
+  const phrases = appState.phrases;
+  let nextPhrases = phrases;
+  if (Array.isArray(phrases) && phrases.length) {
+    let changed = false;
+    const mapped = phrases.map((phrase) => {
+      const wIdx = (phrase.words || []).findIndex((w) => w.wordIndex === idx);
+      if (wIdx === -1) return phrase;
+      changed = true;
+      const nextPhraseWords = phrase.words.slice();
+      nextPhraseWords[wIdx] = { ...nextPhraseWords[wIdx], isKeyword };
+      return { ...phrase, words: nextPhraseWords };
+    });
+    if (changed) nextPhrases = mapped;
+  }
+
+  const words = appState.words;
+  let nextWords = words;
+  if (Array.isArray(words) && idx >= 0 && idx < words.length) {
+    nextWords = words.slice();
+    nextWords[idx] = { ...nextWords[idx], isKeyword };
+  }
+
+  const updates = {};
+  if (nextPhrases !== phrases) updates.phrases = nextPhrases;
+  if (nextWords !== words) updates.words = nextWords;
+  if (Object.keys(updates).length) updateState(updates, { recordHistory: true });
 }
 
 /**

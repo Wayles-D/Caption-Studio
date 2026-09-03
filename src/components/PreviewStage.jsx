@@ -129,6 +129,19 @@ export function PreviewStage({
                     for the three buttons above while active. */}
                 <span className="caption-transform-keyword-multiselect-label" id="caption-transform-keyword-multiselect-label" hidden>0 selected</span>
                 <button type="button" className="caption-transform-reset-btn" id="btn-transform-keyword-multiselect-done" hidden>Done</button>
+                {/* Manual keyword mark/unmark — shown whenever a specific
+                    word is selected (see canvasTransform.js's
+                    updateScopeButtons); writes through the same canonical
+                    setWordKeyword path the transcript editor's own toggle
+                    uses. */}
+                <button type="button" className="caption-transform-scope-btn" id="btn-transform-toggle-keyword" hidden>Mark as Keyword</button>
+                {/* Explicit word-grouping — "Group Words" starts a
+                    multi-word pick (any word, keyword or not); "Group"
+                    confirms it into a brand-new group selection. See
+                    canvasTransform.js's isSelectingGroup/finishGroupSelection. */}
+                <button type="button" className="caption-transform-scope-btn" id="btn-transform-group-start" hidden>Group Words</button>
+                <span className="caption-transform-keyword-multiselect-label" id="caption-transform-group-multiselect-label" hidden>0 selected</span>
+                <button type="button" className="caption-transform-reset-btn" id="btn-transform-group-confirm" hidden>Group</button>
                 <select className="caption-transform-keyword-animation-select" id="select-keyword-transform-animation" hidden defaultValue="none">
                   <option value="none">No animation</option>
                   <option value="fade">Fade</option>
