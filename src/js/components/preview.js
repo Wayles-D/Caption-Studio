@@ -198,17 +198,60 @@ export function initPreviewWorkspace() {
   const timeDisplayDuration = document.getElementById('time-display-duration');
 
   // Video Time Updates & Subtitle Synchronization
+  //
+  // `timeupdate` alone is too coarse to drive smooth caption animations: per
+  // spec browsers fire it roughly every 150-250ms (far below the ~16.7ms
+  // frame budget a 60fps display needs), so a short entrance animation (the
+  // default duration is 0.25s — see shared/captionAnimation.js) could get as
+  // few as 1-3 redraws across its ENTIRE eased ramp, even though
+  // getAnimationTransform's own progress/easing math is perfectly
+  // continuous — the redraw SCHEDULING was the bottleneck, not the curve.
+  // While the video is actually playing, a requestAnimationFrame loop
+  // re-samples previewVideo.currentTime and re-renders every displayed
+  // frame instead, so the same continuous animation math gets sampled
+  // densely enough to read as real motion. `timeupdate` is kept as-is for
+  // the paused-seek case (scrubbing the seek bar/dragging while paused only
+  // ever fires `timeupdate`, never a rAF loop) and as a harmless redundant
+  // safety net during playback.
+  function updatePreviewFrame() {
+    syncVideoSubtitles();
+    if (videoSeekBar && previewVideo.duration) {
+      const percent = (previewVideo.currentTime / previewVideo.duration) * 100;
+      videoSeekBar.value = percent;
+    }
+    if (timeDisplayCurrent) {
+      timeDisplayCurrent.textContent = formatTime(previewVideo.currentTime);
+    }
+  }
+
+  // Dev-only test hook: counts how many times the preview actually redraws,
+  // so an automated test can confirm the rAF loop below is sampling at
+  // display-frame density during playback instead of timeupdate's coarse
+  // ~150-250ms cadence. Never included in a production build (see
+  // canvasTransform.js's identical guard).
+  if (import.meta.env.DEV) window.__debugPreviewFrameCount = 0;
+
+  let previewLoopRafId = null;
+  function stepPreviewLoop() {
+    updatePreviewFrame();
+    if (import.meta.env.DEV) window.__debugPreviewFrameCount++;
+    previewLoopRafId = requestAnimationFrame(stepPreviewLoop);
+  }
+  function startPreviewLoop() {
+    if (previewLoopRafId != null) return;
+    previewLoopRafId = requestAnimationFrame(stepPreviewLoop);
+  }
+  function stopPreviewLoop() {
+    if (previewLoopRafId == null) return;
+    cancelAnimationFrame(previewLoopRafId);
+    previewLoopRafId = null;
+  }
+
   if (previewVideo) {
-    previewVideo.addEventListener('timeupdate', () => {
-      syncVideoSubtitles();
-      if (videoSeekBar && previewVideo.duration) {
-        const percent = (previewVideo.currentTime / previewVideo.duration) * 100;
-        videoSeekBar.value = percent;
-      }
-      if (timeDisplayCurrent) {
-        timeDisplayCurrent.textContent = formatTime(previewVideo.currentTime);
-      }
-    });
+    previewVideo.addEventListener('timeupdate', updatePreviewFrame);
+
+    previewVideo.addEventListener('play', startPreviewLoop);
+    previewVideo.addEventListener('pause', stopPreviewLoop);
 
     previewVideo.addEventListener('loadedmetadata', () => {
       if (timeDisplayDuration) {
@@ -218,6 +261,7 @@ export function initPreviewWorkspace() {
     });
 
     previewVideo.addEventListener('ended', () => {
+      stopPreviewLoop();
       if (playPoly) playPoly.setAttribute('points', '5,3 19,12 5,21');
     });
   }
