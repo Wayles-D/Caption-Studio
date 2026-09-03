@@ -645,6 +645,20 @@ function clientToCssPoint(clientX, clientY) {
   return { x: clientX - rect.left, y: clientY - rect.top, rect };
 }
 
+/**
+ * Shared word hit-test used by BOTH hitAreaEl and boxEl's pointerdown
+ * handlers — needed because once the whole-caption/group is selected, boxEl
+ * spans the entire caption and physically sits on top of hitAreaEl beneath
+ * it, so a second click meant to drill into one specific word lands on boxEl
+ * instead and would otherwise never reach the word-vs-caption logic at all.
+ */
+function hitTestWordAtClient(clientX, clientY) {
+  if (!currentBox) return null;
+  const { x, y } = clientToCssPoint(clientX, clientY);
+  const scale = currentBox.pxScale || 1;
+  return findWordAtPoint(x * scale, y * scale, currentBox);
+}
+
 function beginMove(e) {
   if (!currentBox) return;
   // Pin the phrase (and, when one is selected, the word) this gesture
@@ -859,9 +873,43 @@ export function initCanvasTransform() {
     }
 
     if (word) {
-      if (word.wordIndex !== selectedWordIndex) resetKeywordScopeState();
-      selected = true;
-      selectedWordIndex = word.wordIndex;
+      // TWO-STEP SELECTION: a word hit doesn't jump straight to word-level
+      // selection — it only drills in if the whole caption/group this word
+      // belongs to is ALREADY the current selection (selected with no word
+      // singled out yet), or if this exact word is already the one selected
+      // (keeps a drag/re-click on it working as before). Any other click on
+      // a word — nothing selected yet, or a DIFFERENT word/caption was
+      // selected — selects the whole current caption/group first, exactly
+      // like clicking the caption's padding does below. This restores
+      // "click a caption to select it as a whole" without touching how an
+      // already-drilled-in word behaves once selected. Keyword vs. normal
+      // status never factors into this — see this file's top doc comment.
+      const alreadyGroupSelected = selected && selectedWordIndex == null;
+      const alreadyThisWordSelected = selectedWordIndex === word.wordIndex;
+
+      if (alreadyGroupSelected && !alreadyThisWordSelected) {
+        resetKeywordScopeState();
+        selected = true;
+        selectedWordIndex = word.wordIndex;
+        boxEl.hidden = false;
+        positionBoxElement();
+        updateScopeButtons();
+        beginMove(e);
+        return;
+      }
+
+      if (!alreadyThisWordSelected) {
+        if (selectedWordIndex != null) resetKeywordScopeState();
+        selected = true;
+        selectedWordIndex = null;
+        boxEl.hidden = false;
+        positionBoxElement();
+        updateScopeButtons();
+        beginMove(e);
+        return;
+      }
+
+      // Already this exact word's selection — unchanged existing behavior.
       boxEl.hidden = false;
       positionBoxElement();
       updateScopeButtons();
@@ -902,6 +950,25 @@ export function initCanvasTransform() {
 
   boxEl.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
+
+    // While the WHOLE caption/group is selected (selectedWordIndex null),
+    // this box spans the entire caption, so it's what actually receives a
+    // click meant to drill into one specific word (see hitTestWordAtClient's
+    // doc comment above). Once a word IS selected this box shrinks to just
+    // that word's own bounds (see getDisplayBox), so any other word is
+    // already outside it and reaches hitAreaEl underneath directly — no
+    // special-casing needed there.
+    if (selectedWordIndex == null) {
+      const word = hitTestWordAtClient(e.clientX, e.clientY);
+      if (word) {
+        resetKeywordScopeState();
+        selectedWordIndex = word.wordIndex;
+        positionBoxElement();
+        updateScopeButtons();
+        beginMove(e);
+        return;
+      }
+    }
     beginMove(e);
   });
 
