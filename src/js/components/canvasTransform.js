@@ -55,6 +55,28 @@
 import { appState, updateState } from '../state.js';
 import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
 import { setWordKeyword } from './transcriptEditorState.js';
+import { deselectVideoTarget } from './videoTransform.js';
+import {
+  PHRASE_FIELD_TO_PROPERTY,
+  WORD_FIELD_TO_PROPERTY,
+  KEYFRAME_PROPERTIES,
+  findKeyframeEntryNear,
+  upsertKeyframeEntry,
+  removeKeyframeEntry,
+  moveKeyframeEntry,
+  evaluatePropertyAtTime,
+  routeFieldsThroughKeyframes as routeFieldsThroughKeyframesAtTime
+} from '../../../shared/keyframes.js';
+
+/** Current playhead position — the single source of "what time is it" every keyframe read/write in this module uses. */
+function getPlayheadTime() {
+  return document.getElementById('preview-video')?.currentTime ?? 0;
+}
+
+/** Thin wrapper supplying the current playhead time to the shared, target-agnostic auto-keying primitive (see shared/keyframes.js's routeFieldsThroughKeyframes — also used, independently, by src/js/components/videoTransform.js for the Video target). */
+function routeFieldsThroughKeyframes(existing, fields, fieldToProperty) {
+  return routeFieldsThroughKeyframesAtTime(existing, fields, fieldToProperty, getPlayheadTime());
+}
 
 let overlayEl, hitAreaEl, boxEl, rotateHandleEl, scopeThisBtn, scopeAllBtn, resetBtn, rotationLabelEl;
 let scopeThisKeywordBtn, scopeAllKeywordsBtn, scopeSelectKeywordsBtn, keywordMultiSelectDoneBtn, keywordMultiSelectLabelEl;
@@ -333,14 +355,38 @@ function computeGroupBox(groupId) {
  * every phrase already falls back to when it has no override, so no
  * special-casing is needed anywhere else.
  */
+/**
+ * Writes fields directly into a phrase's own captionTransforms[phraseKey]
+ * entry, unconditionally (no transformApplyScope branching) — the write
+ * primitive both applyTransformFields's "This Caption" branch AND keyframe
+ * writes (setPropertyValueForCurrentSelection) use. Keyframes always target
+ * the exact selected phrase instance regardless of the This/All Captions
+ * toggle (see this file's own keyframe-scope decision, documented at
+ * getKeyframeTarget) — routing through applyTransformFields's scope check
+ * would silently send a keyframe edit to the GLOBAL style fields instead
+ * whenever "All Captions" happens to be the current scope, since that's its
+ * default (see src/store/transformStore.js's TRANSFORM_DEFAULTS).
+ */
+function writePhraseFields(phrase, fields, { recordHistory }) {
+  const key = getPhraseTransformKey(phrase);
+  const existing = appState.captionTransforms[key] || {};
+  // Auto-key: any field here that already has an ACTIVE keyframe track
+  // (see shared/keyframes.js) updates that track at the current playhead
+  // instead of overwriting the plain static value — see
+  // routeFieldsThroughKeyframes's own doc comment. A phrase with no
+  // keyframes yet writes exactly as before.
+  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, fields, PHRASE_FIELD_TO_PROPERTY);
+  const nextEntry = { ...existing, ...remainingFields };
+  if (nextKeyframes) nextEntry.keyframes = nextKeyframes;
+  const nextMap = { ...appState.captionTransforms, [key]: nextEntry };
+  updateState({ captionTransforms: nextMap }, { recordHistory });
+}
+
 function applyTransformFields(fields, { recordHistory, phrase }) {
   const targetPhrase = phrase || currentBox?.phrase;
   if (!currentBox && !targetPhrase) return;
   if (appState.transformApplyScope === 'this' && targetPhrase) {
-    const key = getPhraseTransformKey(targetPhrase);
-    const existing = appState.captionTransforms[key] || {};
-    const nextMap = { ...appState.captionTransforms, [key]: { ...existing, ...fields } };
-    updateState({ captionTransforms: nextMap }, { recordHistory });
+    writePhraseFields(targetPhrase, fields, { recordHistory });
   } else {
     // customPosX/Y only take effect when position === 'manual' (see
     // getCSSPreviewFromConfig/getASSStyleFromConfig) — a global move-drag
@@ -391,7 +437,11 @@ function applyWordTransformFields(wordIndex, fields, { recordHistory }) {
   if (wordIndex == null) return;
   const key = getWordTransformKey(wordIndex);
   const existing = appState.captionTransforms[key] || {};
-  const nextMap = { ...appState.captionTransforms, [key]: { ...existing, ...fields } };
+  // Auto-key — see the matching comment in applyTransformFields.
+  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, fields, WORD_FIELD_TO_PROPERTY);
+  const nextEntry = { ...existing, ...remainingFields };
+  if (nextKeyframes) nextEntry.keyframes = nextKeyframes;
+  const nextMap = { ...appState.captionTransforms, [key]: nextEntry };
   updateState({ captionTransforms: nextMap }, { recordHistory });
 }
 
@@ -1006,6 +1056,7 @@ function updateScopeButtons() {
     }
   }
 
+
   // While picking "Select Keywords"/"Group Words" instances, boxEl often
   // falls back to covering the WHOLE caption (see getDisplayBox — the anchor
   // word is frequently not part of whatever's on screen right now, since the
@@ -1478,6 +1529,10 @@ export function initCanvasTransform() {
 
   hitAreaEl.addEventListener('pointerdown', (e) => {
     if (!currentBox) return;
+    // A canvas selection and the Video target (see videoTransform.js) are
+    // mutually exclusive — the timeline panel's property lanes always show
+    // exactly ONE target. Interacting with a caption/word here always wins.
+    deselectVideoTarget();
     const { x, y } = clientToCssPoint(e.clientX, e.clientY);
     const scale = currentBox.pxScale || 1;
 
@@ -1803,4 +1858,272 @@ export function initCanvasTransform() {
       updateScopeButtons();
     });
   }
+}
+
+/**
+ * KEYFRAME TARGET — read model for src/js/components/keyframeEngine.js (the
+ * generic target dispatcher the timeline panel talks to — see
+ * src/js/components/timelinePanel.js). Reuses the exact same selection
+ * classification every other feature in this file already relies on
+ * (currentSelectionTarget/isFullPhraseGroup/getGroupMemberIndexes) —
+ * keyframes introduce no new selection concept, and no dedicated "select an
+ * element to keyframe" step: whatever is already selected on the canvas
+ * (word/keyword/caption/group) IS the keyframe target, exactly like a video
+ * editor keyframes whatever clip is currently selected. This module knows
+ * nothing about the VIDEO target — that's src/js/components/videoTransform.js,
+ * dispatched to by keyframeEngine.js alongside this one.
+ *
+ *   - word/keyword selected -> one wordIndex, keyed via getWordTransformKey.
+ *   - whole (untouched) caption selected -> phrase-keyed, via
+ *     getPhraseTransformKey — no wordIndexes (a single shared entry list).
+ *   - a custom/partial group selected -> fans out to every CURRENT member's
+ *     OWN wordIndex/entry list, matching how the existing group-drag feature
+ *     already treats members independently (each keeps its own start value).
+ *
+ * Returns null when nothing is selected — callers (the toolbar's keyframe
+ * button, the timeline markers) hide themselves entirely in that case.
+ */
+export function getKeyframeTarget() {
+  if (!selected) return null;
+  if (selectedWordIndex != null) {
+    return { kind: isKeywordIndex(selectedWordIndex) ? 'keyword' : 'word', wordIndexes: [selectedWordIndex], phrase: currentBox?.phrase || null };
+  }
+  if (selectedGroupId != null && currentBox) {
+    if (isFullPhraseGroup(selectedGroupId)) {
+      return { kind: 'caption', wordIndexes: null, phrase: currentBox.phrase };
+    }
+    const members = getGroupMemberIndexes(selectedGroupId);
+    if (!members.length) return null;
+    return { kind: 'group', wordIndexes: members, phrase: currentBox.phrase || null };
+  }
+  return null;
+}
+
+const WORD_STATIC_FIELD_BY_PROPERTY = { positionX: 'offsetXPx', positionY: 'offsetYPx', rotation: 'rotationDeg', scale: 'fontScale', opacity: 'opacity' };
+const PHRASE_STATIC_FIELD_BY_PROPERTY = { positionX: 'customPosX', positionY: 'customPosY', rotation: 'rotation', scale: 'captionScaleMultiplier', opacity: 'opacity' };
+const KEYFRAME_PROPERTY_DEFAULTS = { positionX: 0, positionY: 0, rotation: 0, scale: 1, opacity: 100 };
+
+/**
+ * Every per-target override object a keyframe read/write should touch, for
+ * the current selection (see getKeyframeTarget). `readCurrentValue(property)`
+ * resolves the value that property CURRENTLY has — the live keyframe-
+ * interpolated value at the current playhead when it's been keyframed
+ * (same math shared/keyframes.js's evaluatePropertyAtTime feeds the
+ * renderer), otherwise the plain effective static value (today's existing
+ * effectiveValue/effectiveWordValue fallback chain) — this is what the
+ * toolbar's keyframe button snapshots when it creates/updates an entry.
+ */
+function getKeyframeOverrideEntries(target) {
+  if (!target) return [];
+  const time = getPlayheadTime();
+
+  if (target.wordIndexes) {
+    return target.wordIndexes.map((wordIndex) => {
+      const key = getWordTransformKey(wordIndex);
+      return {
+        key,
+        readCurrentValue: (property) => {
+          const list = appState.captionTransforms[key]?.keyframes;
+          const kfValue = evaluatePropertyAtTime(list, property, time);
+          if (kfValue !== undefined) return kfValue;
+          return effectiveWordValue(wordIndex, WORD_STATIC_FIELD_BY_PROPERTY[property], KEYFRAME_PROPERTY_DEFAULTS[property]);
+        }
+      };
+    });
+  }
+  if (target.phrase) {
+    const key = getPhraseTransformKey(target.phrase);
+    return [{
+      key,
+      readCurrentValue: (property) => {
+        const list = appState.captionTransforms[key]?.keyframes;
+        const kfValue = evaluatePropertyAtTime(list, property, time);
+        if (kfValue !== undefined) return kfValue;
+        const field = PHRASE_STATIC_FIELD_BY_PROPERTY[property];
+        const override = appState.captionTransforms[key];
+        const staticValue = override && override[field] != null ? override[field] : KEYFRAME_PROPERTY_DEFAULTS[property];
+        return effectiveValue(target.phrase, field, staticValue);
+      }
+    }];
+  }
+  return [];
+}
+
+/**
+ * THE keyframe control — one action, exactly like a video editor's clip-level
+ * "add keyframe" diamond: captures EVERY animatable property's current
+ * value (position/scale/rotation/opacity) into ONE keyframe entry at the
+ * current playhead time, for whatever is currently selected. If an entry
+ * already exists there, its values are updated in place rather than
+ * duplicated (see shared/keyframes.js's upsertKeyframeEntry). This is the
+ * ONLY way a target starts being keyframed — from this point on, ordinary
+ * edits (drag/resize/rotate on canvas) auto-key the touched property at
+ * wherever the playhead currently is (see routeFieldsThroughKeyframes),
+ * without needing this button again — pressing it a second time elsewhere
+ * just re-anchors a full snapshot there too, which is harmless and
+ * sometimes exactly what's wanted (e.g. re-asserting "still centered" at a
+ * new time before nudging just one property).
+ */
+export function addOrUpdateKeyframeAtPlayhead() {
+  const target = getKeyframeTarget();
+  const entries = getKeyframeOverrideEntries(target);
+  if (!entries.length) return;
+  const time = getPlayheadTime();
+
+  let nextTransforms = appState.captionTransforms;
+  entries.forEach(({ key, readCurrentValue }) => {
+    const existing = nextTransforms[key] || {};
+    const valuesPatch = {};
+    KEYFRAME_PROPERTIES.forEach((property) => { valuesPatch[property] = readCurrentValue(property); });
+    const nextKeyframes = upsertKeyframeEntry(existing.keyframes, time, valuesPatch);
+    nextTransforms = { ...nextTransforms, [key]: { ...existing, keyframes: nextKeyframes } };
+  });
+  updateState({ captionTransforms: nextTransforms }, { recordHistory: true });
+}
+
+/** Whether a keyframe entry (any properties) exists at the current playhead time, for the current selection — drives the toolbar button's filled/hollow diamond. First entry wins when a group fans out to several (they're expected to move together). */
+export function hasKeyframeAtPlayhead() {
+  const target = getKeyframeTarget();
+  const entries = getKeyframeOverrideEntries(target);
+  if (!entries.length) return false;
+  const list = appState.captionTransforms[entries[0].key]?.keyframes;
+  return !!findKeyframeEntryNear(list, getPlayheadTime());
+}
+
+/** Whether the current selection has ANY keyframes at all (any property, any time) — drives whether the timeline marker row/legend shows up at all. */
+export function currentSelectionHasKeyframes() {
+  const target = getKeyframeTarget();
+  const entries = getKeyframeOverrideEntries(target);
+  return entries.some(({ key }) => {
+    const list = appState.captionTransforms[key]?.keyframes;
+    return Array.isArray(list) && list.length > 0;
+  });
+}
+
+/**
+ * The current resolved (static-or-keyframed) value for `property`, for the
+ * current selection — backs the small supporting Opacity control in the
+ * on-canvas toolbar (opacity has no drag/resize/rotate gesture of its own
+ * to "just edit normally", so it keeps a minimal direct control — see
+ * setPropertyValueForCurrentSelection).
+ */
+export function getCurrentValueForProperty(property) {
+  const target = getKeyframeTarget();
+  const entries = getKeyframeOverrideEntries(target);
+  if (!entries.length) return KEYFRAME_PROPERTY_DEFAULTS[property];
+  return entries[0].readCurrentValue(property);
+}
+
+/**
+ * Writes a new value for ONE property on the current selection — used only
+ * by the toolbar's small Opacity control (see PreviewStage.jsx), since
+ * opacity has no on-canvas drag gesture the way position/scale/rotation do.
+ * Dispatches through the SAME writePhraseFields/applyWordTransformFields
+ * paths every other on-canvas edit already uses, so undo/redo and the
+ * auto-keying in routeFieldsThroughKeyframes apply identically here — once
+ * opacity has been keyframed (via addOrUpdateKeyframeAtPlayhead), moving
+ * this slider auto-keys at the current playhead instead of overwriting a
+ * single static value, exactly like a canvas drag would for position.
+ */
+export function setPropertyValueForCurrentSelection(property, value) {
+  const target = getKeyframeTarget();
+  if (!target) return;
+  if (target.kind === 'caption') {
+    const field = PHRASE_STATIC_FIELD_BY_PROPERTY[property];
+    writePhraseFields(target.phrase, { [field]: value }, { recordHistory: true });
+    return;
+  }
+  // applyWordTransformFields directly, NOT writeWordFields — a keyframe
+  // write always targets only the exact selected word(s)/group members (see
+  // getKeyframeTarget's own doc comment on this scope decision), so a
+  // keyword's own keywordApplyScope ('all'/'select' fan-out) must NOT apply
+  // here the way it does for an ordinary on-canvas drag.
+  const field = WORD_STATIC_FIELD_BY_PROPERTY[property];
+  (target.wordIndexes || []).forEach((wordIndex) => {
+    applyWordTransformFields(wordIndex, { [field]: value }, { recordHistory: true });
+  });
+}
+
+/** Every keyframe entry's timestamp for the current selection — backs the timeline panel's lane markers (see src/js/components/timelinePanel.js, via keyframeEngine.js). One marker per entry, matching how it was created (see addOrUpdateKeyframeAtPlayhead) — not one per property. */
+export function getKeyframeTimestampsForCurrentSelection() {
+  const target = getKeyframeTarget();
+  const entries = getKeyframeOverrideEntries(target);
+  const times = new Set();
+  entries.forEach(({ key }) => {
+    (appState.captionTransforms[key]?.keyframes || []).forEach((k) => times.add(k.t));
+  });
+  return Array.from(times).sort((a, b) => a - b);
+}
+
+/**
+ * The raw keyframe entries (`{t, easing, values}[]`) for the current
+ * selection — unlike getKeyframeTimestampsForCurrentSelection, this exposes
+ * WHICH properties each entry actually defines, so the timeline panel can
+ * show a marker on only the relevant property lane(s) (Position/Scale/
+ * Rotation/Opacity) instead of every lane. First entry's list wins when a
+ * group fans out to several targets (they're expected to move together,
+ * same convention as hasKeyframeAtPlayhead).
+ */
+export function getKeyframeEntriesForCurrentSelection() {
+  const target = getKeyframeTarget();
+  const entries = getKeyframeOverrideEntries(target);
+  if (!entries.length) return [];
+  return appState.captionTransforms[entries[0].key]?.keyframes || [];
+}
+
+/** Deletes the whole keyframe entry (every property it holds) at ~`time`, for the current selection — the timeline marker's delete affordance. */
+export function deleteAllKeyframesAt(time) {
+  const target = getKeyframeTarget();
+  const entries = getKeyframeOverrideEntries(target);
+  if (!entries.length) return;
+
+  let nextTransforms = appState.captionTransforms;
+  entries.forEach(({ key }) => {
+    const existing = nextTransforms[key];
+    if (!existing?.keyframes) return;
+    const nextKeyframes = removeKeyframeEntry(existing.keyframes, time);
+    if (nextKeyframes !== existing.keyframes) {
+      nextTransforms = { ...nextTransforms, [key]: { ...existing, keyframes: nextKeyframes } };
+    }
+  });
+  if (nextTransforms !== appState.captionTransforms) {
+    updateState({ captionTransforms: nextTransforms }, { recordHistory: true });
+  }
+}
+
+/** Moves the whole keyframe entry at ~`oldTime` to `newTime`, for the current selection — the timeline marker's drag-to-retime affordance. */
+export function moveAllKeyframesAt(oldTime, newTime) {
+  const target = getKeyframeTarget();
+  const entries = getKeyframeOverrideEntries(target);
+  if (!entries.length) return;
+
+  let nextTransforms = appState.captionTransforms;
+  entries.forEach(({ key }) => {
+    const existing = nextTransforms[key];
+    if (!existing?.keyframes) return;
+    const nextKeyframes = moveKeyframeEntry(existing.keyframes, oldTime, newTime);
+    if (nextKeyframes !== existing.keyframes) {
+      nextTransforms = { ...nextTransforms, [key]: { ...existing, keyframes: nextKeyframes } };
+    }
+  });
+  if (nextTransforms !== appState.captionTransforms) {
+    updateState({ captionTransforms: nextTransforms }, { recordHistory: true });
+  }
+}
+
+/**
+ * Clears any active canvas selection (word/keyword/caption/group) — called
+ * by src/js/components/timelinePanel.js when the user picks the "Video"
+ * target chip, so the Video target and a canvas selection stay mutually
+ * exclusive (see videoTransform.js's deselectVideoTarget, called the other
+ * direction from this module's hitAreaEl pointerdown handler above).
+ */
+export function deselectCanvasSelection() {
+  if (!selected && !isSelectingGroup) return;
+  selected = false;
+  selectedWordIndex = null;
+  selectedGroupId = null;
+  resetKeywordScopeState();
+  if (isSelectingGroup) finishGroupSelection(false);
+  if (boxEl) boxEl.hidden = true;
 }

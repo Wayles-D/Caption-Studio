@@ -42,7 +42,13 @@ export const TRANSFORM_DEFAULTS = {
   captionTransforms: {},
   transformApplyScope: "all",
   keywordApplyScope: "this",
-  animationApplyScope: "this"
+  animationApplyScope: "this",
+  // The VIDEO's own transform — a generic keyframeable target exactly like
+  // captionTransforms' entries, just a single object since there's only one
+  // video (see shared/videoTransform.js for the resolve-at-time logic and
+  // src/js/components/videoTransform.js for the read/write API). Undefined
+  // fields fall back to shared/videoTransform.js's VIDEO_TRANSFORM_DEFAULTS.
+  videoTransform: { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 0, opacity: 100, keyframes: [] }
 };
 
 export const useTransformStore = create(() => ({ ...TRANSFORM_DEFAULTS }));

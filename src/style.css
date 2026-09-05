@@ -28,36 +28,43 @@
    ========================================================================== */
 
 /* 1. Design System Tokens & CSS Variables
-   Warm charcoal-and-terracotta theme. All UI chrome colors are defined once
-   here — do not hardcode hex values inline in components. (This palette is
-   for the app's own UI chrome only; caption/text styling in the video
-   preview is a separate, user-configurable system — see captionConfig.js.) */
+   Near-black + spring-mint theme (design/caption-studio-color-update.md).
+   All UI chrome colors are defined once here — do not hardcode hex values
+   inline in components. (This palette is for the app's own UI chrome only;
+   caption/text styling in the video preview is a separate, user-configurable
+   system — see captionConfig.js.) */
 :root {
-  --bg-app: #1A1613;
-  --bg-toolbar: rgba(33, 28, 23, 0.85);
-  --bg-sidebar: #211C17;
-  --bg-card: #2A241E;
-  --bg-card-hover: #332C24;
-  --bg-input: #2A241E;
+  --bg-app: #020202;
+  --bg-toolbar: rgba(16, 16, 16, 0.85);
+  --bg-sidebar: #101010;
+  --bg-card: #1B1B1B;
+  --bg-card-hover: #262626;
+  --bg-input: #1B1B1B;
 
-  --border-color: #3A332B;
-  --border-color-hover: #4A4136;
-  --accent-color: #D97757;
-  --accent-hover: #C2653F;
-  --accent-glow: rgba(217, 119, 87, 0.25);
-  --accent-gradient: #D97757;
-  --text-on-accent: #1A1613;
-  --accent-wash-bg: #3A2A20;
-  --accent-wash-text: #E8A587;
+  --border-color: #262626;
+  --border-color-hover: #333333;
+  --accent-color: #00F6AC;
+  --accent-hover: #00D999;
+  --accent-glow: rgba(0, 246, 172, 0.25);
+  --accent-gradient: #00F6AC;
+  --text-on-accent: #020202;
+  --accent-wash-bg: #082A20;
+  --accent-wash-text: #4FF0BE;
 
-  /* Status — kept separate from the brand accent; reserved for "ready/live"
-     type indicators only ("Ready" tag, "LIVE WYSIWYG" dot). */
-  --status: #8FA876;
-  --status-wash-bg: rgba(143, 168, 118, 0.12);
+  /* Status doubles as the brand accent here — mint already reads as
+     "go," so no separate status color is needed (see design doc). */
+  --status: #00F6AC;
+  --status-wash-bg: rgba(0, 246, 172, 0.12);
 
-  --text-primary: #F0EAE1;
-  --text-secondary: #B8AC9C;
-  --text-muted: #8A7F70;
+  --text-primary: #FFFFFF;
+  --text-secondary: #9A9A9A;
+  --text-muted: #5C5C5C;
+
+  /* Not used anywhere yet — reserved for a second badge/tag color and for
+     destructive/error states, so they're available when a feature needs
+     them (see design doc's "Supplementary accents"). */
+  --accent-secondary: #F2B84B;
+  --error: #FF5C5C;
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -66,7 +73,7 @@
 
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-glow: 0 0 20px rgba(217, 119, 87, 0.15);
+  --shadow-glow: 0 0 20px rgba(0, 246, 172, 0.15);
 
   --font-main: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-geist: 'Geist', 'Inter', sans-serif;
@@ -83,19 +90,22 @@ body.light-theme {
 
   --border-color: rgba(0, 0, 0, 0.08);
   --border-color-hover: rgba(0, 0, 0, 0.18);
-  --accent-color: #D97757;
-  --accent-hover: #C2653F;
-  --accent-gradient: #D97757;
-  --text-on-accent: #FFFFFF;
-  --accent-wash-bg: #F3E0D6;
-  --accent-wash-text: #B85C3D;
+  --accent-color: #00CE8C;
+  --accent-hover: #00B87D;
+  --accent-gradient: #00CE8C;
+  --accent-glow: rgba(0, 206, 140, 0.25);
+  --text-on-accent: #020202;
+  --accent-wash-bg: #DFFBF1;
+  --accent-wash-text: #00875F;
 
-  --status: #6B8552;
-  --status-wash-bg: rgba(107, 133, 82, 0.12);
+  --status: #00CE8C;
+  --status-wash-bg: rgba(0, 206, 140, 0.12);
 
   --text-primary: #0F172A;
   --text-secondary: #475569;
   --text-muted: #94A3B8;
+
+  --shadow-glow: 0 0 20px rgba(0, 206, 140, 0.15);
 }
 
 /* Global Reset (stands in for Tailwind's Preflight, which is intentionally
@@ -164,8 +174,19 @@ body.light-theme {
    Never Tailwind-processed — see this file's header comment.
    ========================================================================== */
 .phone-frame {
-  width: 330px;
-  height: 586px; /* 9:16 vertical ratio */
+  /* Shrinks to fit whenever the workspace is shorter than 330x586 needs
+     (e.g. a shorter browser window, or the timeline panel below taking up
+     vertical space) — preview.js/canvasTransform.js already measure this
+     element's LIVE getBoundingClientRect() rather than assuming a fixed
+     size, so scaling it down here doesn't break any pxScale math. Only the
+     export pipeline's own PHONE_FRAME_CSS_WIDTH constant assumes the
+     "natural" 330px reference width, and that's resolved server-side with
+     no DOM involved, so it's unaffected either way. */
+  width: auto;
+  height: 586px; /* natural 9:16 vertical ratio size */
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 330 / 586;
   background: #000000;
   border-radius: var(--radius-phone);
   border: 4px solid rgba(255, 255, 255, 0.12);
@@ -314,6 +335,36 @@ body.light-theme {
   pointer-events: none;
 }
 
+/* The video overlay's box sits very close to the phone-frame's own top edge
+   (it covers nearly the whole frame — see PreviewStage.jsx's 3% inset), and
+   the frame itself can shrink to sit close under the app's header bar
+   (z-index 100) on a short viewport — the standard rotate handle, extended
+   ABOVE the box via a negative top offset, would poke up under the header
+   and become unclickable there at any fixed offset (confirmed during
+   testing). Placed INSIDE the box's own top edge instead — a small positive
+   inset that's always within the frame's own bounds regardless of the
+   frame's size/position — with no connecting line (it isn't needed once
+   the handle is inside the box rather than floating above it). */
+#video-transform-box .caption-transform-rotate-line {
+  display: none;
+}
+
+#video-transform-box .caption-transform-handle.rotate {
+  top: 14px;
+}
+
+/* Same reasoning as the rotate handle above — the toolbar's default
+   `bottom:100%` positions it ABOVE the box, which clips against
+   .phone-frame's overflow:hidden right where the video box sits (near the
+   frame's own top edge). Placed inside the box's own bottom edge instead. */
+#video-transform-toolbar {
+  position: absolute;
+  bottom: 10px;
+  top: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .caption-transform-handle.rotate {
   top: -64px;
   left: 50%;
@@ -448,4 +499,244 @@ body.light-theme {
 
 .word-chip-keyword-toggle.active {
   color: #F59E0B;
+}
+
+/* ==========================================================================
+   3. Timeline Panel — the primary keyframe editing surface (see
+   src/js/components/timelinePanel.js). A real editor timeline: target
+   chips, a ruler + playhead, and property lanes with draggable/deletable
+   keyframe markers. DOM-driven like the on-canvas transform overlay above,
+   for the same reason (a live drag/scrub loop fights React reconciliation).
+   ========================================================================== */
+.timeline-panel {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 16px;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.timeline-target-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.timeline-target-chip.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--text-on-accent);
+}
+
+.timeline-target-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.timeline-add-keyframe-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.timeline-add-keyframe-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.timeline-add-keyframe-btn.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--text-on-accent);
+}
+
+/* Reveals the per-lane precision numeric fields (X/Y/scale%/rotation°) —
+   hidden by default so the beginner-facing default experience is purely
+   visual (drag/resize/rotate on canvas), per this feature's own requirement.
+   Toggling this never touches appState — the underlying values are always
+   there, this only shows/hides the numeric inputs into them. */
+.timeline-advanced-toggle {
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.timeline-advanced-toggle.active {
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  border-color: var(--border-color-hover);
+}
+
+.timeline-time-readout {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 64px;
+  text-align: right;
+}
+
+.timeline-scroll {
+  position: relative;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.timeline-ruler-row,
+.timeline-lane {
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  align-items: center;
+  column-gap: 8px;
+}
+
+.timeline-ruler-row {
+  height: 22px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 4px;
+}
+
+.timeline-ruler-gutter {
+  /* Empty — keeps the ruler's track column aligned with every lane's track column below. */
+}
+
+.timeline-ruler {
+  position: relative;
+  height: 100%;
+  cursor: pointer;
+}
+
+.timeline-ruler-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border-color);
+  font-size: 9px;
+  color: var(--text-muted);
+  padding-left: 3px;
+  white-space: nowrap;
+}
+
+.timeline-lane {
+  min-height: 34px;
+}
+
+.timeline-lane-gutter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.timeline-lane-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  width: 46px;
+  flex-shrink: 0;
+}
+
+.timeline-lane-input {
+  width: 44px;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-main);
+}
+
+.timeline-lane-input:disabled {
+  opacity: 0.4;
+}
+
+.timeline-lane-track {
+  position: relative;
+  height: 100%;
+  background: var(--bg-input);
+  border-radius: 4px;
+}
+
+.timeline-marker {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  transform: translateY(-50%) rotate(45deg);
+  background: var(--bg-card);
+  border: 1.5px solid var(--accent-color);
+  border-radius: 1px;
+  cursor: grab;
+  z-index: 2;
+}
+
+.timeline-marker.filled {
+  background: var(--accent-color);
+}
+
+.timeline-marker.selected {
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--accent-color);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.timeline-playhead::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 9px;
+  height: 9px;
+  background: var(--accent-color);
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+}
+
+.timeline-empty-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 20px 0;
+  text-align: center;
 }

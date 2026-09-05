@@ -36,7 +36,13 @@ const EASING_FUNCTIONS = {
   'ease-in-out': (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2)
 };
 
-function applyEasing(t, easing) {
+/**
+ * Exported so shared/keyframes.js can reuse the exact same t-in-[0,1] curves
+ * for keyframe-segment interpolation instead of duplicating the easing math
+ * — this is the one place any easing curve lives, for both the single-shot
+ * entrance animation and the real multi-keyframe timeline.
+ */
+export function applyEasing(t, easing) {
   const fn = EASING_FUNCTIONS[easing] || EASING_FUNCTIONS.linear;
   return fn(Math.max(0, Math.min(1, t)));
 }

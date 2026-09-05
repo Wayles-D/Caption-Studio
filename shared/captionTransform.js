@@ -16,6 +16,8 @@
  * the frontend sent (see src/main.js's regenerate call).
  */
 
+import { resolveAnimatableField } from './keyframes.js';
+
 /**
  * A stable per-phrase key. Rounds to hundredths of a second so float noise
  * in phrase.start (e.g. from JSON round-tripping) can't split one logical
@@ -36,8 +38,19 @@ export function getPhraseTransformKey(phrase) {
  * takes effect regardless of what the global `position` setting is, while
  * every other phrase keeps resolving from the global position/customPosX/Y
  * exactly as before.
+ *
+ * `currentTime` (optional) additionally resolves any KEYFRAMED property
+ * (position/scale/rotation/opacity — see shared/keyframes.js) at that exact
+ * instant, taking precedence over the phrase's own static override value for
+ * that one property. Omitting it reproduces the prior static-only behavior
+ * exactly (safe default for any caller that hasn't been updated) — this is
+ * what keeps every existing (non-keyframed) caption byte-for-byte unchanged.
+ * `merged.captionScaleMultiplier`/`merged.opacity` are NEW fields (default
+ * 1 / 100) only ever set here — see shared/captionGraphics.js's
+ * renderResolvedFrame, which composes them into the entrance-animation's own
+ * scale/alpha the same way it already composes everything else.
  */
-export function resolvePhraseParams(baseParams, phrase) {
+export function resolvePhraseParams(baseParams, phrase, currentTime) {
   const overrides = baseParams && baseParams.captionTransforms;
   if (!overrides) return baseParams;
 
@@ -46,13 +59,20 @@ export function resolvePhraseParams(baseParams, phrase) {
   if (!override) return baseParams;
 
   const merged = { ...baseParams };
-  if (override.customPosX != null || override.customPosY != null) {
+
+  const posX = resolveAnimatableField(override, 'positionX', currentTime, override.customPosX);
+  const posY = resolveAnimatableField(override, 'positionY', currentTime, override.customPosY);
+  if (posX != null || posY != null) {
     merged.position = 'manual';
-    if (override.customPosX != null) merged.customPosX = override.customPosX;
-    if (override.customPosY != null) merged.customPosY = override.customPosY;
+    if (posX != null) merged.customPosX = posX;
+    if (posY != null) merged.customPosY = posY;
   }
-  if (override.rotation != null) merged.rotation = override.rotation;
+  const rotation = resolveAnimatableField(override, 'rotation', currentTime, override.rotation);
+  if (rotation != null) merged.rotation = rotation;
   if (override.fontSize != null) merged.fontSize = override.fontSize;
+  merged.captionScaleMultiplier = resolveAnimatableField(override, 'scale', currentTime, override.captionScaleMultiplier != null ? override.captionScaleMultiplier : 1);
+  merged.opacity = resolveAnimatableField(override, 'opacity', currentTime, override.opacity != null ? override.opacity : 100);
+
   // Caption-level entrance animation, scoped to "This Caption" — the
   // per-target animation scope feature (src/js/components/canvasTransform.js)
   // writes these onto THIS phrase's own override exactly like every other
@@ -110,4 +130,29 @@ export function resolveWordOverride(baseParams, wordIndex) {
   const overrides = baseParams && baseParams.captionTransforms;
   if (!overrides || wordIndex == null) return null;
   return overrides[getWordTransformKey(wordIndex)] || null;
+}
+
+/**
+ * Keyframe-aware counterpart to resolveWordOverride, used ONLY for the
+ * transform fields (position/scale/rotation/opacity) at actual paint time —
+ * see shared/captionGraphics.js's paintSentenceComposite/paintRollingStackLines.
+ * Returns null when the word has no override at all (same as
+ * resolveWordOverride); otherwise returns a plain object with each transform
+ * field resolved via shared/keyframes.js's resolveAnimatableField, falling
+ * back to the word's plain static value whenever it has no keyframe track —
+ * so a word with static-only overrides (the common case today) resolves to
+ * numbers byte-identical to reading the override directly. The animation*
+ * fields (entrance-animation config) are NOT part of this — those aren't
+ * keyframed, callers should keep reading them off the raw override.
+ */
+export function resolveWordOverrideAtTime(baseParams, wordIndex, currentTime) {
+  const override = resolveWordOverride(baseParams, wordIndex);
+  if (!override) return null;
+  return {
+    offsetXPx: resolveAnimatableField(override, 'positionX', currentTime, override.offsetXPx || 0),
+    offsetYPx: resolveAnimatableField(override, 'positionY', currentTime, override.offsetYPx || 0),
+    rotationDeg: resolveAnimatableField(override, 'rotation', currentTime, override.rotationDeg || 0),
+    fontScale: resolveAnimatableField(override, 'scale', currentTime, override.fontScale != null ? override.fontScale : 1),
+    opacity: resolveAnimatableField(override, 'opacity', currentTime, override.opacity != null ? override.opacity : 100)
+  };
 }

@@ -75,8 +75,19 @@ if (fs.existsSync(fontsConfTemplate)) {
 }
 process.env.FONTCONFIG_FILE = fontsConfTemplate;
 
-// Serve output directory static files (allows playing/downloading extracted audio)
-app.use('/output', express.static(outputDir));
+// Serve output directory static files (rendered videos the Download button
+// links to). The frontend dev server and this backend run on different
+// origins/ports, and Chromium ignores an <a download> attribute on a
+// cross-origin link unless the response itself carries
+// Content-Disposition: attachment — plain express.static never sets that
+// header, so without this, clicking Download silently did nothing (no file
+// ever reached the browser's Downloads folder, confirmed via a real
+// Playwright download-event listener that timed out with no event fired).
+app.use('/output', express.static(outputDir, {
+  setHeaders: (res, filePath) => {
+    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
+  }
+}));
 
 // Serve subtitles directory static files (allows clients to download compiled ASS overlays)
 app.use('/subtitles', express.static(subtitlesDir));

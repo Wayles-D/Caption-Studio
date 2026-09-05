@@ -56,7 +56,7 @@ import {
 import { resolveFontFace } from './fontRegistry.js';
 import { chunkRawText } from './rollingStack.js';
 import { getAnimationTransform } from './captionAnimation.js';
-import { resolveWordOverride } from './captionTransform.js';
+import { resolveWordOverride, resolveWordOverrideAtTime } from './captionTransform.js';
 
 /**
  * Whether the graphics engine currently knows how to render this resolved
@@ -537,7 +537,12 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
       // word.originalIndex is only its position within THIS phrase, so the
       // override lookup must go through the source word object.
       const sourceWord = activePhrase.words[word.originalIndex];
-      const override = resolveWordOverride(params, sourceWord?.wordIndex);
+      const rawOverride = resolveWordOverride(params, sourceWord?.wordIndex);
+      // Keyframe-resolved transform fields (see shared/captionTransform.js's
+      // resolveWordOverrideAtTime / shared/keyframes.js) — falls back to the
+      // word's plain static values whenever it has no keyframe track, so a
+      // static-only override paints byte-identical to before this feature.
+      const override = resolveWordOverrideAtTime(params, sourceWord?.wordIndex, currentTime);
       if (override) {
         // Additive, on-canvas-only transform (see
         // src/js/components/canvasTransform.js) applied around this word's
@@ -551,6 +556,7 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
         if (override.rotationDeg) targetCtx.rotate((override.rotationDeg * Math.PI) / 180);
         if (override.fontScale && override.fontScale !== 1) targetCtx.scale(override.fontScale, override.fontScale);
         targetCtx.translate(-pivotX, -pivotY);
+        if (override.opacity != null && override.opacity !== 100) targetCtx.globalAlpha *= override.opacity / 100;
 
         // Per-word entrance animation (keyword editing scope) — same
         // shared/captionAnimation.js engine the caption/Rolling-Stack-window
@@ -559,9 +565,9 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
         // caption-level animation already applied around the whole block
         // (either directly, or via the Unified-shadow offscreen composite —
         // see renderResolvedFrame).
-        if (override.animationType && override.animationType !== 'none' && sourceWord) {
+        if (rawOverride.animationType && rawOverride.animationType !== 'none' && sourceWord) {
           const wordAnim = getAnimationTransform(
-            { captionAnimationType: override.animationType, captionAnimationDuration: override.animationDuration, captionAnimationEasing: override.animationEasing, captionAnimationIntensity: override.animationIntensity },
+            { captionAnimationType: rawOverride.animationType, captionAnimationDuration: rawOverride.animationDuration, captionAnimationEasing: rawOverride.animationEasing, captionAnimationIntensity: rawOverride.animationIntensity },
             currentTime, sourceWord.start, sourceWord.end
           );
           if (wordAnim.scale !== 1) {
@@ -621,6 +627,17 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   // whenever captionAnimationType is 'none', reproducing prior output exactly.
   const anim = getAnimationTransform(params, currentTime, activePhrase.start, activePhrase.end);
 
+  // Phrase-level keyframed scale/opacity (see shared/captionTransform.js's
+  // resolvePhraseParams / shared/keyframes.js) — composed MULTIPLICATIVELY
+  // with the entrance animation's own scale/alpha, exactly like a second,
+  // independent transform axis on the same whole-block target. Both default
+  // to the identity (1 / 100) whenever no keyframe/override exists, so this
+  // never changes output for a caption that doesn't use this feature.
+  const kfScale = params.captionScaleMultiplier != null ? params.captionScaleMultiplier : 1;
+  const kfOpacity = params.opacity != null ? params.opacity : 100;
+  const totalScale = anim.scale * kfScale;
+  const totalAlpha = anim.alpha * (kfOpacity / 100);
+
   const paintArgs = { lines, centerX, centerY, computed, activePhrase, params, currentTime, canvasWidth, canvasHeight, geometry };
 
   // Unified shadow: the whole block (boxed background + every word, per-word
@@ -649,12 +666,12 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
     if (anim.offsetXRatio || anim.offsetYRatio) {
       ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
     }
-    if (anim.scale !== 1) {
+    if (totalScale !== 1) {
       ctx.translate(centerX, centerY);
-      ctx.scale(anim.scale, anim.scale);
+      ctx.scale(totalScale, totalScale);
       ctx.translate(-centerX, -centerY);
     }
-    ctx.globalAlpha = anim.alpha;
+    ctx.globalAlpha = totalAlpha;
     ctx.shadowColor = applyOpacityToColor(uni.colorHex, (uni.opacity * textOpacity) / 100);
     ctx.shadowBlur = (uni.blurAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
     ctx.shadowOffsetX = (uni.offsetXAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
@@ -677,12 +694,12 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   if (anim.offsetXRatio || anim.offsetYRatio) {
     ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
   }
-  if (anim.scale !== 1) {
+  if (totalScale !== 1) {
     ctx.translate(centerX, centerY);
-    ctx.scale(anim.scale, anim.scale);
+    ctx.scale(totalScale, totalScale);
     ctx.translate(-centerX, -centerY);
   }
-  ctx.globalAlpha = anim.alpha;
+  ctx.globalAlpha = totalAlpha;
   // Rotation itself is applied inside paintSentenceComposite (baked around
   // the same center point) — for a uniform scale this commutes with rotation
   // around a shared center, so applying scale here and rotation inside
@@ -1115,7 +1132,10 @@ function paintRollingStackLines(ctx, positionedLines, params, currentTime, canva
     }
 
     words.forEach((word) => {
-      const override = resolveWordOverride(params, word.wordIndex);
+      const rawOverride = resolveWordOverride(params, word.wordIndex);
+      // Keyframe-resolved transform fields — see the matching change in
+      // sentence mode's paintSentenceComposite for the full rationale.
+      const override = resolveWordOverrideAtTime(params, word.wordIndex, currentTime);
       const pivotX = word.x + word.width / 2;
       const pivotY = word.y + word.height / 2;
       if (override) {
@@ -1124,13 +1144,14 @@ function paintRollingStackLines(ctx, positionedLines, params, currentTime, canva
         if (override.rotationDeg) ctx.rotate((override.rotationDeg * Math.PI) / 180);
         if (override.fontScale && override.fontScale !== 1) ctx.scale(override.fontScale, override.fontScale);
         ctx.translate(-pivotX, -pivotY);
+        if (override.opacity != null && override.opacity !== 100) ctx.globalAlpha *= override.opacity / 100;
 
         // Per-word entrance animation (keyword editing scope) — see the
         // matching addition in sentence mode's renderResolvedFrame for the
         // full rationale; anchored to this word's own [start,end).
-        if (override.animationType && override.animationType !== 'none' && word.start != null) {
+        if (rawOverride.animationType && rawOverride.animationType !== 'none' && word.start != null) {
           const wordAnim = getAnimationTransform(
-            { captionAnimationType: override.animationType, captionAnimationDuration: override.animationDuration, captionAnimationEasing: override.animationEasing, captionAnimationIntensity: override.animationIntensity },
+            { captionAnimationType: rawOverride.animationType, captionAnimationDuration: rawOverride.animationDuration, captionAnimationEasing: rawOverride.animationEasing, captionAnimationIntensity: rawOverride.animationIntensity },
             currentTime, word.start, word.end
           );
           if (wordAnim.scale !== 1) {
@@ -1198,7 +1219,15 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
   // it) — it fires once per window change, not once per word/line.
   const activeChunk = windowChunks[windowChunks.length - 1];
   const anim = getAnimationTransform(params, currentTime, activeChunk.start, activeChunk.end);
-  const animating = anim.alpha !== 1 || anim.scale !== 1 || anim.offsetXRatio !== 0 || anim.offsetYRatio !== 0;
+
+  // Phrase-level keyframed scale/opacity — see the matching addition in
+  // sentence mode's renderResolvedFrame for the full rationale. Defaults to
+  // the identity (1 / 100) whenever no keyframe/override exists.
+  const kfScale = params.captionScaleMultiplier != null ? params.captionScaleMultiplier : 1;
+  const kfOpacity = params.opacity != null ? params.opacity : 100;
+  const totalScale = anim.scale * kfScale;
+  const totalAlpha = anim.alpha * (kfOpacity / 100);
+  const animating = totalAlpha !== 1 || totalScale !== 1 || anim.offsetXRatio !== 0 || anim.offsetYRatio !== 0;
 
   const paintComposite = (targetCtx, drawIntoCtx) => {
     const layout = layoutRollingStackLines(targetCtx, windowChunks, cssConfig, params, geometry, alignment);
@@ -1233,12 +1262,12 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     if (anim.offsetXRatio || anim.offsetYRatio) {
       ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
     }
-    if (anim.scale !== 1) {
+    if (totalScale !== 1) {
       ctx.translate(layout.centerX, layout.centerY);
-      ctx.scale(anim.scale, anim.scale);
+      ctx.scale(totalScale, totalScale);
       ctx.translate(-layout.centerX, -layout.centerY);
     }
-    ctx.globalAlpha = anim.alpha;
+    ctx.globalAlpha = totalAlpha;
     ctx.shadowColor = applyOpacityToColor(uni.colorHex, (uni.opacity * textOpacity) / 100);
     ctx.shadowBlur = (uni.blurAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
     ctx.shadowOffsetX = (uni.offsetXAss / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
@@ -1264,12 +1293,12 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     if (anim.offsetXRatio || anim.offsetYRatio) {
       ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
     }
-    if (anim.scale !== 1) {
+    if (totalScale !== 1) {
       ctx.translate(layout.centerX, layout.centerY);
-      ctx.scale(anim.scale, anim.scale);
+      ctx.scale(totalScale, totalScale);
       ctx.translate(-layout.centerX, -layout.centerY);
     }
-    ctx.globalAlpha = anim.alpha;
+    ctx.globalAlpha = totalAlpha;
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
     return;

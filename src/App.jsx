@@ -24,6 +24,7 @@ import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
+import { TimelinePanel } from './components/TimelinePanel.jsx';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -125,21 +126,34 @@ export function App() {
     showToast('Loaded demo video.');
   }, [showToast]);
 
-  const triggerRegeneration = useCallback(async () => {
+  /**
+   * THE single render step — POSTs the current canonical editor snapshot
+   * (getStyleParams()/collectEditedWords(), the SAME state the live preview
+   * already renders from) to the backend and updates appState.renderedVideoPath
+   * with the result. This is the ONLY place that talks to
+   * /api/upload/regenerate; both "Generate Video" (an explicit pre-render/
+   * preview-of-export-readiness action) and the Download button (below) call
+   * this directly rather than each keeping their own copy of this logic —
+   * one canonical path from "current editor state" to "server-rendered file."
+   *
+   * Returns true on success, false on failure/no-op (nothing to render) —
+   * callers decide what to do next (Generate just reports success; Download
+   * only proceeds to serve the file when this returns true, so a failed
+   * render can never result in a stale/wrong file being downloaded instead).
+   */
+  const renderCurrentEditsToServer = useCallback(async () => {
     if (!appState.baseName || appState.isProcessing) {
       showToast("Please upload a video first.");
-      return;
+      return false;
     }
 
     const editedWords = collectEditedWords(appState);
     if (editedWords.length === 0) {
       showToast("No transcript words to render.");
-      return;
+      return false;
     }
 
     updateState({ isProcessing: true }, { recordHistory: false });
-    showToast("Re-rendering captioned video...");
-
     setProcessingTitle("Re-rendering video with custom captions...");
     setViewState('processing');
 
@@ -162,37 +176,69 @@ export function App() {
       }, { recordHistory: false });
 
       setViewState('video');
-      showToast("Render complete! Ready to download.");
+      return true;
     } catch (err) {
       console.error("Regeneration Error:", err);
       setViewState('video');
       updateState({ isProcessing: false }, { recordHistory: false });
       showToast(`Render failed: ${describeFetchError(err)}`);
+      return false;
     }
   }, [showToast]);
 
-  const handleDownloadVideo = useCallback(() => {
-    if (appState.renderedVideoPath) {
-      const videoUrl = `${API_BASE_URL}${appState.renderedVideoPath}`;
-      const dlLink = document.createElement("a");
-      dlLink.href = videoUrl;
-      dlLink.download = appState.renderedVideoPath.split('/').pop();
-      document.body.appendChild(dlLink);
-      dlLink.click();
-      document.body.removeChild(dlLink);
+  const triggerRegeneration = useCallback(async () => {
+    showToast("Re-rendering captioned video...");
+    const ok = await renderCurrentEditsToServer();
+    if (ok) showToast("Render complete! Ready to download.");
+  }, [renderCurrentEditsToServer, showToast]);
+
+  /**
+   * Download used to just serve whatever `appState.renderedVideoPath`
+   * already pointed at — a file from whenever "Generate Video" was last
+   * clicked (or never, if it hadn't been). Any edit made AFTER that render
+   * (a Rolling Stack switch, a keyword style, an animation, a keyframe, a
+   * video transform — all of which only ever touched the CLIENT-SIDE
+   * preview) had no way to reach the downloaded file, so Download could
+   * silently serve an arbitrarily stale — or entirely default — render
+   * while the on-screen preview looked completely correct. Download now
+   * ALWAYS renders the CURRENT editor state fresh (via the same
+   * renderCurrentEditsToServer() "Generate Video" already uses) immediately
+   * before serving the file, so there is no longer a path from clicking
+   * Download to receiving anything other than what the preview shows.
+   */
+  const handleDownloadVideo = useCallback(async () => {
+    // The "Use Demo Video" shortcut never uploads anything to the backend
+    // (see handleDemoVideo) — there is no server-side job to re-render, so
+    // this is the one case where "download current edits" is genuinely not
+    // possible server-side. Preserve the previous (honest, explicitly
+    // labeled) behavior of downloading the raw, unedited sample clip rather
+    // than silently pretending it reflects the session's edits.
+    if (appState.uploadedFile?.demo) {
+      if (videoSrc) {
+        const dlLink = document.createElement("a");
+        dlLink.href = videoSrc;
+        dlLink.download = "demo_video.mp4";
+        document.body.appendChild(dlLink);
+        dlLink.click();
+        document.body.removeChild(dlLink);
+        showToast("Downloaded the raw demo clip — demo sessions aren't rendered on the server, so caption/animation/transform edits aren't included. Upload a real video to export your edits.");
+      }
       return;
     }
 
-    if (appState.uploadedFile && appState.uploadedFile.demo && videoSrc) {
-      const dlLink = document.createElement("a");
-      dlLink.href = videoSrc;
-      dlLink.download = "captioned_demo_video.mp4";
-      document.body.appendChild(dlLink);
-      dlLink.click();
-      document.body.removeChild(dlLink);
-      showToast("Downloaded demo video!");
-    }
-  }, [videoSrc, showToast]);
+    showToast("Rendering your latest edits before download...");
+    const ok = await renderCurrentEditsToServer();
+    if (!ok || !appState.renderedVideoPath) return;
+
+    const videoUrl = `${API_BASE_URL}${appState.renderedVideoPath}`;
+    const dlLink = document.createElement("a");
+    dlLink.href = videoUrl;
+    dlLink.download = appState.renderedVideoPath.split('/').pop();
+    document.body.appendChild(dlLink);
+    dlLink.click();
+    document.body.removeChild(dlLink);
+    showToast("Download started!");
+  }, [renderCurrentEditsToServer, videoSrc, showToast]);
 
   return (
     <>
@@ -214,27 +260,43 @@ export function App() {
         />
       </header>
 
-      <div className="grid grid-cols-[320px_1fr_340px] h-[calc(100vh-56px)] w-screen overflow-hidden
-        max-lg:grid-cols-[280px_1fr_280px] max-md:grid-cols-1 max-md:h-auto max-md:overflow-y-auto">
-        <aside className="bg-[var(--bg-sidebar)] border-r border-[var(--border-color)] overflow-y-auto flex flex-col max-md:h-auto">
-          <SidebarInspector />
-        </aside>
+      {/* Column layout above, TIMELINE below — the timeline is a first-class
+          editing surface (see src/components/TimelinePanel.jsx), not
+          something tucked inside the canvas or a sidebar panel, so it gets
+          its own full-width row rather than living inside either column. */}
+      <div className="flex flex-col h-[calc(100vh-56px)] w-screen overflow-hidden">
+        <div className="grid grid-cols-[320px_1fr_340px] flex-1 overflow-hidden min-h-0
+          max-lg:grid-cols-[280px_1fr_280px] max-md:grid-cols-1 max-md:h-auto max-md:overflow-y-auto">
+          <aside className="bg-[var(--bg-sidebar)] border-r border-[var(--border-color)] overflow-y-auto flex flex-col max-md:h-auto">
+            <SidebarInspector />
+          </aside>
 
-        <main className="bg-[radial-gradient(circle_at_center,rgba(30,41,59,0.3)_0%,rgba(8,12,20,1)_100%)] flex flex-col items-center justify-center relative p-5">
-          <PreviewStage
-            viewState={viewState}
-            processingTitle={processingTitle}
-            videoSrc={videoSrc}
-            onSelectFileClick={() => videoFileInputRef.current?.click()}
-            onUseDemo={() => handleDemoVideo()}
-            onFilesDropped={(file) => handleFileSelected(file)}
-            onDownloadVideo={() => handleDownloadVideo()}
-          />
-        </main>
+          {/* min-h-0 overrides the grid item's default min-height:auto, which
+              otherwise refuses to shrink below the phone-frame's natural
+              586px content size and silently overflows past the timeline
+              panel below it (confirmed during testing — the phone-frame's
+              bottom resize/rotate handles landed on top of the timeline
+              instead of the video). Paired with .phone-frame's own
+              max-height:100% (see style.css), this lets the preview shrink
+              to whatever vertical space is actually available. */}
+          <main className="bg-[radial-gradient(circle_at_center,rgba(30,41,59,0.3)_0%,rgba(8,12,20,1)_100%)] flex flex-col items-center justify-center relative p-5 min-h-0 overflow-hidden">
+            <PreviewStage
+              viewState={viewState}
+              processingTitle={processingTitle}
+              videoSrc={videoSrc}
+              onSelectFileClick={() => videoFileInputRef.current?.click()}
+              onUseDemo={() => handleDemoVideo()}
+              onFilesDropped={(file) => handleFileSelected(file)}
+              onDownloadVideo={() => handleDownloadVideo()}
+            />
+          </main>
 
-        <aside className="bg-[var(--bg-sidebar)] border-l border-[var(--border-color)] overflow-y-auto p-4 flex flex-col gap-4 max-md:h-auto">
-          <RightInspector onRegenerateCaptions={() => triggerRegeneration()} />
-        </aside>
+          <aside className="bg-[var(--bg-sidebar)] border-l border-[var(--border-color)] overflow-y-auto p-4 flex flex-col gap-4 max-md:h-auto">
+            <RightInspector onRegenerateCaptions={() => triggerRegeneration()} />
+          </aside>
+        </div>
+
+        <TimelinePanel />
       </div>
 
       <div

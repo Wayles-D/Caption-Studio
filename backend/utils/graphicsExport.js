@@ -46,7 +46,15 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   try {
     const { width, height, duration } = await getVideoInfo(videoPath);
     const segments = buildFullTimelineSegments(phrases, params, width, height, duration, framesDir);
-    await compositeGraphicsCaptionTrack(videoPath, segments, outputVideoPath);
+    // The VIDEO's own keyframed transform (see shared/videoTransform.js) —
+    // passed through so the exported file reproduces the same zoom/pan/
+    // rotate/fade the live preview shows, independent of captions.
+    await compositeGraphicsCaptionTrack(videoPath, segments, outputVideoPath, {
+      videoTransform: params.videoTransform,
+      duration,
+      canvasWidth: width,
+      canvasHeight: height
+    });
     console.log(`[GraphicsExport] Rendered ${segments.length} segments via the graphics pipeline (preset: ${params.preset || 'default'}).`);
     return true;
   } catch (err) {

@@ -238,6 +238,12 @@ export function getStyleParams() {
     customPosY: appState.customPosY,
     rotation: appState.rotation,
     captionTransforms: appState.captionTransforms,
+    // The video's OWN transform/keyframes (see shared/videoTransform.js,
+    // src/js/components/videoTransform.js) — must reach the backend export
+    // pipeline (backend/utils/videoTransformFilter.js) for the exported
+    // file to reproduce a keyframed video zoom/pan/rotate/fade, exactly
+    // like captionTransforms above already does for captions.
+    videoTransform: appState.videoTransform,
     animationMode: appState.animationMode,
     captionAnimationType: appState.captionAnimationType,
     captionAnimationDuration: appState.captionAnimationDuration,

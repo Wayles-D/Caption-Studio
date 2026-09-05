@@ -7,7 +7,11 @@
  * already baked into the PNGs; this file only places them in time and space.
  */
 import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import ffmpegPath from 'ffmpeg-static';
+import { buildVideoTransformFilterChain } from './videoTransformFilter.js';
 
 /**
  * Reads a video's DISPLAY-orientation pixel dimensions and duration from
@@ -103,9 +107,10 @@ export function getVideoInfo(inputVideoPath) {
  * @param {string} inputVideoPath - Absolute path to the source video.
  * @param {{start:number, end:number, file:string}[]} segments - Contiguous, time-ordered segments from buildFullTimelineSegments, covering the video's full duration.
  * @param {string} outputPath - Absolute path for the rendered output video.
+ * @param {object} [videoTransformOpts] - `{ videoTransform, duration, canvasWidth, canvasHeight }` — the VIDEO's own keyframed transform (see shared/videoTransform.js / backend/utils/videoTransformFilter.js). Omitted or an identity transform: `[0:v]` flows through completely unchanged, byte-identical to before this feature existed.
  * @returns {Promise<string>} Resolves with outputPath.
  */
-export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPath) {
+export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPath, videoTransformOpts = {}) {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) return reject(new Error('FFmpeg static binary path could not be resolved.'));
     if (!segments.length) return reject(new Error('compositeGraphicsCaptionTrack: no segments to composite.'));
@@ -146,15 +151,50 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // it onto the source video.
     const normalizeStages = segments.map((_, idx) => `[${idx + 1}:v]format=rgba[s${idx}]`);
     const concatInputs = segments.map((_, idx) => `[s${idx}]`).join('');
+
+    // The VIDEO's own keyframed transform (see videoTransformFilter.js) —
+    // when present, produces a `[vt_out]` stage that REPLACES `[0:v]` as
+    // what the caption track overlays onto, so captions still composite on
+    // top exactly as before, now onto the transformed video. Absent (no
+    // videoTransform, or the plain identity), `[0:v]` is used directly —
+    // zero change to every existing export.
+    const { videoTransform, duration, canvasWidth, canvasHeight } = videoTransformOpts;
+    const videoTransformChain = (duration && canvasWidth && canvasHeight)
+      ? buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight)
+      : null;
+    const baseVideoLabel = videoTransformChain ? videoTransformChain.outputLabel : '[0:v]';
+
     const filterComplex = [
+      ...(videoTransformChain ? [videoTransformChain.filterComplex] : []),
       ...normalizeStages,
       `${concatInputs}concat=n=${segments.length}:v=1:a=0[captrack]`,
-      `[0:v][captrack]overlay=x=0:y=0:format=yuv420[outv]`
+      `${baseVideoLabel}[captrack]overlay=x=0:y=0:format=yuv420[outv]`
     ].join(';');
+
+    // The filter graph is written to a FILE and passed via
+    // `-filter_complex_script` instead of `-filter_complex <string>` on the
+    // command line. This is not cosmetic: a video-transform keyframe chain
+    // (see videoTransformFilter.js) samples the whole export duration and
+    // can easily produce a filter graph tens of thousands of characters
+    // long, and a caption track with many segments adds more on top of
+    // that — both comfortably exceed the OS's command-line length limit
+    // (confirmed in practice: `spawn` throwing `ENAMETOOLONG` on a filter
+    // graph of ~33k characters). That failure was previously silent from
+    // the CALLER's point of view: tryRenderCaptionsWithGraphics(in
+    // graphicsExport.js) catches any error here and falls back to the
+    // legacy ASS pipeline, which does not support Rolling Stack, keyframes,
+    // per-word/keyword animation, or video transforms the same way — so a
+    // filter graph too long to pass as an argument silently downgraded the
+    // ENTIRE export to the old renderer, discarding every one of those
+    // features at once, exactly matching this bug's reported symptoms. A
+    // script file has no such length limit regardless of graph complexity
+    // or export duration.
+    const filterScriptPath = path.join(os.tmpdir(), `caption-studio-filter-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+    fs.writeFileSync(filterScriptPath, filterComplex, 'utf8');
 
     const args = [
       ...inputArgs,
-      '-filter_complex', filterComplex,
+      '-filter_complex_script', filterScriptPath,
       '-map', '[outv]',
       '-map', '0:a?',
       '-c:v', 'libx264',
@@ -164,7 +204,11 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       outputPath
     ];
 
-    console.log(`Executing FFmpeg Graphics Composite command (${segments.length} segments): ${ffmpegPath} ${args.slice(0, 6).join(' ')} ... [filter_complex omitted, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
+    console.log(`Executing FFmpeg Graphics Composite command (${segments.length} segments): ${ffmpegPath} ${args.slice(0, 6).join(' ')} ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
+
+    const cleanupScript = () => {
+      try { fs.unlinkSync(filterScriptPath); } catch (cleanupErr) { /* best-effort; a leftover temp file is harmless */ }
+    };
 
     const ffmpegProc = spawn(ffmpegPath, args);
     const stderrLines = [];
@@ -175,8 +219,9 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       if (stderrLines.length > 50) stderrLines.splice(0, stderrLines.length - 50);
     });
 
-    ffmpegProc.on('error', reject);
+    ffmpegProc.on('error', (err) => { cleanupScript(); reject(err); });
     ffmpegProc.on('close', (code) => {
+      cleanupScript();
       if (code === 0) {
         resolve(outputPath);
       } else {

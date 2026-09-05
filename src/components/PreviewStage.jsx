@@ -190,6 +190,42 @@ export function PreviewStage({
               <div className="caption-transform-handle br" data-handle="br" />
             </div>
           </div>
+          {/* On-canvas VIDEO transform overlay — see src/js/components/
+              videoCanvasControls.js. A separate overlay from the caption one
+              above (mutually exclusive via the "Video" target chip on the
+              timeline — src/js/components/timelinePanel.js), reusing the
+              SAME .caption-transform-* classes for a consistent look. Drag
+              anywhere to move, corner handles to scale, the rotate handle to
+              rotate — direct manipulation writes straight into
+              appState.videoTransform, the same canonical state the timeline
+              panel's precision numeric inputs use. */}
+          <div className="caption-transform-overlay" id="video-transform-overlay">
+            <div className="caption-transform-hit-area" id="video-transform-hit-area" />
+            {/* Inset slightly (not a flush 0/0/100%/100%) — .phone-frame has
+                overflow:hidden, and a flush-edge box's corner/rotate handles
+                (each pulled outward by their own negative margin, like the
+                caption overlay's handles) would land exactly ON that clipped
+                edge and become unclickable (confirmed during testing). The
+                video itself still visually fills the whole frame; only this
+                selection box's OWN edges are inset so its handles stay
+                reachable. */}
+            <div
+              className="caption-transform-box"
+              id="video-transform-box"
+              style={{ top: '3%', left: '3%', width: '94%', height: '94%' }}
+              hidden
+            >
+              <div className="caption-transform-toolbar" id="video-transform-toolbar">
+                <button type="button" className="caption-transform-reset-btn" id="btn-video-transform-reset">Reset</button>
+              </div>
+              <div className="caption-transform-rotate-line" />
+              <div className="caption-transform-handle rotate" id="video-transform-handle-rotate" />
+              <div className="caption-transform-handle tl" data-handle="tl" />
+              <div className="caption-transform-handle tr" data-handle="tr" />
+              <div className="caption-transform-handle bl" data-handle="bl" />
+              <div className="caption-transform-handle br" data-handle="br" />
+            </div>
+          </div>
         </div>
       </div>
 

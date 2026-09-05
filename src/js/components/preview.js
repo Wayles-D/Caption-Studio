@@ -8,6 +8,7 @@ import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolv
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame } from '../../../shared/captionGraphics.js';
 import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay } from './canvasTransform.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
+import { initVideoCanvasControls } from './videoCanvasControls.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
 // backend/fonts/ + shared/fontRegistry.js) and served statically by the
@@ -312,6 +313,7 @@ export function initPreviewWorkspace() {
 
   initManualDragPositioning();
   initCanvasTransform();
+  initVideoCanvasControls();
 
   applyCSSPreviewStyles();
   syncVideoSubtitles();
@@ -421,6 +423,13 @@ export function syncVideoSubtitles() {
 
   const currentTime = previewVideo.currentTime;
 
+  // The video's OWN transform (see shared/videoTransform.js /
+  // src/js/components/videoTransform.js) has its OWN continuous refresh loop
+  // (see videoCanvasControls.js's initVideoCanvasControls) independent of
+  // this function's playback-driven cadence — it must keep updating even
+  // while paused (e.g. right after selecting the Video target), which this
+  // function's own timeupdate/"while playing" gating can't guarantee.
+
   const baseStyleParams = getStyleParams();
   const baseCssConfig = getCSSPreviewFromConfig(baseStyleParams);
 
@@ -460,7 +469,7 @@ export function syncVideoSubtitles() {
   // updates state correctly but the preview keeps drawing from the
   // unmerged global params, making the override invisible on screen even
   // though it's genuinely stored (and would show up correctly in export).
-  const params = resolvePhraseParams(baseStyleParams, activePhrase);
+  const params = resolvePhraseParams(baseStyleParams, activePhrase, currentTime);
   const cssConfig = params === baseStyleParams ? baseCssConfig : getCSSPreviewFromConfig(params);
   const wordSpacingPx = cssConfig.wordSpacingPx !== undefined ? cssConfig.wordSpacingPx : 4;
 

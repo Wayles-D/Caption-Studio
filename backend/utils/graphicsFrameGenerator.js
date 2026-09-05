@@ -25,8 +25,9 @@ import { createCanvas } from '@napi-rs/canvas';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
-import { resolvePhraseParams, resolveWordOverride } from '../../shared/captionTransform.js';
+import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
 import { resolveAnimationConfig } from '../../shared/captionAnimation.js';
+import { getKeyframeTimeRange } from '../../shared/keyframes.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
 /**
@@ -137,11 +138,19 @@ function subdivideForWordAnimations(slices, words, params) {
   let result = slices;
   (words || []).forEach((w) => {
     const override = resolveWordOverride(params, w.wordIndex);
-    if (!override || !override.animationType || override.animationType === 'none') return;
-    const lifetime = Math.max(0, (w.end ?? w.start) - w.start);
-    const duration = Math.min(override.animationDuration || 0.25, lifetime);
-    if (duration <= 0) return;
-    result = subdivideSlicesForAnimation(result, w.start, w.start + duration);
+    if (!override) return;
+    if (override.animationType && override.animationType !== 'none') {
+      const lifetime = Math.max(0, (w.end ?? w.start) - w.start);
+      const duration = Math.min(override.animationDuration || 0.25, lifetime);
+      if (duration > 0) result = subdivideSlicesForAnimation(result, w.start, w.start + duration);
+    }
+    // Real timeline keyframes (see shared/keyframes.js) need the exact same
+    // dense-sampling treatment as an entrance animation — otherwise a
+    // word's keyframed position/scale/rotation/opacity would render as a
+    // single static frame in the exported video despite animating correctly
+    // in live preview.
+    const kfRange = getKeyframeTimeRange(override);
+    if (kfRange) result = subdivideSlicesForAnimation(result, kfRange.min, kfRange.max);
   });
   return result;
 }
@@ -153,16 +162,26 @@ function subdivideForWordAnimations(slices, words, params) {
  * word's active/inactive state changes within a slice).
  *
  * @param {object} phrase - { start, end, words: [{word|text, start, end, isKeyword?}], breakAfterIndices? }
- * @param {object} params - Same raw style params object passed to getCSSPreviewFromConfig/getASSStyleFromConfig.
+ * @param {object} params - RAW style params object (pre phrase-merge) — same object passed to getCSSPreviewFromConfig/getASSStyleFromConfig; this function resolves the phrase-specific merge itself, once statically for detection and once per slice for keyframe-correct rendering (see shared/captionTransform.js's resolvePhraseParams).
  * @param {number} canvasWidth - Output video's pixel width (frames are drawn 1:1, no scaling).
  * @param {number} canvasHeight - Output video's pixel height.
  * @param {string} outDir - Directory to write per-slice PNGs into (created if missing).
+ * @param {object} [transformKeyPhrase=phrase] - The phrase whose getPhraseTransformKey identifies this target's captionTransforms entry — defaults to `phrase` itself (the normal sentence/rolling-stack case). Word Mode (see generateWordModePhraseFrames) passes the REAL multi-word phrase here while `phrase` is a synthetic single-word stand-in used only for boundary-slicing, so a phrase-level keyframe/override still resolves under the SAME key the live preview uses (which always keys off the real phrase — see src/js/components/preview.js).
  * @returns {{start:number, end:number, file:string}[]} Slices with absolute PNG file paths, in time order.
  */
-export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
+export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasHeight, outDir, transformKeyPhrase = phrase) {
   registerBackendCanvasFonts();
 
-  const cssConfig = getCSSPreviewFromConfig(params);
+  // Static (non-time-varying) phrase merge — used only for mode/preset
+  // detection and boundary/animation-window computation below, none of
+  // which needs to vary per-instant. Real timeline keyframes are resolved
+  // fresh per SLICE further down (see the map() callback) — this is the fix
+  // for a real gap: this function used to receive an already phrase-merged,
+  // one-time-resolved params object, which made a phrase-level keyframe
+  // impossible to animate across a phrase's own slices in export (it would
+  // hold whatever value was true at the FIRST slice for the whole phrase).
+  const staticPhraseParams = resolvePhraseParams(params, transformKeyPhrase);
+  const cssConfig = getCSSPreviewFromConfig(staticPhraseParams);
   if (!canDrawCaptionFrame(cssConfig)) {
     throw new Error('generatePhraseCaptionFrames: unsupported preset/mode for the graphics renderer (see shared/captionGraphics.js canDrawCaptionFrame).');
   }
@@ -177,25 +196,43 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
   // comment. The SAME clamp-to-lifetime rule getAnimationProgress applies at
   // draw time is applied here too, so the number of subdivided slices always
   // matches how long the animation will actually run.
-  const animation = resolveAnimationConfig(params);
+  const animation = resolveAnimationConfig(staticPhraseParams);
   if (animation.type !== 'none') {
     const animStart = phrase.start;
     const animEnd = animStart + Math.min(animation.duration, phrase.end - phrase.start);
     slices = subdivideSlicesForAnimation(slices, animStart, animEnd);
   }
-  slices = subdivideForWordAnimations(slices, phrase.words, params);
+  // Real timeline keyframes on the PHRASE itself (position/scale/rotation/
+  // opacity) — same dense-sampling treatment as the entrance animation
+  // above, over the union range of every keyframed property (see
+  // shared/keyframes.js's getKeyframeTimeRange).
+  const phraseOverride = params.captionTransforms?.[getPhraseTransformKey(transformKeyPhrase)];
+  const phraseKfRange = getKeyframeTimeRange(phraseOverride);
+  if (phraseKfRange) {
+    slices = subdivideSlicesForAnimation(slices, phraseKfRange.min, phraseKfRange.max);
+  }
+  slices = subdivideForWordAnimations(slices, phrase.words, staticPhraseParams);
 
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
   return slices.map((slice, idx) => {
+    // Per-slice phrase-params resolution — the one place a phrase-level
+    // keyframe actually gets its correct, time-varying value baked into the
+    // frame (see resolvePhraseParams's optional currentTime argument).
+    // Recomputing cssConfig too matters because position keyframes are
+    // expressed as customPosX/customPosY, which getCSSPreviewFromConfig
+    // bakes into fixed overlay anchors — the same pattern the live preview
+    // already uses every render tick (see src/js/components/preview.js).
+    const sliceParams = resolvePhraseParams(params, transformKeyPhrase, slice.start);
+    const sliceCssConfig = sliceParams === params ? cssConfig : getCSSPreviewFromConfig(sliceParams);
     drawCaptionFrameForExport(ctx, {
       canvasWidth,
       canvasHeight,
       activePhrase: phrase,
       currentTime: slice.start,
-      cssConfig,
-      params,
+      cssConfig: sliceCssConfig,
+      params: sliceParams,
       createOffscreenCanvas: (w, h) => createCanvas(w, h)
     });
 
@@ -221,7 +258,7 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
  * memory budget the same way generatePhraseCaptionFrames does.
  *
  * @param {object} phrase - { start, end, words: [{word|text, start, end, isKeyword?}] }
- * @param {object} params - Same raw style params, including rollingStackLayerCount/rollingStackAlignment.
+ * @param {object} params - RAW style params (pre phrase-merge), including rollingStackLayerCount/rollingStackAlignment — see generatePhraseCaptionFrames's doc comment for why this function resolves the phrase merge itself rather than receiving it pre-resolved.
  * @param {number} canvasWidth - Output video's pixel width.
  * @param {number} canvasHeight - Output video's pixel height.
  * @param {string} outDir - Directory to write per-slice PNGs into (created if missing).
@@ -230,19 +267,22 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
 export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
   registerBackendCanvasFonts();
 
-  const cssConfig = getCSSPreviewFromConfig(params);
+  const staticPhraseParams = resolvePhraseParams(params, phrase);
+  const cssConfig = getCSSPreviewFromConfig(staticPhraseParams);
   if (!canDrawCaptionFrame(cssConfig)) {
     throw new Error('generateRollingStackPhraseFrames: unsupported preset/mode for the graphics renderer (see shared/captionGraphics.js canDrawCaptionFrame).');
   }
 
   fs.mkdirSync(outDir, { recursive: true });
 
-  const layerCount = params.rollingStackLayerCount || 2;
+  const layerCount = staticPhraseParams.rollingStackLayerCount || 2;
   const windowSlices = buildRollingStackWindowSlices(phrase, layerCount);
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
-  const animation = resolveAnimationConfig(params);
+  const animation = resolveAnimationConfig(staticPhraseParams);
+  const phraseOverride = params.captionTransforms?.[getPhraseTransformKey(phrase)];
+  const phraseKfRange = getKeyframeTimeRange(phraseOverride);
 
   // Each window slice's own active (last) chunk is what entered the frame at
   // that slice's start — see shared/captionGraphics.js's
@@ -258,22 +298,32 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
       const animEnd = animStart + Math.min(animation.duration, activeChunk.end - activeChunk.start);
       subSlices = subdivideSlicesForAnimation(subSlices, animStart, animEnd);
     }
+    // Real timeline keyframes on the phrase itself — same treatment as
+    // sentence mode's generatePhraseCaptionFrames.
+    if (phraseKfRange) {
+      subSlices = subdivideSlicesForAnimation(subSlices, phraseKfRange.min, phraseKfRange.max);
+    }
     // Per-word animation (keyword scope) — only the words actually in THIS
     // window (not the whole phrase) can matter for this slice's own range.
     const wordsInWindow = slice.chunks.flatMap((c) => c.words || []);
-    subSlices = subdivideForWordAnimations(subSlices, wordsInWindow, params);
+    subSlices = subdivideForWordAnimations(subSlices, wordsInWindow, staticPhraseParams);
     return subSlices.map((sub) => ({ ...sub, chunks: slice.chunks }));
   });
 
   return slices.map((slice) => {
+    // Per-slice phrase-params resolution — see the matching comment in
+    // generatePhraseCaptionFrames for why this must happen per slice rather
+    // than once for the whole phrase.
+    const sliceParams = resolvePhraseParams(params, phrase, slice.start);
+    const sliceCssConfig = sliceParams === params ? cssConfig : getCSSPreviewFromConfig(sliceParams);
     drawRollingStackFrameForExport(ctx, {
       canvasWidth,
       canvasHeight,
       windowChunks: slice.chunks,
       currentTime: slice.start,
-      cssConfig,
-      params,
-      alignment: params.rollingStackAlignment,
+      cssConfig: sliceCssConfig,
+      params: sliceParams,
+      alignment: sliceParams.rollingStackAlignment,
       createOffscreenCanvas: (w, h) => createCanvas(w, h)
     });
 
@@ -304,7 +354,13 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
 export function generateWordModePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
   return phrase.words.flatMap((w) => {
     const singleWordPhrase = { words: [w], breakAfterIndices: [], start: w.start, end: w.end };
-    return generatePhraseCaptionFrames(singleWordPhrase, params, canvasWidth, canvasHeight, outDir);
+    // Pass the REAL (multi-word) phrase as the transform-key phrase — a
+    // phrase-level override/keyframe must resolve under the same
+    // getPhraseTransformKey the live preview uses, which always keys off
+    // the real phrase in Word Mode too (see preview.js's syncVideoSubtitles,
+    // which resolves phrase params from the real `activePhrase` BEFORE
+    // branching into Word Mode's synthetic single-word rendering).
+    return generatePhraseCaptionFrames(singleWordPhrase, params, canvasWidth, canvasHeight, outDir, phrase);
   });
 }
 
@@ -362,8 +418,11 @@ export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHe
 
   [...phrases].sort((a, b) => a.start - b.start).forEach((phrase) => {
     pushGap(segments, cursor, phrase.start);
-    const phraseParams = resolvePhraseParams(params, phrase);
-    segments.push(...generatePhraseFrames(phrase, phraseParams, canvasWidth, canvasHeight, outDir));
+    // RAW params passed through unmerged — each generator resolves its own
+    // phrase merge (once statically, once per slice) so phrase-level
+    // keyframes can vary correctly across the phrase's own slices; see
+    // generatePhraseCaptionFrames's doc comment for the full rationale.
+    segments.push(...generatePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir));
     cursor = phrase.end;
   });
   pushGap(segments, cursor, videoDuration);
