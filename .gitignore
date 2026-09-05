@@ -37,3 +37,6 @@ Thumbs.db
 /backend/test-invalid.txt
 /backend/test-source.wav
 /backend/test-invalid.wav
+
+# Private internal notes (debugging journals, incident writeups) — never pushed
+/private-notes/
