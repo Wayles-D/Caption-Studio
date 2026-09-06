@@ -101,6 +101,48 @@ let selectedWordIndex = null;
 // `groupId` overrides.
 let selectedGroupId = null;
 
+// The transform key of the caption the user last EXPLICITLY clicked as a
+// whole (i.e. the selection made at line ~1647 below), kept separate from
+// selectedGroupId/currentBox.phrase — those two auto-follow whatever caption
+// is on screen right now (see updateCanvasTransformOverlay's staleness
+// check), which is the right, deliberate UX for on-canvas drag/resize/rotate
+// during normal playback, but WRONG for keyframing: scrubbing the playhead
+// away from a caption to set a second keyframe at a later time used to
+// silently re-target selectedGroupId at whichever DIFFERENT caption is now
+// on screen, so the second keyframe landed on the wrong caption entirely
+// (confirmed via a captured real export payload — two single-keyframe
+// entries under two different phrase keys instead of one two-point track).
+// getKeyframeTarget() below resolves the phrase from THIS key instead of
+// currentBox.phrase whenever it's set, so keyframe reads/writes keep
+// targeting the caption the user actually meant regardless of where the
+// playhead wanders afterward. Cleared on a genuine new selection (a
+// different word/group click, or a full deselect) — see those branches in
+// the hitAreaEl pointerdown handler and deselectCanvasSelection.
+let explicitCaptionSelectionKey = null;
+
+/** Looks up a phrase by its own transform key across the FULL transcript (not just whatever's in currentBox right now) — see explicitCaptionSelectionKey's doc comment for why keyframe target resolution can't rely on currentBox.phrase alone. */
+function resolvePhraseByTransformKey(key) {
+  if (key == null) return null;
+  return (appState.phrases || []).find((p) => getPhraseTransformKey(p) === key) || null;
+}
+
+/**
+ * Re-derives explicitCaptionSelectionKey from whatever selection state a
+ * click handler just set, instead of each branch guessing inline — a click
+ * on a WORD that happens to belong to its caption's own (untouched) default
+ * group is functionally the same "select the whole caption" outcome as a
+ * click on the caption's empty padding (see the hitAreaEl handler below,
+ * both paths can set selectedGroupId to the phrase's default key), so both
+ * must pin identically. Call this at the end of every branch that changes
+ * selectedWordIndex/selectedGroupId, instead of setting
+ * explicitCaptionSelectionKey by hand in each one.
+ */
+function syncExplicitCaptionPin() {
+  explicitCaptionSelectionKey = (selectedWordIndex == null && selectedGroupId != null && isFullPhraseGroup(selectedGroupId))
+    ? selectedGroupId
+    : null;
+}
+
 // "Select Keywords" mode state — see initCanvasTransform's scope-button
 // wiring and the hitAreaEl pointerdown handler's isSelectingKeywords branch.
 // Neither is Zustand-backed (like selectedWordIndex above, these are
@@ -1475,6 +1517,13 @@ if (import.meta.env.DEV) {
     isFullPhraseGroup: selectedGroupId != null ? isFullPhraseGroup(selectedGroupId) : null,
     members: selectedGroupId != null ? getGroupMemberIndexes(selectedGroupId) : null
   });
+  window.__debugKeyframePin = () => ({
+    explicitCaptionSelectionKey,
+    currentBoxPhraseKey: currentBox?.phrase ? getPhraseTransformKey(currentBox.phrase) : null,
+    selectedGroupId,
+    resolvedTarget: getKeyframeTarget(),
+    phrasesCount: (appState.phrases || []).length
+  });
   window.__debugGroupBoxRect = () => {
     if (!currentBox || selectedGroupId == null) return null;
     const box = computeGroupBox(selectedGroupId);
@@ -1609,6 +1658,7 @@ export function initCanvasTransform() {
         selected = true;
         selectedWordIndex = word.wordIndex;
         selectedGroupId = null;
+        syncExplicitCaptionPin();
         boxEl.hidden = false;
         positionBoxElement();
         updateScopeButtons();
@@ -1618,11 +1668,15 @@ export function initCanvasTransform() {
 
       // First click on a word belonging to a group not yet on screen —
       // select that whole group first, exactly like clicking the caption's
-      // padding does below.
+      // padding does below. If that group turns out to be the phrase's own
+      // untouched default group (the common case), this pins it exactly like
+      // a click on the caption's padding would — see syncExplicitCaptionPin's
+      // doc comment for why a word click and a padding click must agree.
       if (selectedWordIndex != null) resetKeywordScopeState();
       selected = true;
       selectedWordIndex = null;
       selectedGroupId = wordGroupId;
+      syncExplicitCaptionPin();
       boxEl.hidden = false;
       positionBoxElement();
       updateScopeButtons();
@@ -1645,6 +1699,10 @@ export function initCanvasTransform() {
       selected = true;
       selectedWordIndex = null;
       selectedGroupId = currentBox.phrase ? getPhraseTransformKey(currentBox.phrase) : null;
+      // A genuine, deliberate click on the whole caption — pin it as the
+      // keyframe target (see explicitCaptionSelectionKey's doc comment)
+      // regardless of where the playhead wanders afterward.
+      syncExplicitCaptionPin();
       boxEl.hidden = false;
       positionBoxElement();
       updateScopeButtons();
@@ -1658,6 +1716,7 @@ export function initCanvasTransform() {
       selected = false;
       selectedWordIndex = null;
       selectedGroupId = null;
+      explicitCaptionSelectionKey = null;
       resetKeywordScopeState();
       boxEl.hidden = true;
     }
@@ -1693,6 +1752,10 @@ export function initCanvasTransform() {
           selectedWordIndex = null;
           selectedGroupId = wordGroupId;
         }
+        // Re-derive the pin from whatever the three branches above just
+        // settled on (see syncExplicitCaptionPin's doc comment) rather than
+        // assuming every drill-in leaves the whole caption.
+        syncExplicitCaptionPin();
         positionBoxElement();
         updateScopeButtons();
         beginMove(e);
@@ -1725,6 +1788,7 @@ export function initCanvasTransform() {
       selected = false;
       selectedWordIndex = null;
       selectedGroupId = null;
+      explicitCaptionSelectionKey = null;
       resetKeywordScopeState();
       if (isSelectingGroup) finishGroupSelection(false);
       boxEl.hidden = true;
@@ -1890,7 +1954,15 @@ export function getKeyframeTarget() {
   }
   if (selectedGroupId != null && currentBox) {
     if (isFullPhraseGroup(selectedGroupId)) {
-      return { kind: 'caption', wordIndexes: null, phrase: currentBox.phrase };
+      // Prefer the explicitly-pinned caption over currentBox.phrase — the
+      // latter is whatever's on screen THIS tick, which silently drifts to a
+      // different caption once the playhead scrubs away (see
+      // explicitCaptionSelectionKey's doc comment). Falls back to
+      // currentBox.phrase when nothing is pinned (defensive; should always be
+      // set together with isFullPhraseGroup returning true via the click
+      // handler above, but never trust that invariant blindly here).
+      const pinnedPhrase = resolvePhraseByTransformKey(explicitCaptionSelectionKey);
+      return { kind: 'caption', wordIndexes: null, phrase: pinnedPhrase || currentBox.phrase };
     }
     const members = getGroupMemberIndexes(selectedGroupId);
     if (!members.length) return null;
@@ -2123,6 +2195,7 @@ export function deselectCanvasSelection() {
   selected = false;
   selectedWordIndex = null;
   selectedGroupId = null;
+  explicitCaptionSelectionKey = null;
   resetKeywordScopeState();
   if (isSelectingGroup) finishGroupSelection(false);
   if (boxEl) boxEl.hidden = true;
