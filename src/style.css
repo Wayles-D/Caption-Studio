@@ -526,6 +526,58 @@ body.light-theme {
   flex-shrink: 0;
 }
 
+.timeline-play-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 0;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  transition: background-color 150ms, transform 150ms;
+}
+
+.timeline-play-btn:hover {
+  background: var(--accent-hover);
+  transform: scale(1.08);
+}
+
+.timeline-history-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms;
+}
+
+.timeline-history-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.timeline-history-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.timeline-header-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+
 .timeline-target-chip {
   display: flex;
   align-items: center;
@@ -678,6 +730,42 @@ body.light-theme {
   background: var(--bg-input);
   color: var(--text-primary);
   font-family: var(--font-main);
+}
+
+/* Inline (mobile/tablet Advanced toggle) mode: `display: contents` makes
+   this group invisible as a box — its children (mini-labels/inputs) flow
+   as direct flex items of .timeline-lane-gutter, exactly as if they'd been
+   appended there directly. See relocatePrecisionFields() in
+   timelinePanel.js — the SAME elements get physically moved into the
+   desktop Advanced side panel, where --panel below applies instead. */
+.timeline-precision-group {
+  display: contents;
+}
+
+.timeline-precision-group--panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.timeline-precision-group--panel:last-child {
+  border-bottom: none;
+}
+
+.timeline-advanced-group-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.timeline-precision-group--panel .timeline-lane-input {
+  width: 100%;
+  font-size: 13px;
+  padding: 7px 9px;
 }
 
 .timeline-lane-input:disabled {

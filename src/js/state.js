@@ -258,6 +258,7 @@ export function getStyleParams() {
     keywordShadowEnabled: appState.keywordShadowEnabled,
     keywordOutlineEnabled: appState.keywordOutlineEnabled,
     keywordOpacity: appState.keywordOpacity,
-    enableActiveHighlight: appState.enableActiveHighlight
+    enableActiveHighlight: appState.enableActiveHighlight,
+    textBlendMode: appState.textBlendMode
   };
 }

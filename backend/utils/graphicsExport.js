@@ -18,6 +18,7 @@ import path from 'path';
 import { canGenerateGraphicsFrames, buildFullTimelineSegments } from './graphicsFrameGenerator.js';
 import { compositeGraphicsCaptionTrack, getVideoInfo } from './graphicsCompositor.js';
 import { groupWordsToPhrases, sanitizePhraseTimings } from './phraseGrouper.js';
+import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
 
 /**
  * Attempts to render captions for `videoPath` via the graphics pipeline.
@@ -48,12 +49,17 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     const segments = buildFullTimelineSegments(phrases, params, width, height, duration, framesDir);
     // The VIDEO's own keyframed transform (see shared/videoTransform.js) —
     // passed through so the exported file reproduces the same zoom/pan/
-    // rotate/fade the live preview shows, independent of captions.
+    // rotate/fade the live preview shows, independent of captions. The
+    // resolved text blend mode (shared/captionConfig.js's own single source
+    // of truth, same resolver the preview's getCSSPreviewFromConfig call
+    // uses) is passed through the same way, so the exported file's caption
+    // compositing matches the live preview exactly.
     await compositeGraphicsCaptionTrack(videoPath, segments, outputVideoPath, {
       videoTransform: params.videoTransform,
       duration,
       canvasWidth: width,
-      canvasHeight: height
+      canvasHeight: height,
+      textBlendMode: getASSStyleFromConfig(params).textBlendMode
     });
     console.log(`[GraphicsExport] Rendered ${segments.length} segments via the graphics pipeline (preset: ${params.preset || 'default'}).`);
     return true;

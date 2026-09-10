@@ -101,6 +101,18 @@ export function initSidebarInspector() {
       if (targetProfile?.autoFontFamilyOnSelect) {
         updates.fontFamily = targetProfile.autoFontFamilyOnSelect;
       }
+      // Same one-time-convenience-default pattern as autoFontFamilyOnSelect
+      // above — animationMode/position both already have concrete, non-null
+      // defaults in STYLE_DEFAULTS, so a profile's own defaultAnimationMode
+      // fallback (in shared/captionConfig.js) never gets a chance to apply on
+      // its own; these two fields push a preset's intended reveal/placement
+      // into state once, still fully overridable afterward like any control.
+      if (targetProfile?.autoAnimationModeOnSelect) {
+        updates.animationMode = targetProfile.autoAnimationModeOnSelect;
+      }
+      if (targetProfile?.autoPositionOnSelect) {
+        updates.position = targetProfile.autoPositionOnSelect;
+      }
       updateState(updates);
     });
   });
@@ -225,6 +237,18 @@ export function initSidebarInspector() {
       updateState({ shadowMode: e.target.value });
     });
   });
+
+  // Text Blend Mode: 'normal' is stored as null ("unset, defer to the active
+  // preset's own textBlendMode" — same convention activeWordColor/shadowColor
+  // etc. already use), so a preset's own blend mode (e.g. Chrome Blend's
+  // 'screen') still shows through until the user explicitly picks something
+  // here. See resolveTextBlendMode in shared/captionConfig.js.
+  const textBlendModeSelect = document.getElementById('text-blend-mode-select');
+  if (textBlendModeSelect) {
+    textBlendModeSelect.addEventListener('change', (e) => {
+      updateState({ textBlendMode: e.target.value === 'normal' ? null : e.target.value });
+    });
+  }
 
   numeric.unifiedShadowOpacity = initNumericControl({
     sliderId: 'input-unified-shadow-opacity', badgeId: 'val-unified-shadow-opacity',
@@ -463,6 +487,17 @@ function syncSidebarUI() {
   if (shadowColorItem) shadowColorItem.style.display = shadowMode !== 'individual' ? 'none' : '';
   const unifiedShadowControls = document.getElementById('unified-shadow-controls');
   if (unifiedShadowControls) unifiedShadowControls.hidden = shadowMode !== 'unified';
+
+  // Text Blend Mode: reflects the user's own override if set, else the
+  // active preset's own textBlendMode, else 'normal' — mirrors
+  // resolveTextBlendMode's exact fallback order.
+  const textBlendModeSelect = document.getElementById('text-blend-mode-select');
+  if (textBlendModeSelect) {
+    const effectiveBlendMode = appState.textBlendMode || getCurrentProfile().textBlendMode || 'normal';
+    if (textBlendModeSelect.value !== effectiveBlendMode) {
+      textBlendModeSelect.value = effectiveBlendMode;
+    }
+  }
 
   const fallbackUnified = getFallbackUnifiedShadow();
   numeric.unifiedShadowOpacity?.sync(appState.unifiedShadowOpacity ?? fallbackUnified.opacity);

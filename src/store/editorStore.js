@@ -78,6 +78,10 @@ export const STYLE_DEFAULTS = {
   keywordOutlineEnabled: null,
   keywordOpacity: 100,
   enableActiveHighlight: null,
+  // null = "unset, defer to the active preset's own textBlendMode" — same
+  // convention as activeWordColor/shadowColor/etc. See resolveTextBlendMode
+  // in shared/captionConfig.js.
+  textBlendMode: null,
   theme: "dark"
 };
 

@@ -23,7 +23,17 @@ import { useEffect, useRef } from 'react';
 import { useEditorStore } from '../store/editorStore.js';
 import { buildWordChip } from '../js/components/transcriptEditorState.js';
 
-export function RightInspector({ onRegenerateCaptions }) {
+// Matches SidebarInspector's SIDEBAR_SECTION_KEYS pattern — App.jsx's mobile
+// bottom toolbar uses these two ids to show just one block at a time.
+export const RIGHT_INSPECTOR_SECTION_KEYS = ['video-info', 'transcript'];
+
+/**
+ * @param {string} [sectionFilter] - When set (mobile bottom-sheet mode),
+ * renders ONLY the one block whose key matches ('video-info' or
+ * 'transcript') instead of both.
+ */
+export function RightInspector({ onRegenerateCaptions, sectionFilter }) {
+  const show = (key) => sectionFilter == null || sectionFilter === key;
   const uploadedFile = useEditorStore((s) => s.uploadedFile);
   const videoDuration = useEditorStore((s) => s.videoDuration);
   const fontFamily = useEditorStore((s) => s.fontFamily);
@@ -54,60 +64,64 @@ export function RightInspector({ onRegenerateCaptions }) {
 
   return (
     <>
-      <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]">Video Inspector</span>
-          <span className="text-[10px] font-bold bg-[var(--status-wash-bg)] text-[var(--status)] px-2 py-0.5 rounded-[10px]" id="global-status-badge">Ready</span>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <div className="flex justify-between text-xs">
-            <span className="text-[var(--text-muted)]">File</span>
-            <span className="font-semibold text-[var(--text-primary)]">{uploadedFile ? uploadedFile.name : 'Demo Video'}</span>
+      {show('video-info') && (
+        <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]">Video Inspector</span>
+            <span className="text-[10px] font-bold bg-[var(--status-wash-bg)] text-[var(--status)] px-2 py-0.5 rounded-[10px]" id="global-status-badge">Ready</span>
           </div>
-          <div className="flex justify-between text-xs">
-            <span className="text-[var(--text-muted)]">Duration</span>
-            <span className="font-semibold text-[var(--text-primary)]">{durationLabel}</span>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex justify-between text-xs">
+              <span className="text-[var(--text-muted)]">File</span>
+              <span className="font-semibold text-[var(--text-primary)]">{uploadedFile ? uploadedFile.name : 'Demo Video'}</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-[var(--text-muted)]">Duration</span>
+              <span className="font-semibold text-[var(--text-primary)]">{durationLabel}</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-[var(--text-muted)]">Canvas</span>
+              <span className="font-semibold text-[var(--text-primary)]">1080 × 1920 (9:16)</span>
+            </div>
           </div>
-          <div className="flex justify-between text-xs">
-            <span className="text-[var(--text-muted)]">Canvas</span>
-            <span className="font-semibold text-[var(--text-primary)]">1080 × 1920 (9:16)</span>
-          </div>
-        </div>
 
-        <div className="flex flex-wrap gap-1.5 mt-1">
-          <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{fontFamily}</span>
-          <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{(currentPreset || '').toUpperCase()}</span>
-          <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{(animationMode || '').toUpperCase()}</span>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{fontFamily}</span>
+            <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{(currentPreset || '').toUpperCase()}</span>
+            <span className="text-[10px] font-bold bg-[var(--bg-input)] border border-[var(--border-color)] px-2 py-[3px] rounded-md text-[var(--text-secondary)]">{(animationMode || '').toUpperCase()}</span>
+          </div>
         </div>
-      </div>
+      )}
 
-      <div
-        className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3 flex-1"
-        id="transcript-card"
-        style={{ display: words.length > 0 ? 'flex' : 'none' }}
-      >
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]">Transcript Editor</span>
-          <span className="text-[11px] font-semibold text-[var(--accent-color)]">{words.length} words</span>
-        </div>
-        <p className="text-[11px] text-[var(--text-muted)]">Click any word chip below to edit speech text:</p>
+      {show('transcript') && (
         <div
-          className="flex-1 min-h-[180px] max-h-[300px] overflow-y-auto bg-[var(--bg-input)] border border-[var(--border-color)]
-            rounded-[var(--radius-sm)] p-2.5 flex flex-wrap content-start gap-1.5"
-          id="transcript-words-container"
-          ref={chipsContainerRef}
-        />
-        <button
-          type="button"
-          id="btn-apply-render"
-          className="w-full h-[38px] bg-[var(--accent-gradient)] border-0 text-[var(--text-on-accent)] font-bold text-xs
-            rounded-[var(--radius-sm)] cursor-pointer transition-colors duration-150 hover:bg-[var(--accent-hover)]"
-          disabled={isProcessing}
-          onClick={() => onRegenerateCaptions?.()}
+          className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3 flex-1"
+          id="transcript-card"
+          style={{ display: words.length > 0 ? 'flex' : 'none' }}
         >
-          Re-render Captioned Video
-        </button>
-      </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]">Transcript Editor</span>
+            <span className="text-[11px] font-semibold text-[var(--accent-color)]">{words.length} words</span>
+          </div>
+          <p className="text-[11px] text-[var(--text-muted)]">Click any word chip below to edit speech text:</p>
+          <div
+            className="flex-1 min-h-[180px] max-h-[300px] overflow-y-auto bg-[var(--bg-input)] border border-[var(--border-color)]
+              rounded-[var(--radius-sm)] p-2.5 flex flex-wrap content-start gap-1.5"
+            id="transcript-words-container"
+            ref={chipsContainerRef}
+          />
+          <button
+            type="button"
+            id="btn-apply-render"
+            className="w-full h-[38px] bg-[var(--accent-gradient)] border-0 text-[var(--text-on-accent)] font-bold text-xs
+              rounded-[var(--radius-sm)] cursor-pointer transition-colors duration-150 hover:bg-[var(--accent-hover)]"
+            disabled={isProcessing}
+            onClick={() => onRegenerateCaptions?.()}
+          >
+            Re-render Captioned Video
+          </button>
+        </div>
+      )}
     </>
   );
 }

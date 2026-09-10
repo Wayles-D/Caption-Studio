@@ -198,6 +198,14 @@ export async function uploadAndExtractAudio(req, res, next) {
       videoPath, words, req.body, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName)
     );
     if (!usedGraphicsRenderer) {
+      // The legacy ASS/libass burn has no blend-mode compositing support
+      // (see graphicsCompositor.js's buildCaptionCompositeStages, which is
+      // the only place this feature is implemented) — surfacing this in the
+      // logs rather than silently dropping it, since this fallback is only
+      // reached when the graphics pipeline is unsupported or throws.
+      if (resolvedStyle.textBlendMode && resolvedStyle.textBlendMode !== 'normal') {
+        console.warn(`[Pipeline] [${baseName}] Text Blend Mode '${resolvedStyle.textBlendMode}' requested but falling back to the ASS/libass pipeline, which does not support it — captions will render opaque.`);
+      }
       await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
         onSpawn: (proc) => { activeProc = proc; },
         shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
@@ -370,6 +378,9 @@ export async function regenerateCaptions(req, res, next) {
       videoPath, words, styles, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName)
     );
     if (!usedGraphicsRenderer) {
+      if (resolvedStyle.textBlendMode && resolvedStyle.textBlendMode !== 'normal') {
+        console.warn(`[Regenerate] [${baseName}] Text Blend Mode '${resolvedStyle.textBlendMode}' requested but falling back to the ASS/libass pipeline, which does not support it — captions will render opaque.`);
+      }
       await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
         onSpawn: (proc) => { activeProc = proc; },
         shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,

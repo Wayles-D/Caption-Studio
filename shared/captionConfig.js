@@ -343,6 +343,63 @@ export const CREATOR_PROFILES = {
       shadowByDefault: false,
       outlineByDefault: false
     }
+  },
+  // Chrome Blend: bold italic display text (PP Editorial New's own bundled
+  // Ultrabold Italic face, requested as the BASE font via baseFontFace —
+  // not just a keyword tier) that visually merges with whatever's playing
+  // behind it via textBlendMode, with a typewriter-style reveal and a
+  // centered position — reproducing the "text blends with the video" reel
+  // style this preset was built from. Not keyword-driven: this preset's
+  // whole point is the blend/typography/reveal combo, not a second keyword
+  // emphasis system layered on top.
+  'blend-chrome': {
+    id: 'blend-chrome',
+    name: 'Chrome Blend',
+    fontFamily: 'PP Editorial New',
+    // Requests the 'italic' face of PP Editorial New as this preset's BASE
+    // text (not just its keyword tier, unlike poppins-editorial above) — see
+    // getASSStyleFromConfig/getCSSPreviewFromConfig's profile.baseFontFace
+    // read and shared/captionGraphics.js's cssConfig.text.fontStyle check.
+    baseFontFace: 'italic',
+    fontWeight: '800',
+    fontSize: 20,
+    defaultAnimationMode: 'typewriter',
+    colors: {
+      primaryHex: '#FFFFFF',
+      secondaryHex: '#FFFFFF',
+      outlineHex: '#000000',
+      backHex: 'transparent',
+      shadowHex: '#000000',
+      assPrimary: '&H00FFFFFF',
+      assSecondary: '&H00FFFFFF',
+      assOutline: '&H00000000',
+      assBack: '&H00000000'
+    },
+    outlineSize: 0,
+    shadowSize: 6,
+    borderStyle: 1,
+    boxPaddingPx: 0,
+    wordSpacing: '0.2em',
+    lineSpacing: '1.25',
+    phraseSpacing: '0 4px',
+    useNativeStroke: false,
+    cssBackground: 'transparent',
+    cssBorderRadius: '0',
+    cssHighlightColor: '#FFFFFF',
+    cssInactiveColor: '#FFFFFF',
+    // One-time convenience defaults applied the moment this preset is picked
+    // (same precedent as autoFontFamilyOnSelect below) — animationMode and
+    // position both already have concrete, non-null defaults in the client
+    // store, so (unlike textBlendMode) defaultAnimationMode/a profile-level
+    // default position would never get a chance to apply on their own; these
+    // two fields explicitly push this preset's intended reveal + placement
+    // into state once, still fully overridable afterward like any control.
+    autoFontFamilyOnSelect: 'PP Editorial New',
+    autoAnimationModeOnSelect: 'typewriter',
+    autoPositionOnSelect: 'center',
+    // Applies live via resolveTextBlendMode — textBlendMode's store default
+    // is null ("unset, defer to preset"), so this takes effect immediately.
+    textBlendMode: 'screen'
   }
 };
 
@@ -598,6 +655,40 @@ export function resolveShadowMode(params) {
     : 'individual';
 }
 
+// Spelled identically across CSS `mix-blend-mode`, Canvas2D
+// `globalCompositeOperation`, and ffmpeg's `blend` filter's `all_mode` — one
+// resolved string threads through the live preview (CSS on the captions
+// canvas element), the shared Canvas2D drawing engine, and the export
+// compositor's ffmpeg filter graph with no translation table needed.
+export const TEXT_BLEND_MODES = ['normal', 'screen', 'overlay', 'lighten', 'difference', 'multiply'];
+
+/**
+ * Resolves which blend mode caption text composites against the video with.
+ * 'normal' (the default) is a true no-op in every renderer — plain opaque
+ * text exactly as before this feature existed. Any other value makes the
+ * text visually merge with whatever's playing underneath it, like a
+ * CapCut/Premiere "blend mode text" effect.
+ *
+ * Unlike animationMode/position (which already have concrete, non-null
+ * defaults in the client store, so a profile's own fallback value never
+ * actually gets a chance to apply), textBlendMode's store default is `null`
+ * ("unset, defer to the active preset") — so profile.textBlendMode DOES
+ * apply live the moment a preset that sets it is selected, with no extra
+ * one-time-convenience wiring needed in the UI layer.
+ *
+ * @param {object} params - Client style params.
+ * @param {object} profile - The resolved creator profile.
+ * @returns {string} One of TEXT_BLEND_MODES.
+ */
+export function resolveTextBlendMode(params, profile) {
+  if (params.textBlendMode && TEXT_BLEND_MODES.includes(params.textBlendMode)) {
+    return params.textBlendMode;
+  }
+  return profile.textBlendMode && TEXT_BLEND_MODES.includes(profile.textBlendMode)
+    ? profile.textBlendMode
+    : 'normal';
+}
+
 /**
  * Resolves the caption display mode: 'sentence' (existing behavior — the
  * full phrase is shown, with per-word active/inactive highlighting), 'word'
@@ -803,11 +894,17 @@ export function resolveWordStyleMetadata(word, context) {
  * @returns {object} Resolved ASS parameters.
  */
 export function getASSStyleFromConfig(params = {}) {
+  const presetKey = params.preset && CREATOR_PROFILES[params.preset] ? params.preset : 'bold-yellow';
+  const profile = CREATOR_PROFILES[presetKey];
+
   // Resolved exclusively through the Font Registry — never a hardcoded name,
   // never a font that isn't actually bundled in backend/fonts/. An
   // unrecognized/missing requested font transparently falls back to the
-  // registry's default (Poppins) rather than failing or guessing.
-  const baseFontFace = resolveFontFace(params.fontFamily, 'regular');
+  // registry's default (Poppins) rather than failing or guessing. A preset
+  // can request its base text render with a specific face (e.g. 'italic')
+  // via profile.baseFontFace — every existing preset leaves this unset and
+  // keeps resolving 'regular', byte-identical to before this field existed.
+  const baseFontFace = resolveFontFace(params.fontFamily, profile.baseFontFace || 'regular');
   const fontName = baseFontFace.familyName;
 
   const feSize = parseInt(params.fontSize || '14', 10);
@@ -822,9 +919,6 @@ export function getASSStyleFromConfig(params = {}) {
   const posOverrideTag = posKey === 'manual'
     ? `{\\an5\\pos(${Math.round((parseFloat(params.customPosX ?? 50) / 100) * 1080)},${Math.round((parseFloat(params.customPosY ?? 85) / 100) * 1920)})}`
     : null;
-
-  const presetKey = params.preset && CREATOR_PROFILES[params.preset] ? params.preset : 'bold-yellow';
-  const profile = CREATOR_PROFILES[presetKey];
 
   const animationMode = params.animationMode && ANIMATION_MODES[params.animationMode]
     ? params.animationMode
@@ -969,6 +1063,7 @@ export function getASSStyleFromConfig(params = {}) {
     unifiedShadow,
     captionMode: resolveCaptionMode(params),
     fontSizeAss: fontSize,
+    textBlendMode: resolveTextBlendMode(params, profile),
     profile
   };
 }
@@ -1003,21 +1098,24 @@ function resolveBoxState(params, profile) {
  * @returns {object} Object with overlay, text, highlight, and spacing colors.
  */
 export function getCSSPreviewFromConfig(params = {}) {
+  const presetKey = params.preset && CREATOR_PROFILES[params.preset] ? params.preset : 'bold-yellow';
+  const profile = CREATOR_PROFILES[presetKey];
+
   // Resolved exclusively through the Font Registry, mirroring
   // getASSStyleFromConfig exactly — same font, same fallback behavior, so
-  // preview and export can never disagree on which font is showing.
-  const baseFontFace = resolveFontFace(params.fontFamily, 'regular');
+  // preview and export can never disagree on which font is showing. A preset
+  // can request its base text render with a specific face (e.g. 'italic')
+  // via profile.baseFontFace — every existing preset leaves this unset and
+  // keeps resolving 'regular', byte-identical to before this field existed.
+  const baseFontFace = resolveFontFace(params.fontFamily, profile.baseFontFace || 'regular');
   const fontName = baseFontFace.familyName;
   const feSize = parseInt(params.fontSize || '14', 10);
-  
+
   const isManualPosition = params.position === 'manual';
   const posKey = isManualPosition ? 'manual' : (params.position && CAPTION_POSITIONS[params.position] ? params.position : 'bottom');
   const posConfig = isManualPosition ? null : CAPTION_POSITIONS[posKey];
   const customPosX = parseFloat(params.customPosX ?? 50);
   const customPosY = parseFloat(params.customPosY ?? 85);
-
-  const presetKey = params.preset && CREATOR_PROFILES[params.preset] ? params.preset : 'bold-yellow';
-  const profile = CREATOR_PROFILES[presetKey];
 
   const animationMode = params.animationMode && ANIMATION_MODES[params.animationMode]
     ? params.animationMode
@@ -1151,11 +1249,13 @@ export function getCSSPreviewFromConfig(params = {}) {
   // so the preview always matches the exported video.
   const keywordStyleConfig = resolveKeywordStyleConfig(params, profile);
   const activeHighlightEnabled = resolveActiveHighlightEnabled(params, profile);
+  const textBlendMode = resolveTextBlendMode(params, profile);
 
   return {
     animationMode,
     profile,
     popScale,
+    textBlendMode,
     wordSpacingPx: numericWordSpacing,
     enableKeywordHighlighting,
     keywordColor,
@@ -1172,6 +1272,16 @@ export function getCSSPreviewFromConfig(params = {}) {
       fontFamily: `'${fontName}'`,
       fontSize: `${feSize}px`,
       fontWeight: profile.fontWeight,
+      // Reflects profile.baseFontFace ('italic' presets, e.g. Chrome Blend) —
+      // read back by shared/captionGraphics.js's non-keyword-driven word path
+      // so canvas preview/export render the same italic base text the CSS
+      // fallback text-layer's font-style would.
+      fontStyle: baseFontFace.italic ? 'italic' : 'normal',
+      // CSS's own equivalent of textBlendMode above, for the legacy DOM
+      // text-layer fallback — 'normal' (the vast majority of captions) is a
+      // true no-op value here, matching the canvas path leaving the property
+      // unset in that case.
+      mixBlendMode: textBlendMode,
       color: inactiveColor,
       background: cssBackground,
       textShadow: cssTextShadow,

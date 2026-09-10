@@ -1,7 +1,10 @@
 /**
  * Center Workspace: phone-frame preview (upload dropzone / processing /
- * video + caption overlay), playback controls, and the on-canvas caption
- * transform overlay.
+ * video + caption overlay) and the on-canvas caption transform overlay.
+ * Playback (play/pause, seek) and export both live outside this component
+ * now — seeking happens via the timeline's ruler/playhead
+ * (src/js/components/timelinePanel.js), and export is the nav's Export
+ * button (see App.jsx's handleDownloadVideo).
  *
  * React port of the corresponding index.html markup for the migration
  * plan's Stage 3a/3b — but, like SidebarInspector.jsx (Stage 2), this
@@ -25,7 +28,7 @@
  *
  * What DOES belong in React (Stage 4): the outer upload/processing/video
  * view switching, the processing title text, the video's src, and the
- * upload/demo/download/drag-drop interactions — none of that touches the
+ * upload/demo/drag-drop interactions — none of that touches the
  * caption-rendering pipeline, so App.jsx now owns it as plain state/props
  * instead of main.js reaching in via getElementById + classList.
  */
@@ -38,8 +41,7 @@ export function PreviewStage({
   videoSrc,
   onSelectFileClick,
   onUseDemo,
-  onFilesDropped,
-  onDownloadVideo
+  onFilesDropped
 }) {
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -227,35 +229,6 @@ export function PreviewStage({
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Floating Playback Controls Bar */}
-      <div className="bg-[var(--bg-toolbar)] backdrop-blur-md border border-[var(--border-color)] rounded-[30px] py-1.5 px-4 flex items-center gap-3.5 w-[330px] shadow-[var(--shadow-sm)]">
-        <button
-          type="button" id="btn-video-play" aria-label="Play/Pause"
-          className="bg-[var(--accent-color)] border-0 text-[var(--text-on-accent)] w-8 h-8 rounded-full flex items-center justify-center
-            cursor-pointer transition-[transform,background-color] duration-150 hover:bg-[var(--accent-hover)] hover:scale-110"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" id="icon-play-state">
-            <polygon points="5,3 19,12 5,21" fill="currentColor" className="play-poly" />
-          </svg>
-        </button>
-        <div className="flex-1 flex items-center gap-2">
-          <span className="text-[11px] font-semibold text-[var(--text-secondary)] [font-family:'Geist_Mono',monospace]" id="time-display-current">0:00</span>
-          <input
-            type="range" id="video-seek-bar" min="0" max="100" defaultValue="0"
-            className="flex-1 appearance-none h-1 rounded-sm bg-[var(--bg-input)] cursor-pointer
-              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5
-              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--accent-color)]"
-          />
-          <span className="text-[11px] font-semibold text-[var(--text-secondary)] [font-family:'Geist_Mono',monospace]" id="time-display-duration">0:00</span>
-        </div>
-        <button
-          type="button" id="btn-download-video" title="Download Captioned MP4" onClick={() => onDownloadVideo?.()}
-          className="bg-transparent border-0 text-[var(--text-secondary)] cursor-pointer hover:text-[var(--accent-color)]"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
-        </button>
       </div>
     </div>
   );

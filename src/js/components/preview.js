@@ -397,6 +397,21 @@ export function applyCSSPreviewStyles() {
   // Apply Text Styles
   Object.assign(captionsText.style, cssConfig.text);
   captionsText.style.setProperty('--pop-scale', ((appState.popScale || 118) / 100).toString());
+
+  // Text Blend Mode: the live renderer for every mode in active use today is
+  // the <canvas id="captions-canvas"> element (captionsText is hidden
+  // whenever it's active — see syncVideoSubtitles), which sits as a plain
+  // sibling of <video id="preview-video"> with no isolating ancestor between
+  // them (see PreviewStage.jsx), so a CSS mix-blend-mode set directly on the
+  // canvas element correctly composites its rasterized output against the
+  // video beneath it. cssConfig.text.mixBlendMode above already covers the
+  // legacy DOM text-layer fallback path via Object.assign.
+  const captionsCanvasEl = document.getElementById('captions-canvas');
+  if (captionsCanvasEl) {
+    captionsCanvasEl.style.mixBlendMode = cssConfig.textBlendMode && cssConfig.textBlendMode !== 'normal'
+      ? cssConfig.textBlendMode
+      : '';
+  }
 }
 
 /**

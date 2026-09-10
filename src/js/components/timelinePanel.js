@@ -15,6 +15,7 @@
  * container; rebuilds its own children imperatively.
  */
 import * as keyframeEngine from './keyframeEngine.js';
+import { undo, redo, getHistoryState } from '../state.js';
 
 const LANES = [
   { key: 'position', label: 'Position', properties: [
@@ -67,6 +68,7 @@ function formatValue(value, property) {
 
 let els = null;
 let laneEls = {}; // key -> { track, inputs: { property: inputEl } }
+let activeOptions = null; // see initTimelinePanel's options param
 let rafId = null;
 let dragMarker = null; // { fromTime }
 let selectedMarkerTime = null;
@@ -80,16 +82,78 @@ function applyAdvancedState() {
   });
 }
 
+let lastPrecisionTarget = undefined; // the external container currently holding the precision groups, or null when they live inline
+
+/**
+ * Moves every lane's precision-field group either into `target` (a React-
+ * owned container element, grouped under a small per-lane heading so the
+ * fields still make sense out of context) or back into their own lane's
+ * inline gutter (`target` is null/undefined) — the desktop Advanced side
+ * panel and mobile/tablet's inline Advanced toggle are two DISPLAY
+ * LOCATIONS for the exact same input elements, not two separate UIs kept
+ * in sync, so there's nothing to duplicate or drift.
+ */
+function relocatePrecisionFields(target) {
+  if (target === lastPrecisionTarget) return;
+  lastPrecisionTarget = target;
+
+  LANES.forEach((lane) => {
+    const { gutter, precisionGroup, label } = laneEls[lane.key];
+    const existingHeader = precisionGroup.querySelector(':scope > .timeline-advanced-group-header');
+
+    if (target) {
+      if (!existingHeader) {
+        const header = document.createElement('div');
+        header.className = 'timeline-advanced-group-header';
+        header.textContent = label;
+        precisionGroup.insertBefore(header, precisionGroup.firstChild);
+      }
+      precisionGroup.classList.add('timeline-precision-group--panel');
+      target.appendChild(precisionGroup);
+      // Independent of advancedExpanded (which stays false — mobile's own
+      // toggle — the whole time the panel owns these fields) since the
+      // panel's own open/closed state is what gates whether this function
+      // is even called with a non-null target at all.
+      precisionGroup.querySelectorAll('.timeline-precision-field').forEach((el) => { el.style.display = ''; });
+    } else {
+      if (existingHeader) existingHeader.remove();
+      precisionGroup.classList.remove('timeline-precision-group--panel');
+      gutter.appendChild(precisionGroup);
+      applyAdvancedState(); // restore mobile/tablet's own inline hidden/shown state
+    }
+  });
+}
+
 function getVideo() {
   return document.getElementById('preview-video');
 }
 
-function buildDom(container) {
+function buildDom(container, options) {
   container.innerHTML = '';
   container.classList.add('timeline-panel');
 
   const header = document.createElement('div');
   header.className = 'timeline-header';
+
+  // Play/Pause — the only playback trigger left in the app since the
+  // floating preview-bar (play/seek/download) was removed in favor of this
+  // timeline handling both scrubbing (the ruler/playhead below) and now
+  // play/pause too. Toggles the SAME #preview-video element the ruler
+  // scrubs and canvasTransform/preview.js already treat as the single
+  // source of playback truth.
+  const playBtn = document.createElement('button');
+  playBtn.type = 'button';
+  playBtn.className = 'timeline-play-btn';
+  playBtn.id = 'timeline-play-btn';
+  playBtn.setAttribute('aria-label', 'Play/Pause');
+  playBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon id="timeline-play-icon-poly" points="5,3 19,12 5,21" /></svg>';
+  playBtn.addEventListener('click', () => {
+    const video = getVideo();
+    if (!video) return;
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+  });
+  header.appendChild(playBtn);
 
   const videoChip = document.createElement('button');
   videoChip.type = 'button';
@@ -105,6 +169,35 @@ function buildDom(container) {
   targetLabel.id = 'timeline-target-label';
   header.appendChild(targetLabel);
 
+  // Undo/Redo — moved here (off the top nav) since they're history controls
+  // for the same keyframe/style edits this timeline is the primary editing
+  // surface for. canUndo/canRedo have no reactive event of their own to
+  // subscribe to beyond the 'history' pub/sub React used to use
+  // (see Toolbar.jsx's history) — polling getHistoryState() once per tick()
+  // is simpler here and matches every other piece of live state (playhead,
+  // target label, disabled inputs) this file already refreshes that way.
+  const undoBtn = document.createElement('button');
+  undoBtn.type = 'button';
+  undoBtn.className = 'timeline-history-btn';
+  undoBtn.id = 'timeline-undo-btn';
+  undoBtn.title = 'Undo (Ctrl+Z)';
+  undoBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6" /><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" /></svg>';
+  undoBtn.addEventListener('click', () => undo());
+  header.appendChild(undoBtn);
+
+  const redoBtn = document.createElement('button');
+  redoBtn.type = 'button';
+  redoBtn.className = 'timeline-history-btn';
+  redoBtn.id = 'timeline-redo-btn';
+  redoBtn.title = 'Redo (Ctrl+Y)';
+  redoBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6" /><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7" /></svg>';
+  redoBtn.addEventListener('click', () => redo());
+  header.appendChild(redoBtn);
+
+  const historyDivider = document.createElement('div');
+  historyDivider.className = 'timeline-header-divider';
+  header.appendChild(historyDivider);
+
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
   addBtn.className = 'timeline-add-keyframe-btn';
@@ -113,12 +206,15 @@ function buildDom(container) {
   addBtn.addEventListener('click', () => keyframeEngine.addOrUpdateKeyframeAtPlayhead());
   header.appendChild(addBtn);
 
-  // Precision (X/Y/scale%/rotation°) numeric fields are hidden by default —
-  // the primary way to set these values is direct manipulation on the
-  // canvas (drag/resize/rotate — see videoCanvasControls.js and the
-  // existing canvasTransform.js gestures); this toggle reveals them for
-  // advanced users who want to type an exact value. Purely a display
-  // toggle — the underlying values/state are unaffected either way.
+  // Precision (X/Y/scale%/rotation°) numeric fields: shown inline (hidden by
+  // default) on mobile/tablet, the same as always — the primary way to set
+  // these values is direct manipulation on the canvas (drag/resize/rotate —
+  // see videoCanvasControls.js and the existing canvasTransform.js
+  // gestures), this toggle just reveals them for anyone who wants to type
+  // an exact value. On desktop (per options.isDesktopGetter), there's room
+  // for a real side panel instead, so the click routes to React's
+  // onAdvancedToggle and relocatePrecisionFields (driven from tick(), see
+  // below) moves these exact fields there instead of toggling them inline.
   const advancedBtn = document.createElement('button');
   advancedBtn.type = 'button';
   advancedBtn.className = 'timeline-advanced-toggle';
@@ -126,6 +222,10 @@ function buildDom(container) {
   advancedBtn.textContent = 'Advanced';
   advancedBtn.title = 'Show precise numeric values (position/scale/rotation)';
   advancedBtn.addEventListener('click', () => {
+    if (options?.isDesktopGetter?.()) {
+      options.onAdvancedToggle?.();
+      return;
+    }
     advancedExpanded = !advancedExpanded;
     applyAdvancedState();
   });
@@ -169,6 +269,15 @@ function buildDom(container) {
     label.textContent = lane.label;
     gutter.appendChild(label);
 
+    // Precision fields live in this dedicated group (not appended directly
+    // into `gutter`) so relocatePrecisionFields() can move the WHOLE group
+    // — same input elements, same listeners, same `inputs` map entries —
+    // between here (inline, mobile/tablet's Advanced toggle) and the
+    // desktop Advanced side panel, rather than needing two separate sets of
+    // inputs kept in sync with each other.
+    const precisionGroup = document.createElement('div');
+    precisionGroup.className = 'timeline-precision-group';
+
     const inputs = {};
     lane.properties.forEach(({ property, fieldLabel }) => {
       if (fieldLabel) {
@@ -177,7 +286,7 @@ function buildDom(container) {
         miniLabel.style.fontSize = '9px';
         miniLabel.style.color = 'var(--text-muted)';
         miniLabel.textContent = fieldLabel;
-        gutter.appendChild(miniLabel);
+        precisionGroup.appendChild(miniLabel);
       }
       const input = document.createElement('input');
       input.type = 'number';
@@ -199,9 +308,10 @@ function buildDom(container) {
         input.dataset.lastCommitted = raw;
         keyframeEngine.setValue(property, value);
       });
-      gutter.appendChild(input);
+      precisionGroup.appendChild(input);
       inputs[property] = input;
     });
+    gutter.appendChild(precisionGroup);
 
     const track = document.createElement('div');
     track.className = 'timeline-lane-track';
@@ -210,7 +320,7 @@ function buildDom(container) {
     row.appendChild(track);
     lanesEl.appendChild(row);
 
-    laneEls[lane.key] = { track, inputs };
+    laneEls[lane.key] = { track, inputs, gutter, precisionGroup, label: lane.label };
   });
 
   scroll.appendChild(lanesEl);
@@ -224,7 +334,7 @@ function buildDom(container) {
 
   container.appendChild(scroll);
 
-  return { header, videoChip, targetLabel, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead };
+  return { header, playBtn, undoBtn, redoBtn, videoChip, targetLabel, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead };
 }
 
 function timeToX(time, trackWidth, duration) {
@@ -404,6 +514,7 @@ function refreshRangesForTarget(kind) {
 }
 
 let lastTargetKind = undefined;
+let lastPaused = undefined;
 
 function tick() {
   const video = getVideo();
@@ -413,6 +524,35 @@ function tick() {
   refreshRulerTicks(duration);
   refreshPlayhead(currentTime, duration);
   if (els.timeReadout) els.timeReadout.textContent = formatTime(currentTime);
+
+  const paused = video?.paused ?? true;
+  if (paused !== lastPaused) {
+    lastPaused = paused;
+    const poly = els.playBtn?.querySelector('#timeline-play-icon-poly');
+    if (poly) {
+      poly.setAttribute(
+        'points',
+        paused ? '5,3 19,12 5,21' : '5,3 9,3 9,21 5,21 15,3 19,3 19,21 15,21'
+      );
+    }
+  }
+
+  const { canUndo, canRedo } = getHistoryState();
+  if (els.undoBtn) els.undoBtn.disabled = !canUndo;
+  if (els.redoBtn) els.redoBtn.disabled = !canRedo;
+
+  // Desktop Advanced side panel vs. mobile/tablet's inline toggle — see
+  // relocatePrecisionFields()'s own doc comment. Re-evaluated every tick
+  // (cheap: relocatePrecisionFields no-ops unless the target actually
+  // changed) so this also self-corrects if the viewport crosses the
+  // desktop breakpoint while the panel happens to be open.
+  const isDesktop = activeOptions?.isDesktopGetter?.() ?? false;
+  const advancedContainer = isDesktop ? activeOptions?.getAdvancedContainer?.() : null;
+  const advancedOpen = isDesktop ? (activeOptions?.isAdvancedOpenGetter?.() ?? false) : false;
+  relocatePrecisionFields(advancedOpen ? advancedContainer : null);
+  if (els.advancedBtn) {
+    els.advancedBtn.classList.toggle('active', isDesktop ? advancedOpen : advancedExpanded);
+  }
 
   const target = keyframeEngine.getActiveTarget();
   const targetKind = target?.kind ?? null;
@@ -444,10 +584,12 @@ function tick() {
   rafId = requestAnimationFrame(tick);
 }
 
-export function initTimelinePanel(container) {
+export function initTimelinePanel(container, options = {}) {
   if (!container) return () => {};
-  els = buildDom(container);
+  activeOptions = options;
+  els = buildDom(container, options);
   advancedExpanded = false;
+  lastPrecisionTarget = undefined;
   applyAdvancedState();
 
   const scrub = (clientX) => {

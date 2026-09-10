@@ -463,7 +463,7 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
       color: spec.color,
       scale: spec.scale,
       syntheticBold: needsSyntheticBold(params.fontFamily, parseInt(spec.fontWeight, 10) || 0),
-      font: buildFontString({ fontFamily: resolvedFontFamily, fontWeight: spec.fontWeight, italic: false, fontSizePx })
+      font: buildFontString({ fontFamily: resolvedFontFamily, fontWeight: spec.fontWeight, italic: cssConfig.text.fontStyle === 'italic', fontSizePx })
     };
   });
 

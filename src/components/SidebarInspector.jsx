@@ -142,7 +142,28 @@ const ACCORDION_BODY = `px-4 pb-4 flex flex-col gap-3.5 max-h-[3000px] opacity-1
   [transition:max-height_0.3s_ease,opacity_0.2s_ease,padding_0.2s_ease]
   group-[.collapsed]:max-h-0 group-[.collapsed]:opacity-0 group-[.collapsed]:pb-0`;
 
-function AccordionSection({ icon, title, children }) {
+// One entry per mobile bottom-toolbar icon (see App.jsx's MOBILE_TOOLS) —
+// `sectionKey` on each AccordionSection below matches one of these ids.
+// Exported so App.jsx's toolbar can build its icon strip without duplicating
+// the section list here.
+export const SIDEBAR_SECTION_KEYS = [
+  'typography',
+  'style-colors',
+  'animation-mode',
+  'caption-animation',
+  'position-spacing',
+  'ai-keywords',
+  'keyword-style'
+];
+
+// `bare`: when a single section is being shown on its own (the mobile
+// bottom-sheet case — see SidebarInspector's `sectionFilter` prop below),
+// the section's own collapsible header would just duplicate the sheet's
+// title bar, so it's dropped in favor of rendering the body directly.
+function AccordionSection({ icon, title, children, bare }) {
+  if (bare) {
+    return <div className="flex flex-col gap-3.5 p-4">{children}</div>;
+  }
   return (
     <div className={ACCORDION_ITEM}>
       <button type="button" className={ACCORDION_HEADER}>
@@ -157,7 +178,12 @@ function AccordionSection({ icon, title, children }) {
   );
 }
 
-export function SidebarInspector() {
+/**
+ * @param {string} [sectionFilter] - When set (mobile bottom-sheet mode),
+ * renders ONLY the one AccordionSection whose sectionKey matches (bare, with
+ * no outer "Caption Inspector" header) instead of the full accordion list.
+ */
+export function SidebarInspector({ sectionFilter } = {}) {
   useEffect(() => {
     initSidebarInspector();
   }, []);
@@ -168,19 +194,25 @@ export function SidebarInspector() {
   // exactly like the old vanilla picker's single-popover-at-a-time behavior.
   const [openColorField, setOpenColorField] = useState(null);
 
+  const bare = sectionFilter != null;
+  const show = (key) => sectionFilter == null || sectionFilter === key;
+
   return (
     <div>
-      <div className="py-4 px-5 border-b border-[var(--border-color)] flex items-center justify-between">
-        <span className="font-bold text-[13px] uppercase tracking-[0.06em] text-[var(--text-secondary)]">Caption Inspector</span>
-        <span className="text-[10px] font-bold text-[var(--status)] flex items-center gap-[5px] bg-[var(--status-wash-bg)] px-2 py-[3px] rounded-xl">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--status)] shadow-[0_0_8px_var(--status)] animate-[pulse_1.8s_infinite]" /> LIVE WYSIWYG
-        </span>
-      </div>
+      {!bare && (
+        <div className="py-4 px-5 border-b border-[var(--border-color)] flex items-center justify-between">
+          <span className="font-bold text-[13px] uppercase tracking-[0.06em] text-[var(--text-secondary)]">Caption Inspector</span>
+          <span className="text-[10px] font-bold text-[var(--status)] flex items-center gap-[5px] bg-[var(--status-wash-bg)] px-2 py-[3px] rounded-xl">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--status)] shadow-[0_0_8px_var(--status)] animate-[pulse_1.8s_infinite]" /> LIVE WYSIWYG
+          </span>
+        </div>
+      )}
 
-      <div className="p-3 flex flex-col gap-2.5">
+      <div className={bare ? '' : 'p-3 flex flex-col gap-2.5'}>
 
         {/* 1. Typography Section */}
-        <AccordionSection
+        {show('typography') && <AccordionSection
+          bare={bare}
           title="Typography"
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 7 4 4 20 4 20 7" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" /></svg>}
         >
@@ -299,10 +331,11 @@ export function SidebarInspector() {
               </label>
             </div>
           </div>
-        </AccordionSection>
+        </AccordionSection>}
 
         {/* 2. Style & Presets Section */}
-        <AccordionSection
+        {show('style-colors') && <AccordionSection
+          bare={bare}
           title="Style & Colors"
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 000 20 14.5 14.5 0 000-20" /></svg>}
         >
@@ -329,6 +362,9 @@ export function SidebarInspector() {
               </button>
               <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="poppins-editorial">
                 <span className="text-[11px] font-extrabold block text-center text-white [font-family:Poppins,sans-serif] font-bold [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]">EDIT</span>
+              </button>
+              <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="blend-chrome">
+                <span className="text-[11px] font-extrabold block text-center text-white [font-family:'PP_Editorial_New',serif] italic [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]">CHROME</span>
               </button>
             </div>
           </div>
@@ -385,6 +421,19 @@ export function SidebarInspector() {
               </label>
             </div>
             <p className={FIELD_HINT}>Individual gives each character its own shadow. Unified renders one continuous shadow behind the whole caption.</p>
+          </div>
+
+          <div className={SETTINGS_GROUP}>
+            <label className={GROUP_LABEL}>Text Blend Mode</label>
+            <select id="text-blend-mode-select" className={SELECT} defaultValue="normal">
+              <option value="normal">Normal</option>
+              <option value="screen">Screen</option>
+              <option value="overlay">Overlay</option>
+              <option value="lighten">Lighten</option>
+              <option value="difference">Difference</option>
+              <option value="multiply">Multiply</option>
+            </select>
+            <p className={FIELD_HINT}>Blends caption text with the video colors underneath it, like the "blend mode text" effect in CapCut/Premiere.</p>
           </div>
 
           <div id="individual-shadow-controls" className="flex flex-col gap-3.5">
@@ -473,10 +522,11 @@ export function SidebarInspector() {
             <input type="range" id="input-background-opacity" min="0" max="100" defaultValue="100" className={SLIDER} />
             <p className={FIELD_HINT}>Only visible when a Box color is active.</p>
           </div>
-        </AccordionSection>
+        </AccordionSection>}
 
         {/* 3. Animation Modes Section */}
-        <AccordionSection
+        {show('animation-mode') && <AccordionSection
+          bare={bare}
           title="Animation Mode"
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>}
         >
@@ -508,13 +558,14 @@ export function SidebarInspector() {
             </div>
             <input type="range" id="input-pop-scale" min="100" max="300" defaultValue="118" className={SLIDER} />
           </div>
-        </AccordionSection>
+        </AccordionSection>}
 
         {/* 3b. Caption Entrance Animation Section — deliberately separate from
             "Animation Mode" above: that section controls per-word highlight
             TIMING (karaoke/pop/instant/typewriter); this controls how the
             caption BLOCK as a whole enters (see shared/captionAnimation.js). */}
-        <AccordionSection
+        {show('caption-animation') && <AccordionSection
+          bare={bare}
           title="Caption Animation"
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>}
         >
@@ -551,10 +602,11 @@ export function SidebarInspector() {
               <option value="ease-in-out">Ease In Out</option>
             </select>
           </div>
-        </AccordionSection>
+        </AccordionSection>}
 
         {/* 4. Position & Offset Section */}
-        <AccordionSection
+        {show('position-spacing') && <AccordionSection
+          bare={bare}
           title="Position & Spacing"
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 19V5M5 12l7-7 7 7" /></svg>}
         >
@@ -588,10 +640,11 @@ export function SidebarInspector() {
             </div>
             <input type="range" id="input-margin-v" min="0" max="1900" defaultValue="300" className={SLIDER} />
           </div>
-        </AccordionSection>
+        </AccordionSection>}
 
         {/* 5. AI Keyword Highlighting Section */}
-        <AccordionSection
+        {show('ai-keywords') && <AccordionSection
+          bare={bare}
           title="AI Keywords"
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>}
         >
@@ -611,10 +664,11 @@ export function SidebarInspector() {
               </div>
             </div>
           </div>
-        </AccordionSection>
+        </AccordionSection>}
 
         {/* 6. Keyword Style Section (keyword-driven presets, e.g. WAYLES) */}
-        <AccordionSection
+        {show('keyword-style') && <AccordionSection
+          bare={bare}
           title="Keyword Style"
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /><path d="M2 2l7.586 7.586" /><circle cx="11" cy="11" r="2" /></svg>}
         >
@@ -689,7 +743,7 @@ export function SidebarInspector() {
             </div>
             <input type="range" id="input-keyword-opacity" min="0" max="100" defaultValue="100" className={SLIDER} />
           </div>
-        </AccordionSection>
+        </AccordionSection>}
 
       </div>
     </div>
