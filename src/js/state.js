@@ -25,7 +25,10 @@ export const MOCK_SUBTITLES = [
   { start: 18.5, end: 21.5, text: "PREMIUM. UNDERSTATED. PROFESSIONAL CREATOR TOOLS." }
 ];
 
-export const DEFAULT_DEMO_VIDEO_URL = "https://assets.mixkit.co/videos/preview/mixkit-vertical-shot-of-a-beautiful-waterfall-in-a-forest-48990-large.mp4";
+// Served from public/ (bundled with the app, not a third-party CDN) — the
+// previous mixkit.co URL started returning 403 Forbidden (asset removed
+// upstream), silently breaking the "Try Demo Video" button in production.
+export const DEFAULT_DEMO_VIDEO_URL = "/demo-video.mp4";
 
 // Same combined shape/keys appState's style slice always had (used for
 // undo/redo scoping and resetStyles) — spans both stores; which store a key

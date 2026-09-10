@@ -526,6 +526,17 @@ body.light-theme {
   flex-shrink: 0;
 }
 
+.timeline-header-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeline-header-row--controls {
+  flex: 1;
+  min-width: 0; /* lets .timeline-target-label actually shrink/ellipsize below instead of overflowing */
+}
+
 .timeline-play-btn {
   display: flex;
   align-items: center;
@@ -602,6 +613,55 @@ body.light-theme {
   font-size: 11px;
   color: var(--text-muted);
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mobile/tablet stand-in for .timeline-target-label — hidden by default,
+   shown only under the max-width:1023px media query above. */
+.timeline-target-info {
+  display: none;
+  position: relative;
+  align-items: center;
+}
+
+.timeline-target-info-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.timeline-target-tooltip {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: 200px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+  box-shadow: var(--shadow-md);
+}
+
+.timeline-target-info:hover .timeline-target-tooltip,
+.timeline-target-info.open .timeline-target-tooltip {
+  display: block;
 }
 
 .timeline-add-keyframe-btn {
@@ -827,4 +887,39 @@ body.light-theme {
   color: var(--text-muted);
   padding: 20px 0;
   text-align: center;
+}
+
+/* Placed last so it wins every property tie against the unconditional
+   rules above (equal specificity resolves by source order, not by which
+   side is inside a media query) — an earlier attempt at this block sat
+   BEFORE those base rules and was silently overridden by every one of
+   them. See timelinePanel.js's relocatePlaybackRow/relocatePrecisionFields
+   for the actual DOM moves these selectors are styling. */
+@media (max-width: 1023px) {
+  /* Play/Undo/Redo have been physically relocated out of .timeline-header
+     into their own bar directly above the timeline (see App.jsx's
+     mobilePlaybackRowRef) — nothing left before the divider, so hide it. */
+  .timeline-header-divider {
+    display: none;
+  }
+
+  /* The full sentence doesn't fit next to Keyframe/Advanced/time at this
+     width — collapses into the small info icon instead. */
+  .timeline-target-label {
+    display: none;
+  }
+
+  .timeline-target-info {
+    display: inline-flex;
+  }
+
+  /* Denser lane rows so Position/Scale/Rotation/Opacity don't eat more
+     vertical space than this fixed-height timeline can spare on a phone. */
+  .timeline-lane {
+    min-height: 26px;
+  }
+
+  .timeline-ruler-row {
+    height: 18px;
+  }
 }

@@ -83,6 +83,26 @@ function applyAdvancedState() {
 }
 
 let lastPrecisionTarget = undefined; // the external container currently holding the precision groups, or null when they live inline
+let lastPlaybackTarget = undefined; // the external container currently holding playbackRow, or null when it lives in the timeline's own header
+
+/**
+ * Moves the WHOLE playback row (Play/Undo/Redo — see buildDom's
+ * playbackRow) either into `target` (a React-owned bar rendered directly
+ * above the timeline, mobile/tablet only — see App.jsx) or back into this
+ * timeline's own header (`target` is null/undefined, desktop's single-row
+ * layout). Reparents the exact same buttons/listeners rather than building
+ * a second copy, same pattern as relocatePrecisionFields above.
+ */
+function relocatePlaybackRow(target) {
+  if (target === lastPlaybackTarget) return;
+  lastPlaybackTarget = target;
+
+  if (target) {
+    target.appendChild(els.playbackRow);
+  } else if (els.header) {
+    els.header.insertBefore(els.playbackRow, els.header.firstChild);
+  }
+}
 
 /**
  * Moves every lane's precision-field group either into `target` (a React-
@@ -135,6 +155,20 @@ function buildDom(container, options) {
   const header = document.createElement('div');
   header.className = 'timeline-header';
 
+  // Split into two row groups — on desktop these sit side by side (one
+  // visual row, exactly like before); on mobile/tablet they stack, with
+  // playback controls in their own compact row directly above the busier
+  // controls row instead of everything overflowing/wrapping in one packed
+  // line. The stacking itself isn't CSS — relocatePlaybackRow() physically
+  // moves `playbackRow`'s DOM node out of this header into App.jsx's
+  // mobilePlaybackRowRef container on mobile/tablet (see its own doc
+  // comment and the isDesktop check in tick() below).
+  const playbackRow = document.createElement('div');
+  playbackRow.className = 'timeline-header-row timeline-header-row--playback';
+
+  const controlsRow = document.createElement('div');
+  controlsRow.className = 'timeline-header-row timeline-header-row--controls';
+
   // Play/Pause — the only playback trigger left in the app since the
   // floating preview-bar (play/seek/download) was removed in favor of this
   // timeline handling both scrubbing (the ruler/playhead below) and now
@@ -153,21 +187,7 @@ function buildDom(container, options) {
     if (video.paused) video.play().catch(() => {});
     else video.pause();
   });
-  header.appendChild(playBtn);
-
-  const videoChip = document.createElement('button');
-  videoChip.type = 'button';
-  videoChip.className = 'timeline-target-chip';
-  videoChip.id = 'timeline-video-chip';
-  videoChip.textContent = '🎬 Video';
-  videoChip.title = 'Select the video itself as a keyframe target';
-  videoChip.addEventListener('click', () => keyframeEngine.selectVideoTarget());
-  header.appendChild(videoChip);
-
-  const targetLabel = document.createElement('span');
-  targetLabel.className = 'timeline-target-label';
-  targetLabel.id = 'timeline-target-label';
-  header.appendChild(targetLabel);
+  playbackRow.appendChild(playBtn);
 
   // Undo/Redo — moved here (off the top nav) since they're history controls
   // for the same keyframe/style edits this timeline is the primary editing
@@ -183,7 +203,7 @@ function buildDom(container, options) {
   undoBtn.title = 'Undo (Ctrl+Z)';
   undoBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6" /><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" /></svg>';
   undoBtn.addEventListener('click', () => undo());
-  header.appendChild(undoBtn);
+  playbackRow.appendChild(undoBtn);
 
   const redoBtn = document.createElement('button');
   redoBtn.type = 'button';
@@ -192,11 +212,52 @@ function buildDom(container, options) {
   redoBtn.title = 'Redo (Ctrl+Y)';
   redoBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6" /><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7" /></svg>';
   redoBtn.addEventListener('click', () => redo());
-  header.appendChild(redoBtn);
+  playbackRow.appendChild(redoBtn);
 
+  header.appendChild(playbackRow);
+
+  // Only meaningful on desktop where both rows sit inline (separates the
+  // playback cluster from the target/keyframe cluster) — hidden by the same
+  // mobile media query that stacks the two rows, since a vertical divider
+  // between two stacked rows has nothing to visually separate.
   const historyDivider = document.createElement('div');
   historyDivider.className = 'timeline-header-divider';
   header.appendChild(historyDivider);
+
+  const videoChip = document.createElement('button');
+  videoChip.type = 'button';
+  videoChip.className = 'timeline-target-chip';
+  videoChip.id = 'timeline-video-chip';
+  videoChip.textContent = '🎬 Video';
+  videoChip.title = 'Select the video itself as a keyframe target';
+  videoChip.addEventListener('click', () => keyframeEngine.selectVideoTarget());
+  controlsRow.appendChild(videoChip);
+
+  const targetLabel = document.createElement('span');
+  targetLabel.className = 'timeline-target-label';
+  targetLabel.id = 'timeline-target-label';
+  controlsRow.appendChild(targetLabel);
+
+  // Mobile/tablet-only stand-in for targetLabel above (see style.css: one or
+  // the other is display:none depending on viewport) — the full sentence
+  // ("Select a caption/word or the Video chip to begin", or a long target
+  // label) doesn't fit next to Keyframe/Advanced/time on a phone width, so
+  // it collapses into this small info icon; click or hover reveals the same
+  // text in a popover instead of it just being cut off or forcing wrap.
+  const targetInfo = document.createElement('div');
+  targetInfo.className = 'timeline-target-info';
+  const targetInfoBtn = document.createElement('button');
+  targetInfoBtn.type = 'button';
+  targetInfoBtn.className = 'timeline-target-info-btn';
+  targetInfoBtn.setAttribute('aria-label', 'Current selection');
+  targetInfoBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" /><line x1="12" y1="11" x2="12" y2="16" /><circle cx="12" cy="7.5" r="1.3" fill="currentColor" stroke="none" /></svg>';
+  const targetTooltip = document.createElement('div');
+  targetTooltip.className = 'timeline-target-tooltip';
+  targetTooltip.id = 'timeline-target-tooltip';
+  targetInfoBtn.addEventListener('click', () => targetInfo.classList.toggle('open'));
+  targetInfo.appendChild(targetInfoBtn);
+  targetInfo.appendChild(targetTooltip);
+  controlsRow.appendChild(targetInfo);
 
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
@@ -204,7 +265,7 @@ function buildDom(container, options) {
   addBtn.id = 'timeline-add-keyframe-btn';
   addBtn.innerHTML = '◆ Keyframe';
   addBtn.addEventListener('click', () => keyframeEngine.addOrUpdateKeyframeAtPlayhead());
-  header.appendChild(addBtn);
+  controlsRow.appendChild(addBtn);
 
   // Precision (X/Y/scale%/rotation°) numeric fields: shown inline (hidden by
   // default) on mobile/tablet, the same as always — the primary way to set
@@ -229,12 +290,14 @@ function buildDom(container, options) {
     advancedExpanded = !advancedExpanded;
     applyAdvancedState();
   });
-  header.appendChild(advancedBtn);
+  controlsRow.appendChild(advancedBtn);
 
   const timeReadout = document.createElement('span');
   timeReadout.className = 'timeline-time-readout';
   timeReadout.id = 'timeline-time-readout';
-  header.appendChild(timeReadout);
+  controlsRow.appendChild(timeReadout);
+
+  header.appendChild(controlsRow);
 
   container.appendChild(header);
 
@@ -334,7 +397,7 @@ function buildDom(container, options) {
 
   container.appendChild(scroll);
 
-  return { header, playBtn, undoBtn, redoBtn, videoChip, targetLabel, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead };
+  return { header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead };
 }
 
 function timeToX(time, trackWidth, duration) {
@@ -554,6 +617,13 @@ function tick() {
     els.advancedBtn.classList.toggle('active', isDesktop ? advancedOpen : advancedExpanded);
   }
 
+  // Play/Undo/Redo sit in a separate bar directly above the timeline on
+  // mobile/tablet instead of inside this header (too many controls to fit
+  // in one row at that width) — see relocatePlaybackRow()'s own doc
+  // comment. Desktop keeps them inline in the header, unchanged.
+  const playbackContainer = isDesktop ? null : (activeOptions?.getPlaybackRowContainer?.() ?? null);
+  relocatePlaybackRow(playbackContainer);
+
   const target = keyframeEngine.getActiveTarget();
   const targetKind = target?.kind ?? null;
   if (targetKind !== lastTargetKind) {
@@ -563,7 +633,9 @@ function tick() {
   }
 
   if (els.videoChip) els.videoChip.classList.toggle('active', keyframeEngine.isVideoTargetSelected());
-  if (els.targetLabel) els.targetLabel.textContent = target ? target.label : 'Select a caption/word or the Video chip to begin';
+  const targetText = target ? target.label : 'Select a caption/word or the Video chip to begin';
+  if (els.targetLabel) els.targetLabel.textContent = targetText;
+  if (els.targetTooltip) els.targetTooltip.textContent = targetText;
 
   const hasTarget = !!target;
   if (els.addBtn) {
@@ -590,6 +662,7 @@ export function initTimelinePanel(container, options = {}) {
   els = buildDom(container, options);
   advancedExpanded = false;
   lastPrecisionTarget = undefined;
+  lastPlaybackTarget = undefined;
   applyAdvancedState();
 
   const scrub = (clientX) => {
@@ -615,10 +688,21 @@ export function initTimelinePanel(container, options = {}) {
     if (e.target === els.scroll || e.target.classList?.contains('timeline-lane-track')) selectedMarkerTime = null;
   });
 
+  // Dismiss the mobile/tablet target-info popover (see buildDom's
+  // targetInfo/targetInfoBtn) on any tap outside it, matching every other
+  // dismissible surface in the app — without this it only closed via a
+  // second tap on its own icon.
+  const targetInfoEl = container.querySelector('.timeline-target-info');
+  const dismissTargetInfoOnOutsideClick = (e) => {
+    if (targetInfoEl && !targetInfoEl.contains(e.target)) targetInfoEl.classList.remove('open');
+  };
+  document.addEventListener('pointerdown', dismissTargetInfoOnOutsideClick);
+
   if (rafId) cancelAnimationFrame(rafId);
   tick();
 
   return () => {
     if (rafId) cancelAnimationFrame(rafId);
+    document.removeEventListener('pointerdown', dismissTargetInfoOnOutsideClick);
   };
 }

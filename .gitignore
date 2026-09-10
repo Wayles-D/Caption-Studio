@@ -40,3 +40,9 @@ Thumbs.db
 
 # Private internal notes (debugging journals, incident writeups) — never pushed
 /private-notes/
+
+# Playwright test run output
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

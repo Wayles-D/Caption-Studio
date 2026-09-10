@@ -8,12 +8,15 @@
  * `containerRef` is optional and lets App.jsx also treat this panel's DOM
  * node as an "outside click" exclusion zone for the desktop Advanced side
  * panel (see useClickOutside) — the Advanced button that opens/closes it
- * lives inside here. The four callback props are forwarded straight into
- * initTimelinePanel's options and let that DOM-driven module route its
- * "Advanced" button to React's desktop side panel instead of (or alongside)
- * its own inline mobile/tablet toggle — see timelinePanel.js's own doc
- * comments on relocatePrecisionFields for why this is a relocation of the
- * same fields rather than a second copy of them.
+ * lives inside here. The callback props are forwarded straight into
+ * initTimelinePanel's options: the Advanced ones let that DOM-driven module
+ * route its "Advanced" button to React's desktop side panel instead of its
+ * own inline mobile/tablet toggle (see timelinePanel.js's own doc comments
+ * on relocatePrecisionFields for why this is a relocation of the same
+ * fields rather than a second copy of them); getPlaybackRowContainer does
+ * the same thing for the Play/Undo/Redo row on mobile/tablet, moving it
+ * into App.jsx's own bar rendered directly above this panel instead of
+ * leaving it inside this component's header.
  */
 import { useEffect, useRef } from 'react';
 import { initTimelinePanel } from '../js/components/timelinePanel.js';
@@ -23,7 +26,8 @@ export function TimelinePanel({
   isDesktopGetter,
   getAdvancedContainer,
   isAdvancedOpenGetter,
-  onAdvancedToggle
+  onAdvancedToggle,
+  getPlaybackRowContainer
 }) {
   const internalContainerRef = useRef(null);
   const containerRef = externalContainerRef || internalContainerRef;
@@ -34,7 +38,8 @@ export function TimelinePanel({
       isDesktopGetter,
       getAdvancedContainer,
       isAdvancedOpenGetter,
-      onAdvancedToggle
+      onAdvancedToggle,
+      getPlaybackRowContainer
     });
     // Mount-once, matching PreviewStage.jsx's initPreviewWorkspace() pattern
     // (a live drag/scrub rAF loop fighting React reconciliation has no

@@ -132,6 +132,12 @@ export function App() {
   const desktopSidePanelElRef = useRef(null);
   const advancedPanelBodyRef = useRef(null);
   const timelinePanelRef = useRef(null);
+  // Play/Undo/Redo relocate here (see timelinePanel.js's
+  // relocatePlaybackRow) on mobile/tablet: a thin bar sitting directly
+  // above the timeline's own bordered box, rather than inside its header
+  // where they'd be too many controls to fit on a phone width. Desktop
+  // never uses this — those controls stay put in the timeline header there.
+  const mobilePlaybackRowRef = useRef(null);
 
   // timelinePanel.js's Advanced button is DOM-driven (not React) and keeps
   // its own long-lived rAF loop running rather than re-subscribing on every
@@ -160,6 +166,7 @@ export function App() {
   const getAdvancedContainer = useCallback(() => advancedPanelBodyRef.current, []);
   const isAdvancedOpenGetter = useCallback(() => desktopSidePanelRef.current === 'advanced', []);
   const onAdvancedToggle = useCallback(() => toggleDesktopSidePanel('advanced'), [toggleDesktopSidePanel]);
+  const getPlaybackRowContainer = useCallback(() => mobilePlaybackRowRef.current, []);
 
   // Crossing the desktop breakpoint while one of these is open moves it to
   // wherever that tool lives on the OTHER side of the breakpoint instead of
@@ -442,10 +449,22 @@ export function App() {
           />
         </main>
 
+        {/* Play/Undo/Redo land here on mobile/tablet — a thin bar sitting
+            directly ON the timeline (immediately above its bordered box),
+            not inside it. Empty on desktop; timelinePanel.js's
+            relocatePlaybackRow leaves those controls in its own header
+            there instead (see getPlaybackRowContainer below) and this div
+            simply renders nothing. */}
+        <div
+          ref={mobilePlaybackRowRef}
+          className="hidden max-lg:flex items-center px-3 py-1.5 bg-[var(--bg-toolbar)] border-t border-[var(--border-color)] empty:hidden"
+        />
+
         <TimelinePanel
           containerRef={timelinePanelRef}
           isDesktopGetter={isDesktopGetter}
           getAdvancedContainer={getAdvancedContainer}
+          getPlaybackRowContainer={getPlaybackRowContainer}
           isAdvancedOpenGetter={isAdvancedOpenGetter}
           onAdvancedToggle={onAdvancedToggle}
         />
