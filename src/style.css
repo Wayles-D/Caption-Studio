@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Caption Studio — Design Tokens, Global Reset, and Protected Canvas/Video
+   BHYND — Design Tokens, Global Reset, and Protected Canvas/Video
    Rendering CSS (migration plan's Stage 5).
 
    Everything that used to be here for toolbar/sidebar/inspector/button/
@@ -56,6 +56,15 @@
   --status: #00F6AC;
   --status-wash-bg: rgba(0, 246, 172, 0.12);
 
+  /* The unified keyframe lane's FIRST and LAST marker (see
+     timelinePanel.js's buildMarker) get distinct colors so a sequence's
+     start and end are identifiable at a glance instead of every ◆ reading
+     as an identical mint diamond — --accent-color IS the start color
+     already (no separate token needed there); this is only the end/stop
+     one. Amber reads as "the other end of a range" without implying an
+     error the way red would. */
+  --keyframe-end-color: #FFB454;
+
   --text-primary: #FFFFFF;
   --text-secondary: #9A9A9A;
   --text-muted: #5C5C5C;
@@ -101,6 +110,10 @@ body.light-theme {
   --status: #00CE8C;
   --status-wash-bg: rgba(0, 206, 140, 0.12);
 
+  /* See the dark theme's own comment on this token — same amber, darkened
+     slightly so it keeps enough contrast against light-theme surfaces. */
+  --keyframe-end-color: #C97A0A;
+
   --text-primary: #0F172A;
   --text-secondary: #475569;
   --text-muted: #94A3B8;
@@ -141,6 +154,27 @@ body.light-theme {
 
   body {
     font-size: 14px;
+  }
+
+  /* Scrolling stays fully functional everywhere (`overflow` is untouched on
+     every element) — only the native scrollbar's own visual track/thumb is
+     hidden, cross-browser: `scrollbar-width` for Firefox, `-ms-overflow-
+     style` for legacy Edge/IE, and `::-webkit-scrollbar` for every Chromium/
+     WebKit browser (Chrome, Edge, Safari). Applied globally with a `*`
+     selector rather than per-component so every scrollable area in the app
+     — the bottom-sheet/side-panel content, the timeline's lane list,
+     anything added later — is covered automatically instead of needing this
+     repeated per element (see App.jsx's bottom toolbar nav, which used to
+     carry an inline one-off version of just this). */
+  * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  *::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
 
   /* Below this breakpoint the workspace collapses to a single stacked
@@ -270,12 +304,31 @@ body.light-theme {
 /* On-canvas caption transform overlay (editor-only — never rendered into the
    exported video, see src/js/components/canvasTransform.js). Sits above the
    graphics canvas (z-index 10) so its hit-test layer and click-to-select
-   catch pointer events the canvas itself can't (it's pointer-events:none). */
+   catch pointer events the canvas itself can't (it's pointer-events:none).
+   Reused as-is for the VIDEO target's own overlay (#video-transform-overlay
+   in PreviewStage.jsx) — same class, same fixed-positioning rationale below.
+
+   `position: fixed`, NOT `absolute` — deliberate, and the whole point of this
+   rule. .phone-frame has `overflow: hidden` (needed so the actual video/
+   caption content correctly clips at the frame's rounded edge); an
+   `absolute`-positioned descendant of it is clipped by that too, which used
+   to make a caption/word's own selection/resize/rotate handles disappear
+   the moment it was dragged near or past an edge — the object is legitimately
+   allowed to extend outside the frame, but its EDITOR CONTROLS have no
+   reason to. `position: fixed` escapes an ancestor's `overflow: hidden`
+   entirely UNLESS that ancestor establishes a new containing block via
+   `transform`/`filter`/`perspective`/`contain`/`will-change` — confirmed
+   .phone-frame and every ancestor up to the viewport use none of those, so
+   this is safe. left/top/width/height are no longer meaningful as a static
+   0/0/100%/100% (percentages on a `fixed` element resolve against the
+   VIEWPORT, not .phone-frame) — they're instead set on every relevant
+   update by canvasTransform.js's syncOverlayToContentRect /
+   videoCanvasControls.js's equivalent, from the exact same
+   getCanvasContentRect() (src/js/utils/canvasGeometry.js) every pointer
+   conversion already uses, so the overlay always exactly overlays the real
+   content rect regardless of where its handles currently extend to. */
 .caption-transform-overlay {
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%;
-  height: 100%;
+  position: fixed;
   z-index: 20;
   pointer-events: none;
   display: none;
@@ -298,7 +351,7 @@ body.light-theme {
   position: absolute;
   pointer-events: auto;
   cursor: move;
-  border: 1.5px solid #6366F1;
+  border: 1.5px solid var(--accent-color);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
   touch-action: none;
 }
@@ -310,7 +363,7 @@ body.light-theme {
   margin: -7px;
   border-radius: 50%;
   background: #ffffff;
-  border: 2px solid #6366F1;
+  border: 2px solid var(--accent-color);
   pointer-events: auto;
   touch-action: none;
 }
@@ -331,7 +384,7 @@ body.light-theme {
   top: -64px;
   width: 1.5px;
   height: 64px;
-  background: #6366F1;
+  background: var(--accent-color);
   pointer-events: none;
 }
 
@@ -365,11 +418,37 @@ body.light-theme {
   transform: translateX(-50%);
 }
 
+/* Flips the toolbar/rotate-handle/connecting-line to the BOTTOM of the box
+   instead of the top — applied (via canvasTransform.js's positionBoxElement)
+   whenever the box's top edge is too close to the app's own header bar for
+   the default above-the-box placement to stay reachable. Confirmed via user
+   report + screenshot: a caption dragged near the top of the frame pushed
+   these controls up behind the always-on-top header (z-index 100), and
+   clamping them to merely "within the viewport" (see
+   clampRotateHandleToViewport) still left them sitting UNDER the header,
+   not actually visible/clickable. Flipping to the opposite side keeps them
+   in their natural position relative to the box (immediately adjacent, not
+   an arbitrary clamped spot) whenever there's room on that side instead. */
+.caption-transform-box.controls-below .caption-transform-toolbar {
+  bottom: auto;
+  top: 100%;
+  transform: translate(-50%, 8px);
+}
+
+.caption-transform-box.controls-below .caption-transform-rotate-line {
+  top: 100%;
+  bottom: auto;
+}
+
+.caption-transform-box.controls-below .caption-transform-handle.rotate {
+  top: calc(100% + 64px);
+}
+
 .caption-transform-handle.rotate {
   top: -64px;
   left: 50%;
   cursor: grab;
-  background: #6366F1;
+  background: var(--accent-color);
 }
 
 /* Disambiguates the Animation section's own scope buttons ("This Keyword"/
@@ -400,8 +479,8 @@ body.light-theme {
   justify-content: center;
   gap: 6px;
   padding: 4px 6px;
-  background: rgba(17, 17, 24, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   pointer-events: auto;
   /* Wraps onto a second row instead of spilling past the phone-frame's own
@@ -409,7 +488,7 @@ body.light-theme {
      wider than the original 2-button caption toolbar this was sized for. */
   max-width: 300px;
   font-size: 11px;
-  color: #E5E7EB;
+  color: var(--text-primary);
 }
 
 .caption-transform-scope-btn {
@@ -417,30 +496,30 @@ body.light-theme {
   border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
-  color: #9CA3AF;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 11px;
   white-space: nowrap;
 }
 
 .caption-transform-scope-btn.active {
-  background: #6366F1;
-  color: #ffffff;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
 }
 
 .caption-transform-reset-btn {
   padding: 3px 8px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--border-color-hover);
   background: transparent;
-  color: #E5E7EB;
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 11px;
 }
 
 .caption-transform-keyword-multiselect-label {
   padding: 3px 6px;
-  color: #9CA3AF;
+  color: var(--text-secondary);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -448,9 +527,9 @@ body.light-theme {
 .caption-transform-keyword-animation-select {
   padding: 3px 6px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.06);
-  color: #E5E7EB;
+  border: 1px solid var(--border-color-hover);
+  background: var(--bg-input);
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 11px;
 }
@@ -839,6 +918,28 @@ body.light-theme {
   border-radius: 4px;
 }
 
+/* The unified keyframe lane (see timelinePanel.js's buildDom) is the ONLY
+   row with a visible/interactive track now — one ◆ per keyframe entry,
+   whatever properties it holds, instead of four separate per-property
+   tracks. The Position/Scale/Rotation/Opacity rows below it still exist
+   for VALUE EDITING (the Advanced numeric fields) but no longer show a
+   track of their own. */
+.timeline-keyframe-lane {
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+}
+
+.timeline-keyframe-lane .timeline-lane-label {
+  color: var(--text-secondary);
+  width: auto;
+  margin-right: 4px;
+}
+
+.timeline-lane:not(.timeline-keyframe-lane) .timeline-lane-track {
+  display: none;
+}
+
 .timeline-marker {
   position: absolute;
   top: 50%;
@@ -855,6 +956,21 @@ body.light-theme {
 
 .timeline-marker.filled {
   background: var(--accent-color);
+}
+
+/* The LAST (latest-time) keyframe in a sequence of 2+ — see
+   relocatePrecisionFields's sibling, buildMarker()'s isEnd param in
+   timelinePanel.js. The first/earliest one keeps the plain accent color
+   (already visually "the start" by virtue of being the default marker
+   color everywhere else in the app); only the end needs a second color so
+   the two are tellable apart at a glance instead of every ◆ on the lane
+   reading as an identical mint diamond. */
+.timeline-marker.marker-end {
+  border-color: var(--keyframe-end-color);
+}
+
+.timeline-marker.marker-end.filled {
+  background: var(--keyframe-end-color);
 }
 
 .timeline-marker.selected {

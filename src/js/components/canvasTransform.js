@@ -18,7 +18,7 @@
  * mode) with the just-measured bounding box (shared/captionGraphics.js's
  * measureSentenceFrame/measureRollingStackFrame) — the box IS the coordinate
  * conversion: it's reported in the canvas's own backing-store pixel space,
- * and box.pxScale (== canvasWidth/cssPixelWidth, the same ratio
+ * and box.cssPxScale (== canvasWidth/cssPixelWidth, the same ratio
  * resolveGeometry computes) converts it to the phone-frame's on-screen CSS
  * px this module positions its DOM handles in. No separate coordinate system
  * is invented here.
@@ -56,6 +56,19 @@ import { appState, updateState } from '../state.js';
 import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
 import { setWordKeyword } from './transcriptEditorState.js';
 import { deselectVideoTarget } from './videoTransform.js';
+import { getCanvasContentRect } from '../utils/canvasGeometry.js';
+import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../../../shared/captionGraphics.js';
+
+/**
+ * The graphics canvas's own backing-store width — the pixel space
+ * currentBox/word rects are reported in (see preview.js's
+ * prepareGraphicsCanvas, which sizes it, and measureSentenceFrame, which
+ * measures against it). Word position offsets convert through this on their
+ * way in/out of the authored 330-box unit they're stored in.
+ */
+function getCanvasBackingWidth() {
+  return document.getElementById('captions-canvas')?.width || 0;
+}
 import {
   PHRASE_FIELD_TO_PROPERTY,
   WORD_FIELD_TO_PROPERTY,
@@ -74,16 +87,21 @@ function getPlayheadTime() {
 }
 
 /** Thin wrapper supplying the current playhead time to the shared, target-agnostic auto-keying primitive (see shared/keyframes.js's routeFieldsThroughKeyframes — also used, independently, by src/js/components/videoTransform.js for the Video target). */
-function routeFieldsThroughKeyframes(existing, fields, fieldToProperty) {
-  return routeFieldsThroughKeyframesAtTime(existing, fields, fieldToProperty, getPlayheadTime());
+function routeFieldsThroughKeyframes(existing, fields, fieldToProperty, readCurrentValue) {
+  return routeFieldsThroughKeyframesAtTime(existing, fields, fieldToProperty, getPlayheadTime(), readCurrentValue);
 }
 
-let overlayEl, hitAreaEl, boxEl, rotateHandleEl, scopeThisBtn, scopeAllBtn, resetBtn, rotationLabelEl;
+let overlayEl, hitAreaEl, boxEl, rotateHandleEl, toolbarEl, scopeThisBtn, scopeAllBtn, resetBtn, rotationLabelEl;
 let scopeThisKeywordBtn, scopeAllKeywordsBtn, scopeSelectKeywordsBtn, keywordMultiSelectDoneBtn, keywordMultiSelectLabelEl;
 let animationTypeSelect, animScopeThisBtn, animScopeSameTypeBtn, animScopeAllWordsBtn, animScopeThisCaptionBtn, animScopeAllCaptionsBtn, animationSectionLabelEl;
 let keywordToggleBtn, groupStartBtn, groupConfirmBtn, groupMultiSelectLabelEl;
 let selected = false;
-let currentBox = null; // { x, y, width, height, centerX, centerY, rotationDeg, pxScale, phrase, mode, words?, chunks? } in canvas backing-store px
+// { x, y, width, height, centerX, centerY, rotationDeg, cssPxScale, phrase, mode, words?, chunks? }
+// in canvas backing-store px. NOTE cssPxScale (canvas px per ON-SCREEN CSS
+// px, for DOM handle placement) is NOT the renderer's own authored pxScale
+// (canvas px per 330-box px) — see shared/captionGraphics.js's
+// resolveGeometry, which returns both under deliberately distinct names.
+let currentBox = null;
 
 // The individual word currently selected within currentBox, or null when the
 // selection is at the whole-caption/group level. Independent of `selected`:
@@ -176,11 +194,35 @@ let drag = null; // { kind: 'move'|'resize'|'rotate', pointerId, phrase, wordInd
  *   - 'this' → the phrase's own override if it has one, else the global
  *     field (its normal fallback).
  */
+/**
+ * Resolves `field`'s CURRENT effective value on `override` — its live
+ * keyframe-interpolated value at the current playhead if the field's mapped
+ * property has any keyframes (see shared/keyframes.js's
+ * evaluatePropertyAtTime), otherwise the plain static field, otherwise
+ * `fallback`. Every animatable field now ALWAYS auto-keys on write (see
+ * routeFieldsThroughKeyframes's doc comment) — the plain static field is
+ * never populated for one of KEYFRAME_PROPERTIES once it's been touched
+ * even once, so a caller that only checked the static field would silently
+ * see a stale/default value the instant an edit auto-created that
+ * property's first keyframe. This is exactly the read-side counterpart of
+ * shared/captionTransform.js's resolvePhraseParams/resolveWordOverrideAtTime
+ * (the render path), just against a raw field name instead of a resolved
+ * style-params object.
+ */
+function resolveEffectiveField(override, field, fieldToProperty, fallback) {
+  const property = fieldToProperty[field];
+  if (property) {
+    const kfValue = evaluatePropertyAtTime(override?.keyframes, property, getPlayheadTime());
+    if (kfValue !== undefined) return kfValue;
+  }
+  return override && override[field] != null ? override[field] : fallback;
+}
+
 function effectiveValue(phrase, field, globalValue) {
   if (appState.transformApplyScope !== 'this' || !phrase) return globalValue;
   const key = getPhraseTransformKey(phrase);
   const override = appState.captionTransforms[key];
-  return override && override[field] != null ? override[field] : globalValue;
+  return resolveEffectiveField(override, field, PHRASE_FIELD_TO_PROPERTY, globalValue);
 }
 
 /**
@@ -192,7 +234,7 @@ function effectiveValue(phrase, field, globalValue) {
 function effectiveWordValue(wordIndex, field, fallback) {
   if (wordIndex == null) return fallback;
   const override = appState.captionTransforms[getWordTransformKey(wordIndex)];
-  return override && override[field] != null ? override[field] : fallback;
+  return resolveEffectiveField(override, field, WORD_FIELD_TO_PROPERTY, fallback);
 }
 
 /**
@@ -215,11 +257,23 @@ function getWordCandidates(box) {
  * are reported in the SAME pre-rotation local space as the block's own x/y
  * (see measureSentenceFrame/measureRollingStackFrame) — so the point is first
  * un-rotated around the block's center exactly like pointInRotatedBox does
- * for the whole box, then compared against each word's own rect. A word's
- * OWN additional rotation/offset override (if it already has one) is
- * intentionally not un-done here — hit-testing a word that's already been
- * transformed uses its pre-transform footprint, a deliberate simplification
- * since a fresh click always starts from an untransformed word.
+ * for the whole box.
+ *
+ * A word's OWN additional offset/rotation/scale override (wordBoxFor — the
+ * SAME resolved geometry the selection box already follows once a word IS
+ * selected, and the SAME adjustment shared/captionGraphics.js's paint step
+ * applies via its own extra ctx.translate/rotate/scale) is then applied
+ * before testing, so hit-testing agrees with both the rendered pixels and
+ * the selection box instead of a THIRD, independent "wherever this word
+ * used to be" answer. An earlier revision intentionally skipped this
+ * (hit-testing a transformed word against its pre-transform footprint,
+ * reasoning that "a fresh click always starts from an untransformed word")
+ * — true only the very first time a word is ever moved. Confirmed as a real,
+ * user-visible bug once a word already has an override: clicking its new,
+ * visible position missed every time (nothing there, hit-test-wise); only
+ * clicking its stale original footprint selected it, at which point the
+ * selection box (correctly using wordBoxFor) would jump to the real
+ * position — a visible desync between what's clickable and what's rendered.
  *
  * Horizontal tolerance is clamped to at most half the gap to each
  * IMMEDIATE horizontal neighbor (words already sorted left-to-right within
@@ -230,7 +284,9 @@ function getWordCandidates(box) {
  * CAPTION as a whole rather than an individual word (see this file's top
  * doc comment on selection target vs. edit scope). Vertical tolerance
  * doesn't need this treatment since word rects don't tile vertically within
- * one line.
+ * one line. Gaps are measured between words' RAW (pre-override) layout
+ * rects — adjacent-word spacing is a property of the text layout, not of
+ * whichever one word happens to have been dragged elsewhere.
  */
 function findWordAtPoint(px, py, box) {
   const candidates = getWordCandidates(box);
@@ -255,8 +311,16 @@ function findWordAtPoint(px, py, box) {
     // point that reliably resolves to "the caption, not a word".
     const padLeft = Math.min(MAX_PAD, prevGap * 0.35);
     const padRight = Math.min(MAX_PAD, nextGap * 0.35);
-    return localX >= w.x - padLeft && localX <= w.x + w.width + padRight &&
-      localY >= w.y - MAX_PAD && localY <= w.y + w.height + MAX_PAD;
+
+    const adjusted = wordBoxFor(w, box);
+    const ownRad = (-((adjusted.rotationDeg || 0) - (box.rotationDeg || 0)) * Math.PI) / 180;
+    const adx = localX - adjusted.centerX;
+    const ady = localY - adjusted.centerY;
+    const wordLocalX = adjusted.centerX + (adx * Math.cos(ownRad) - ady * Math.sin(ownRad));
+    const wordLocalY = adjusted.centerY + (adx * Math.sin(ownRad) + ady * Math.cos(ownRad));
+
+    return wordLocalX >= adjusted.x - padLeft && wordLocalX <= adjusted.x + adjusted.width + padRight &&
+      wordLocalY >= adjusted.y - MAX_PAD && wordLocalY <= adjusted.y + adjusted.height + MAX_PAD;
   }) || null;
 }
 
@@ -272,8 +336,13 @@ function findWordAtPoint(px, py, box) {
  */
 function wordBoxFor(word, box) {
   const scale = effectiveWordValue(word.wordIndex, 'fontScale', 1) || 1;
-  const offsetX = effectiveWordValue(word.wordIndex, 'offsetXPx', 0) || 0;
-  const offsetY = effectiveWordValue(word.wordIndex, 'offsetYPx', 0) || 0;
+  // Stored offsets are in the authored 330-box unit (see
+  // shared/captionGraphics.js's wordOffsetToCanvasPx) — converted here into
+  // the canvas backing-store px space word.x/word.y live in, so the
+  // selection box lands exactly where the renderer paints the glyph.
+  const canvasW = getCanvasBackingWidth();
+  const offsetX = wordOffsetToCanvasPx(effectiveWordValue(word.wordIndex, 'offsetXPx', 0) || 0, canvasW);
+  const offsetY = wordOffsetToCanvasPx(effectiveWordValue(word.wordIndex, 'offsetYPx', 0) || 0, canvasW);
   const ownRotation = effectiveWordValue(word.wordIndex, 'rotationDeg', 0) || 0;
 
   const centerX = word.x + word.width / 2 + offsetX;
@@ -289,7 +358,7 @@ function wordBoxFor(word, box) {
     centerX,
     centerY,
     rotationDeg: (box.rotationDeg || 0) + ownRotation,
-    pxScale: box.pxScale,
+    cssPxScale: box.cssPxScale,
     wordIndex: word.wordIndex
   };
 }
@@ -382,7 +451,7 @@ function computeGroupBox(groupId) {
     centerX: (minX + maxX) / 2,
     centerY: (minY + maxY) / 2,
     rotationDeg: currentBox.rotationDeg || 0,
-    pxScale: currentBox.pxScale,
+    cssPxScale: currentBox.cssPxScale,
     phrase: currentBox.phrase,
     groupId
   };
@@ -412,12 +481,21 @@ function computeGroupBox(groupId) {
 function writePhraseFields(phrase, fields, { recordHistory }) {
   const key = getPhraseTransformKey(phrase);
   const existing = appState.captionTransforms[key] || {};
-  // Auto-key: any field here that already has an ACTIVE keyframe track
-  // (see shared/keyframes.js) updates that track at the current playhead
-  // instead of overwriting the plain static value — see
-  // routeFieldsThroughKeyframes's own doc comment. A phrase with no
-  // keyframes yet writes exactly as before.
-  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, fields, PHRASE_FIELD_TO_PROPERTY);
+  // Action-driven auto-keying (see routeFieldsThroughKeyframes's own doc
+  // comment): ANY animatable field written here — the very first time or
+  // the hundredth — creates/updates a keyframe entry at the current
+  // playhead instead of overwriting a plain static value. readCurrentValue
+  // supplies whatever this specific write doesn't itself touch (e.g.
+  // rotating leaves position/scale/opacity to resolve their own current
+  // value) so the resulting entry is always a full, coherent snapshot.
+  const readCurrentValue = (property) => {
+    const kfValue = evaluatePropertyAtTime(existing.keyframes, property, getPlayheadTime());
+    if (kfValue !== undefined) return kfValue;
+    const field = PHRASE_STATIC_FIELD_BY_PROPERTY[property];
+    const staticValue = existing[field] != null ? existing[field] : KEYFRAME_PROPERTY_DEFAULTS[property];
+    return effectiveValue(phrase, field, staticValue);
+  };
+  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, fields, PHRASE_FIELD_TO_PROPERTY, readCurrentValue);
   const nextEntry = { ...existing, ...remainingFields };
   if (nextKeyframes) nextEntry.keyframes = nextKeyframes;
   const nextMap = { ...appState.captionTransforms, [key]: nextEntry };
@@ -479,8 +557,14 @@ function applyWordTransformFields(wordIndex, fields, { recordHistory }) {
   if (wordIndex == null) return;
   const key = getWordTransformKey(wordIndex);
   const existing = appState.captionTransforms[key] || {};
-  // Auto-key — see the matching comment in applyTransformFields.
-  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, fields, WORD_FIELD_TO_PROPERTY);
+  // Action-driven auto-keying, full-snapshot — see writePhraseFields's own
+  // (matching) comment.
+  const readCurrentValue = (property) => {
+    const kfValue = evaluatePropertyAtTime(existing.keyframes, property, getPlayheadTime());
+    if (kfValue !== undefined) return kfValue;
+    return effectiveWordValue(wordIndex, WORD_STATIC_FIELD_BY_PROPERTY[property], KEYFRAME_PROPERTY_DEFAULTS[property]);
+  };
+  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, fields, WORD_FIELD_TO_PROPERTY, readCurrentValue);
   const nextEntry = { ...existing, ...remainingFields };
   if (nextKeyframes) nextEntry.keyframes = nextKeyframes;
   const nextMap = { ...appState.captionTransforms, [key]: nextEntry };
@@ -704,7 +788,7 @@ function renderKeywordMultiSelectMarkers() {
     const word = candidates.find((w) => w.wordIndex === idx);
     if (!word) return;
     const box = wordBoxFor(word, currentBox);
-    const scale = box.pxScale || 1;
+    const scale = box.cssPxScale || 1;
     const marker = document.createElement('div');
     marker.className = 'caption-transform-keyword-marker';
     marker.style.left = `${box.x / scale}px`;
@@ -737,7 +821,7 @@ function renderGroupMultiSelectMarkers() {
     const word = candidates.find((w) => w.wordIndex === idx);
     if (!word) return;
     const box = wordBoxFor(word, currentBox);
-    const scale = box.pxScale || 1;
+    const scale = box.cssPxScale || 1;
     const marker = document.createElement('div');
     marker.className = 'caption-transform-group-marker';
     marker.style.left = `${box.x / scale}px`;
@@ -840,10 +924,6 @@ function pointInRotatedBox(px, py, box) {
   return Math.abs(localX) <= box.width / 2 + 4 && Math.abs(localY) <= box.height / 2 + 4;
 }
 
-function getPhoneFrame() {
-  return document.querySelector('.phone-frame');
-}
-
 // Extra breathing room (CSS px, converted to the box's own backing-store px
 // via pxScale) drawn around the whole-caption/group selection box only — a
 // purely visual/interaction adjustment so the border and resize/rotate
@@ -855,13 +935,51 @@ function getPhoneFrame() {
 const CAPTION_SELECTION_PADDING_CSS_PX = 16;
 
 function inflateBox(box, paddingCssPx) {
-  const pad = paddingCssPx * (box.pxScale || 1);
+  const pad = paddingCssPx * (box.cssPxScale || 1);
   return {
     ...box,
     x: box.x - pad,
     y: box.y - pad,
     width: box.width + pad * 2,
     height: box.height + pad * 2
+  };
+}
+
+// Smallest selection box (CSS px) that still leaves somewhere to GRAB. The
+// corner resize handles are 14px dots pulled half-outward (margin:-7px), so
+// each one covers ~7px inside every corner; a box smaller than roughly
+// 30x30 is therefore entirely covered by its own handles and every drag
+// lands on a resize instead of a move.
+//
+// This became reachable once the preview started rendering at true export
+// scale (see shared/captionGraphics.js's resolveGeometry): a 14px-authored
+// caption in a phone-frame displayed at ~168px is only ~15x9 CSS px on
+// screen. Confirmed by a real drag test — the gesture produced scale:4 with
+// zero position change, i.e. a resize, because the handles swallowed the
+// whole word.
+const MIN_GRAB_BOX_CSS_PX = { width: 34, height: 30 };
+
+/**
+ * Grows a box symmetrically about its own center until it's at least
+ * MIN_GRAB_BOX_CSS_PX in each axis. Symmetric about the SAME center on
+ * purpose: every gesture's math is center-relative (move uses a pointer
+ * delta, resize uses distance-from-center, rotate uses angle-from-center),
+ * so this changes only what's drawn and what's clickable, never what a
+ * drag computes — the same property inflateBox above already relies on.
+ */
+function ensureMinimumGrabBox(box) {
+  const scale = box.cssPxScale || 1;
+  const minW = MIN_GRAB_BOX_CSS_PX.width * scale;
+  const minH = MIN_GRAB_BOX_CSS_PX.height * scale;
+  const padX = Math.max(0, (minW - box.width) / 2);
+  const padY = Math.max(0, (minH - box.height) / 2);
+  if (!padX && !padY) return box;
+  return {
+    ...box,
+    x: box.x - padX,
+    y: box.y - padY,
+    width: box.width + padX * 2,
+    height: box.height + padY * 2
   };
 }
 
@@ -879,19 +997,72 @@ function getDisplayBox() {
   if (!currentBox) return null;
   if (selectedWordIndex != null) {
     const word = getWordCandidates(currentBox).find((w) => w.wordIndex === selectedWordIndex);
-    if (word) return wordBoxFor(word, currentBox);
+    if (word) return ensureMinimumGrabBox(wordBoxFor(word, currentBox));
   }
   if (selectedGroupId != null) {
     const groupBox = computeGroupBox(selectedGroupId);
-    if (groupBox) return inflateBox(groupBox, CAPTION_SELECTION_PADDING_CSS_PX);
+    if (groupBox) return ensureMinimumGrabBox(inflateBox(groupBox, CAPTION_SELECTION_PADDING_CSS_PX));
   }
   return null;
+}
+
+/**
+ * Keeps the rotate handle reachable when the box's rotated position pushes
+ * it above the actual browser viewport — confirmed via a real end-to-end
+ * drag-to-corner test: dragging a caption to the frame's top edge (now
+ * legitimately visible past .phone-frame's own clipped boundary — see
+ * style.css's .caption-transform-overlay doc comment) pushed the rotate
+ * handle's `top: -64px` offset far enough up that it landed above y=0,
+ * behind the app's own header bar — visible nowhere, clickable nowhere.
+ * Reads the handle's own natural (CSS-rotated) position via
+ * getBoundingClientRect() — already correct for any rotation angle, since
+ * the browser did that math — and only overrides it with an explicit
+ * `position: fixed` when that natural position would actually fall outside
+ * the viewport, clamping it back to a visible margin. Purely cosmetic: the
+ * actual rotate gesture (beginRotate/onPointerMove) computes its angle from
+ * the POINTER position relative to the box's own center, never from the
+ * handle element's position, so clamping where the handle is drawn changes
+ * nothing about how rotating it behaves once grabbed.
+ */
+function clampRotateHandleToViewport() {
+  if (!rotateHandleEl) return;
+  rotateHandleEl.style.position = '';
+  rotateHandleEl.style.left = '';
+  rotateHandleEl.style.top = '';
+  const rect = rotateHandleEl.getBoundingClientRect();
+  if (!rect.width && !rect.height) return; // hidden/not laid out yet
+  const margin = 10;
+  // The app's own top header bar sits at a HIGHER z-index (100) than this
+  // overlay (20) and spans the full page width — clamping the handle to
+  // merely "within the viewport" (y >= 0) still landed it fully behind that
+  // header whenever the natural position was less than the header's own
+  // height, confirmed by document.elementFromPoint() returning the header,
+  // not the handle, at the "clamped" point. Reading the header's own live
+  // rect (rather than hardcoding its height) means this stays correct if
+  // the header's height ever changes.
+  const header = document.querySelector('header');
+  const minY = (header ? header.getBoundingClientRect().bottom : 0) + margin;
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const clampedCx = Math.max(margin, Math.min(window.innerWidth - margin, cx));
+  const clampedCy = Math.max(minY, Math.min(window.innerHeight - margin, cy));
+  if (clampedCx === cx && clampedCy === cy) return;
+  // .caption-transform-handle has `margin: -7px` (centers the 14px dot on
+  // its own left/top anchor point rather than the anchor being its
+  // top-left corner) — that margin still applies once `position` switches
+  // to `fixed`, so left/top must be the CENTER point directly, not
+  // clampedC{x,y} minus half the handle's size (that double-applied the
+  // centering offset, landing the handle exactly 7px off in both axes —
+  // confirmed via a real getBoundingClientRect() vs. inline-style diff).
+  rotateHandleEl.style.position = 'fixed';
+  rotateHandleEl.style.left = `${clampedCx}px`;
+  rotateHandleEl.style.top = `${clampedCy}px`;
 }
 
 function positionBoxElement() {
   const box = getDisplayBox();
   if (!boxEl || !box) return;
-  const scale = box.pxScale || 1;
+  const scale = box.cssPxScale || 1;
   const cssX = box.x / scale;
   const cssY = box.y / scale;
   const cssW = box.width / scale;
@@ -904,6 +1075,48 @@ function positionBoxElement() {
   boxEl.style.transform = box.rotationDeg ? `rotate(${box.rotationDeg}deg)` : '';
   boxEl.style.transformOrigin = 'center center';
   if (rotationLabelEl) rotationLabelEl.textContent = `${Math.round(box.rotationDeg || 0)}°`;
+  // Counter-rotate the toolbar (scope/animation buttons, reset, the rotation
+  // label) so its TEXT stays upright and readable regardless of the box's
+  // own rotation — confirmed via user report + screenshot: at e.g. 270° the
+  // toolbar's own labels were rendering sideways, forcing the user to
+  // visually chase whichever direction the caption itself was pointing.
+  // Rotating it by the exact opposite angle, inside the already-rotated
+  // parent, cancels that inherited rotation back to 0 net degrees — the
+  // toolbar's own translate(-50%, -8px) positioning (its default CSS rule)
+  // still has to be restated here since setting `transform` inline replaces
+  // the whole property, not just adds to it.
+  const controlsBelow = shouldPlaceControlsBelow();
+  boxEl.classList.toggle('controls-below', controlsBelow);
+  if (toolbarEl) {
+    const baseTranslate = controlsBelow ? 'translate(-50%, 8px)' : 'translate(-50%, -8px)';
+    toolbarEl.style.transform = box.rotationDeg
+      ? `${baseTranslate} rotate(${-box.rotationDeg}deg)`
+      : '';
+  }
+  clampRotateHandleToViewport();
+}
+
+/**
+ * Whether the box's controls (toolbar + rotate handle, normally ABOVE it —
+ * see style.css's .controls-below rules) should flip to below instead —
+ * true whenever the box's actual rendered top edge is too close to the
+ * app's own always-on-top header for the ~90px of space those controls
+ * need above it. Reads boxEl's OWN getBoundingClientRect() (already correct
+ * for whatever rotation is currently applied, since the browser did that
+ * math) rather than re-deriving it from box.y/rotationDeg by hand.
+ *
+ * Deliberately checked EVERY call (not cached) — the box's top edge moves
+ * with every drag/keyframe/interpolation tick, exactly the cases that
+ * created this problem in the first place (see clampRotateHandleToViewport's
+ * matching doc comment for the confirmed repro).
+ */
+function shouldPlaceControlsBelow() {
+  if (!boxEl) return false;
+  const header = document.querySelector('header');
+  const headerBottom = header ? header.getBoundingClientRect().bottom : 0;
+  const CONTROLS_HEIGHT_PX = 90; // toolbar (~1-2 rows) + connecting line + rotate handle
+  const boxRect = boxEl.getBoundingClientRect();
+  return boxRect.top - CONTROLS_HEIGHT_PX < headerBottom;
 }
 
 /**
@@ -1120,6 +1333,26 @@ function updateScopeButtons() {
  * @param {object} phrase - The active phrase this box belongs to.
  * @param {'sentence'|'rolling-stack'} mode
  */
+/**
+ * Keeps the (now `position: fixed` — see style.css's .caption-transform-overlay
+ * doc comment) overlay's own left/top/width/height glued to the real content
+ * rect, in viewport px. Needed every time the overlay might actually be shown
+ * (not just once at init): the content rect can change size across a tick
+ * (window resize, the timeline panel resizing the workspace, DPR changes) and
+ * a `fixed` element has no CSS shorthand equivalent to the old
+ * `top:0;left:0;width:100%;height:100%` relative-to-parent trick — it must be
+ * set explicitly.
+ */
+function syncOverlayToContentRect(el) {
+  if (!el) return;
+  const rect = getCanvasContentRect();
+  if (!rect) return;
+  el.style.left = `${rect.left}px`;
+  el.style.top = `${rect.top}px`;
+  el.style.width = `${rect.width}px`;
+  el.style.height = `${rect.height}px`;
+}
+
 export function updateCanvasTransformOverlay(box, phrase, mode) {
   if (!overlayEl) return;
 
@@ -1130,6 +1363,7 @@ export function updateCanvasTransformOverlay(box, phrase, mode) {
 
   currentBox = { ...box, phrase, mode };
   overlayEl.classList.add('active');
+  syncOverlayToContentRect(overlayEl);
 
   // A selected word only stays selected across ticks if it's still actually
   // present in this frame's box (e.g. still part of the active phrase/
@@ -1209,7 +1443,7 @@ export function hideCanvasTransformOverlay() {
 }
 
 function clientToCssPoint(clientX, clientY) {
-  const rect = getPhoneFrame().getBoundingClientRect();
+  const rect = getCanvasContentRect();
   return { x: clientX - rect.left, y: clientY - rect.top, rect };
 }
 
@@ -1223,7 +1457,7 @@ function clientToCssPoint(clientX, clientY) {
 function hitTestWordAtClient(clientX, clientY) {
   if (!currentBox) return null;
   const { x, y } = clientToCssPoint(clientX, clientY);
-  const scale = currentBox.pxScale || 1;
+  const scale = currentBox.cssPxScale || 1;
   return findWordAtPoint(x * scale, y * scale, currentBox);
 }
 
@@ -1249,7 +1483,7 @@ function beginMove(e) {
   // mid-gesture onto the NEXT caption's/word's override instead of the one
   // the user actually grabbed.
   const wordIndex = selectedWordIndex;
-  const { x, y } = clientToCssPoint(e.clientX, e.clientY);
+  const { x, y, rect } = clientToCssPoint(e.clientX, e.clientY);
   const isGroupFanOut = isPartialGroupTransform();
   const groupMembers = isGroupFanOut ? getGroupMemberIndexes(selectedGroupId) : null;
   const groupStart = isGroupFanOut
@@ -1258,6 +1492,22 @@ function beginMove(e) {
         offsetYPx: effectiveWordValue(idx, 'offsetYPx', 0)
       }]))
     : null;
+  // Whole-caption move baseline (see onPointerMove's matching branch): the
+  // caption's OWN current resolved position, read from currentBox itself —
+  // the SAME geometry the renderer just drew this frame from (see
+  // shared/captionGraphics.js's measureSentenceFrame: centerX/centerY are
+  // resolved through the full chain — per-phrase override, else the
+  // caption's actual style-driven default position (e.g. center/bottom),
+  // else keyframe interpolation). Deliberately NOT getCurrentValueForProperty
+  // here: that helper's fallback bottoms out at the flat
+  // KEYFRAME_PROPERTY_DEFAULTS (positionX/Y = 0) the moment there's no
+  // per-phrase override yet, regardless of the style's actual default
+  // position — using it as a drag baseline would silently snap an
+  // untouched, e.g. bottom-anchored caption to (0, 0) on the very first
+  // pixel of movement. currentBox.centerX/centerY carry no such gap.
+  const isWholeCaptionMove = wordIndex == null && !isGroupFanOut;
+  const frameRect = isWholeCaptionMove ? getCanvasContentRect() : null;
+  const boxScale = currentBox.cssPxScale || 1;
   drag = {
     kind: 'move',
     pointerId: e.pointerId,
@@ -1273,7 +1523,11 @@ function beginMove(e) {
     startPointerX: x,
     startPointerY: y,
     startOffsetXPx: wordIndex != null ? effectiveWordValue(wordIndex, 'offsetXPx', 0) : 0,
-    startOffsetYPx: wordIndex != null ? effectiveWordValue(wordIndex, 'offsetYPx', 0) : 0
+    startOffsetYPx: wordIndex != null ? effectiveWordValue(wordIndex, 'offsetYPx', 0) : 0,
+    startPointerXPct: isWholeCaptionMove ? (x / rect.width) * 100 : 0,
+    startPointerYPct: isWholeCaptionMove ? (y / rect.height) * 100 : 0,
+    startPosXPct: isWholeCaptionMove && frameRect ? ((currentBox.centerX / boxScale) / frameRect.width) * 100 : 0,
+    startPosYPct: isWholeCaptionMove && frameRect ? ((currentBox.centerY / boxScale) / frameRect.height) * 100 : 0
   };
   hitAreaEl.setPointerCapture(e.pointerId);
 }
@@ -1282,7 +1536,7 @@ function beginResize(e, corner) {
   if (!currentBox) return;
   const box = getDisplayBox();
   const { x, y } = clientToCssPoint(e.clientX, e.clientY);
-  const scale = box.pxScale || 1;
+  const scale = box.cssPxScale || 1;
   const centerX = box.centerX / scale;
   const centerY = box.centerY / scale;
   const startDist = Math.hypot(x - centerX, y - centerY) || 1;
@@ -1311,7 +1565,7 @@ function beginRotate(e) {
     groupStart = new Map(groupMembers.map((idx) => [idx, effectiveWordValue(idx, 'rotationDeg', 0)]));
     const box = getDisplayBox();
     const { x, y } = clientToCssPoint(e.clientX, e.clientY);
-    const scale = box.pxScale || 1;
+    const scale = box.cssPxScale || 1;
     startAngle = (Math.atan2(y - box.centerY / scale, x - box.centerX / scale) * 180) / Math.PI;
   }
   drag = {
@@ -1325,7 +1579,7 @@ function onPointerMove(e) {
   if (!drag || !currentBox) return;
   const box = getDisplayBox();
   const { x, y } = clientToCssPoint(e.clientX, e.clientY);
-  const scale = box.pxScale || 1;
+  const scale = box.cssPxScale || 1;
   const centerX = box.centerX / scale;
   const centerY = box.centerY / scale;
   const wordIndex = drag.wordIndex;
@@ -1336,15 +1590,23 @@ function onPointerMove(e) {
       // position (see shared/captionGraphics.js's per-word ctx.translate),
       // not a percentage of the whole frame like a caption's customPosX/Y —
       // a word has no independent "anchor" of its own to express as a
-      // frame-relative percentage. Offset is stored in canvas backing-store
-      // px (the space captionGraphics.js's paint loop actually uses), so the
-      // CSS-px pointer delta is scaled up by pxScale before being added to
-      // whatever offset the word already had at drag-start.
+      // frame-relative percentage.
+      //
+      // Stored in the AUTHORED 330-box unit (see
+      // shared/captionGraphics.js's wordOffsetToCanvasPx), the same unit
+      // fontSize/spacing/outline are authored in — NOT canvas backing-store
+      // px, which is what this used to store. Canvas px is resolution-
+      // dependent: the preview canvas is ~168-322px wide while the export
+      // canvas is the video's real width (e.g. 1080px), so the same stored
+      // number moved the word a completely different fraction of the frame
+      // in each renderer, and a word dragged far left in the preview came
+      // out near its default position in the exported file.
       const deltaCssX = x - drag.startPointerX;
       const deltaCssY = y - drag.startPointerY;
+      const canvasW = getCanvasBackingWidth();
       writeWordFields(wordIndex, {
-        offsetXPx: drag.startOffsetXPx + deltaCssX * scale,
-        offsetYPx: drag.startOffsetYPx + deltaCssY * scale
+        offsetXPx: drag.startOffsetXPx + canvasPxToWordOffset(deltaCssX * scale, canvasW),
+        offsetYPx: drag.startOffsetYPx + canvasPxToWordOffset(deltaCssY * scale, canvasW)
       }, { recordHistory: false });
     } else if (drag.groupMembers) {
       // GROUP move: translate every current member by the SAME pixel delta
@@ -1357,18 +1619,31 @@ function onPointerMove(e) {
       // (grouping never depends on keyword status either).
       const deltaCssX = x - drag.startPointerX;
       const deltaCssY = y - drag.startPointerY;
+      // Same authored-unit conversion as the single-word branch above.
+      const canvasWGroup = getCanvasBackingWidth();
       drag.groupMembers.forEach((idx) => {
         const start = drag.groupStart.get(idx);
         applyWordTransformFields(idx, {
-          offsetXPx: start.offsetXPx + deltaCssX * scale,
-          offsetYPx: start.offsetYPx + deltaCssY * scale
+          offsetXPx: start.offsetXPx + canvasPxToWordOffset(deltaCssX * scale, canvasWGroup),
+          offsetYPx: start.offsetYPx + canvasPxToWordOffset(deltaCssY * scale, canvasWGroup)
         }, { recordHistory: false });
       });
     } else {
+      // Delta from where the drag STARTED, added to the caption's OWN
+      // starting position (see beginMove) — NOT the raw cursor position as
+      // an absolute frame percentage. The caption is grabbed wherever the
+      // user actually clicked on it (rarely its exact center), so snapping
+      // its anchor straight to the cursor's own position produced a sudden
+      // jump equal to the click-point-to-anchor distance on the very first
+      // pixel of movement, and made the caption's motion feel disconnected
+      // from the cursor for the rest of the gesture (confirmed: the word-move
+      // branch above never had this bug, since it was already delta-based).
       const { rect } = clientToCssPoint(e.clientX, e.clientY);
-      const xPct = Math.max(0, Math.min(100, (x / rect.width) * 100));
-      const yPct = Math.max(0, Math.min(100, (y / rect.height) * 100));
-      applyTransformFields({ customPosX: xPct, customPosY: yPct }, { recordHistory: false, phrase: drag.phrase });
+      const xPct = (x / rect.width) * 100;
+      const yPct = (y / rect.height) * 100;
+      const nextXPct = Math.max(0, Math.min(100, drag.startPosXPct + (xPct - drag.startPointerXPct)));
+      const nextYPct = Math.max(0, Math.min(100, drag.startPosYPct + (yPct - drag.startPointerYPct)));
+      applyTransformFields({ customPosX: nextXPct, customPosY: nextYPct }, { recordHistory: false, phrase: drag.phrase });
     }
   } else if (drag.kind === 'resize') {
     const dist = Math.hypot(x - centerX, y - centerY) || 1;
@@ -1499,7 +1774,7 @@ if (import.meta.env.DEV) {
     const word = getWordCandidates(currentBox).find((w) => w.wordIndex === wordIndex);
     if (!word) return null;
     const box = wordBoxFor(word, currentBox);
-    const scale = box.pxScale || 1;
+    const scale = box.cssPxScale || 1;
     return { x: box.x / scale, y: box.y / scale, width: box.width / scale, height: box.height / scale, centerX: box.centerX / scale, centerY: box.centerY / scale };
   };
   window.__debugKeywordScopeState = () => ({
@@ -1508,7 +1783,7 @@ if (import.meta.env.DEV) {
   });
   window.__debugCaptionBoxRect = () => {
     if (!currentBox) return null;
-    const scale = currentBox.pxScale || 1;
+    const scale = currentBox.cssPxScale || 1;
     return { x: currentBox.x / scale, y: currentBox.y / scale, width: currentBox.width / scale, height: currentBox.height / scale, centerX: currentBox.centerX / scale, centerY: currentBox.centerY / scale };
   };
   window.__debugGroupState = () => ({
@@ -1528,7 +1803,7 @@ if (import.meta.env.DEV) {
     if (!currentBox || selectedGroupId == null) return null;
     const box = computeGroupBox(selectedGroupId);
     if (!box) return null;
-    const scale = box.pxScale || 1;
+    const scale = box.cssPxScale || 1;
     return { x: box.x / scale, y: box.y / scale, width: box.width / scale, height: box.height / scale, centerX: box.centerX / scale, centerY: box.centerY / scale };
   };
   window.__debugEffectiveGroupId = (wordIndex) => (currentBox ? getEffectiveGroupId(wordIndex, currentBox.phrase) : null);
@@ -1542,7 +1817,7 @@ if (import.meta.env.DEV) {
     if (!currentBox) return null;
     const word = getWordCandidates(currentBox).find((w) => w.wordIndex === wordIndex);
     if (!word) return null;
-    const scale = currentBox.pxScale || 1;
+    const scale = currentBox.cssPxScale || 1;
     return { x: word.x / scale, y: word.y / scale, width: word.width / scale, height: word.height / scale, centerX: (word.x + word.width / 2) / scale, centerY: (word.y + word.height / 2) / scale };
   };
 }
@@ -1552,6 +1827,7 @@ export function initCanvasTransform() {
   hitAreaEl = document.getElementById('caption-transform-hit-area');
   boxEl = document.getElementById('caption-transform-box');
   rotateHandleEl = document.getElementById('caption-transform-handle-rotate');
+  toolbarEl = document.getElementById('caption-transform-toolbar');
   scopeThisBtn = document.getElementById('btn-transform-scope-this');
   scopeAllBtn = document.getElementById('btn-transform-scope-all');
   resetBtn = document.getElementById('btn-transform-reset');
@@ -1576,6 +1852,18 @@ export function initCanvasTransform() {
 
   updateScopeButtons();
 
+  // The overlay is `position: fixed` (see style.css's doc comment on
+  // .caption-transform-overlay) precisely so .phone-frame's overflow:hidden
+  // can't clip its handles — but that means its own left/top/width/height
+  // need to be kept in sync with the real content rect explicitly (a
+  // `fixed` element has no "100% of my parent" shorthand). tick()'s own
+  // per-frame updateCanvasTransformOverlay call already re-syncs it
+  // constantly while anything is selected/active; this additional resize
+  // listener is only for the OTHERWISE-static case — the overlay staying
+  // positioned correctly for a NEW selection made right after a resize,
+  // before any tick has run again.
+  window.addEventListener('resize', () => syncOverlayToContentRect(overlayEl));
+
   hitAreaEl.addEventListener('pointerdown', (e) => {
     if (!currentBox) return;
     // A canvas selection and the Video target (see videoTransform.js) are
@@ -1583,7 +1871,7 @@ export function initCanvasTransform() {
     // exactly ONE target. Interacting with a caption/word here always wins.
     deselectVideoTarget();
     const { x, y } = clientToCssPoint(e.clientX, e.clientY);
-    const scale = currentBox.pxScale || 1;
+    const scale = currentBox.cssPxScale || 1;
 
     // Word hit-test first — findWordAtPoint/currentBox.words/.chunks are all
     // in canvas backing-store px, so the CSS-px pointer point is scaled UP

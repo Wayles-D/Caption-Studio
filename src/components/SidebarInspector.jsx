@@ -47,7 +47,8 @@
 import { useEffect, useState } from 'react';
 import { initSidebarInspector } from '../js/components/sidebarInspector.js';
 import { BADGE_BASE_CLASSES } from '../js/components/numericControl.js';
-import { getFallbackColorFor } from '../js/utils/colorFallbacks.js';
+import { getFallbackColorFor, getCurrentProfile } from '../js/utils/colorFallbacks.js';
+import { CREATOR_PROFILES } from '../../shared/captionConfig.js';
 import { useEditorStore } from '../store/editorStore.js';
 import { updateState } from '../js/state.js';
 import { ToggleSwitch } from './ToggleSwitch.jsx';
@@ -98,6 +99,72 @@ function SidebarColorField({ fieldKey, label, openField, setOpenField }) {
       }}
     />
   );
+}
+
+// Base intentionally omits border-color/background — those are mutually
+// exclusive with PRESET_BTN_ACTIVE below (active vs. inactive), never both
+// present on the same element at once. Two same-specificity utility classes
+// setting the SAME property (e.g. `border-[var(--border-color)]` always on,
+// `border-[var(--accent-color)]` added when active) resolve by whichever
+// happens to land later in Tailwind's GENERATED stylesheet, not by which
+// one appears later in this className string — a real, silent bug this
+// exact shape produced (the active border rendered as if it were never
+// applied). Keeping them mutually exclusive sidesteps the ambiguity
+// entirely instead of depending on generation order.
+const PRESET_BTN_BASE = `preset-btn bg-[var(--bg-input)] border rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200
+  hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)]`;
+const PRESET_BTN_INACTIVE = 'border-[var(--border-color)]';
+const PRESET_BTN_ACTIVE = 'border-[var(--accent-color)] bg-[rgba(217,119,87,0.08)]';
+
+// One entry per Preset Profile button — driving these from `currentPreset`
+// (Zustand) instead of a manually-toggled `.active` class is what makes
+// "one state, many DOM effects" reliable here: React just re-renders
+// whichever button matches, no imperative sync function to keep in step
+// with every place this value can change (a plain click, OR the Rolling
+// Stack auto-switch below — see handleCaptionModeChange).
+const PRESET_BUTTONS = [
+  { key: 'bold-yellow', label: 'YELLOW', labelClassName: "text-[#FEF08A] [text-shadow:0_0_4px_#000]" },
+  { key: 'caps-white', label: 'WHITE', labelClassName: 'text-white [text-shadow:0_0_4px_#000]' },
+  { key: 'bg-black', label: 'BOXED', labelClassName: 'text-white bg-black p-0.5 rounded-sm' },
+  { key: 'signature-v1', label: 'WAYLES', labelClassName: "text-[#FFD60A] [font-family:Poppins,sans-serif] [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]" },
+  { key: 'wayles-poppins', label: 'POPPINS', labelClassName: "text-white [font-family:Poppins,sans-serif] font-bold [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]" },
+  { key: 'wayles-pen', label: 'PEN', labelClassName: "text-white [font-family:'PP_Editorial_New',serif] italic [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]" },
+  { key: 'poppins-editorial', label: 'EDIT', labelClassName: "text-white [font-family:Poppins,sans-serif] font-bold [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]" },
+  { key: 'blend-chrome', label: 'CHROME', labelClassName: "text-white [font-family:'PP_Editorial_New',serif] italic [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]" }
+];
+
+/**
+ * Selecting a preset can cascade into up to three OTHER fields (font family/
+ * animation mode/position), each only as a one-time convenience default the
+ * preset opts into — see shared/captionConfig.js's CREATOR_PROFILES —
+ * still fully overridable afterward like any other control. Shared by the
+ * Preset Profile buttons' own onClick AND handleCaptionModeChange below
+ * (Rolling Stack's own auto-preset-switch reuses this exact cascade rather
+ * than duplicating it).
+ */
+function applyPresetSelection(presetKey, extraUpdates = {}) {
+  const updates = { currentPreset: presetKey, ...extraUpdates };
+  const targetProfile = CREATOR_PROFILES[presetKey];
+  if (targetProfile?.autoFontFamilyOnSelect) updates.fontFamily = targetProfile.autoFontFamilyOnSelect;
+  if (targetProfile?.autoAnimationModeOnSelect) updates.animationMode = targetProfile.autoAnimationModeOnSelect;
+  if (targetProfile?.autoPositionOnSelect) updates.position = targetProfile.autoPositionOnSelect;
+  updateState(updates);
+}
+
+/**
+ * Caption Mode is the same "one state, several effects" shape: it drives
+ * its own selected tab, the Rolling Stack settings group's visibility
+ * below, AND (the first time Rolling Stack is chosen, unless a
+ * keyword-driven preset is already active) a cascading preset+font switch —
+ * all now plain React reads of `captionMode`/`currentPreset` rather than a
+ * DOM-querying sync function.
+ */
+function handleCaptionModeChange(mode) {
+  if (mode === 'rolling-stack' && !getCurrentProfile().keywordDriven) {
+    applyPresetSelection('poppins-editorial', { captionMode: mode });
+    return;
+  }
+  updateState({ captionMode: mode });
 }
 
 const SETTINGS_GROUP = 'flex flex-col gap-1.5';
@@ -184,15 +251,40 @@ function AccordionSection({ icon, title, children, bare }) {
  * no outer "Caption Inspector" header) instead of the full accordion list.
  */
 export function SidebarInspector({ sectionFilter } = {}) {
+  // Re-wires whenever `sectionFilter` changes, not just on first mount:
+  // switching bottom-toolbar tools directly (Style -> Text -> Style, with
+  // no intermediate close) does NOT unmount/remount this component — React
+  // reuses the same instance across different `sectionFilter` props since
+  // neither the component type nor its position in the tree changes, only
+  // its render OUTPUT (which section's DOM is actually present). A bare
+  // `[]` dependency array only ever wired up whichever section happened to
+  // be visible on the FIRST tool opened this "session" (e.g. Style), and
+  // every section shown afterward via a direct tool switch (e.g. Text, with
+  // its caption-mode radios) got new DOM nodes with NO listeners ever
+  // attached to them — the preset auto-switch-on-Rolling-Stack, and every
+  // other Typography control, silently never fired. initSidebarInspector()
+  // is safe to call repeatedly (it fully re-queries + re-attaches on every
+  // call, see its own doc comment) so re-running it here is exactly correct
+  // rather than needing separate mount-vs-update logic.
   useEffect(() => {
     initSidebarInspector();
-  }, []);
+  }, [sectionFilter]);
 
   // Which color field's picker is open, if any — coordinated here (rather
   // than each ColorPickerField owning independent open state) so opening one
   // swatch's picker always discards/closes any other that was still open,
   // exactly like the old vanilla picker's single-popover-at-a-time behavior.
   const [openColorField, setOpenColorField] = useState(null);
+
+  // These three drive multiple DOM effects each (selected-tab highlight,
+  // cascading field updates, and/or a settings group's visibility) — read
+  // directly from the Zustand store so every one of those effects is a
+  // plain re-render, not a DOM query this file has to remember to re-run
+  // (see handleCaptionModeChange/applyPresetSelection above and the bugs
+  // that pattern already caused once).
+  const currentPreset = useEditorStore((s) => s.currentPreset);
+  const captionMode = useEditorStore((s) => s.captionMode);
+  const shadowMode = useEditorStore((s) => s.shadowMode || 'individual');
 
   const bare = sectionFilter != null;
   const show = (key) => sectionFilter == null || sectionFilter === key;
@@ -220,22 +312,22 @@ export function SidebarInspector({ sectionFilter } = {}) {
             <label className={GROUP_LABEL}>Caption Mode</label>
             <div className={`${RADIO_GRID} grid-cols-3`}>
               <label className={RADIO_TAB}>
-                <input type="radio" name="caption-mode" value="sentence" className={RADIO_TAB_INPUT} defaultChecked />
+                <input type="radio" name="caption-mode" value="sentence" className={RADIO_TAB_INPUT} checked={captionMode === 'sentence' || !captionMode} onChange={() => handleCaptionModeChange('sentence')} />
                 <span className={RADIO_TAB_SPAN}>Sentence</span>
               </label>
               <label className={RADIO_TAB}>
-                <input type="radio" name="caption-mode" value="word" className={RADIO_TAB_INPUT} />
+                <input type="radio" name="caption-mode" value="word" className={RADIO_TAB_INPUT} checked={captionMode === 'word'} onChange={() => handleCaptionModeChange('word')} />
                 <span className={RADIO_TAB_SPAN}>Word</span>
               </label>
               <label className={RADIO_TAB}>
-                <input type="radio" name="caption-mode" value="rolling-stack" className={RADIO_TAB_INPUT} />
+                <input type="radio" name="caption-mode" value="rolling-stack" className={RADIO_TAB_INPUT} checked={captionMode === 'rolling-stack'} onChange={() => handleCaptionModeChange('rolling-stack')} />
                 <span className={RADIO_TAB_SPAN}>Rolling Stack</span>
               </label>
             </div>
             <p className={FIELD_HINT}>Word mode shows exactly one transcript word at a time instead of the full caption line. Rolling Stack shows normal words on top and the current keyword below, rolling forward as speech continues. "Bold Social" fonts below work well here.</p>
           </div>
 
-          <div className={SETTINGS_GROUP} id="rolling-stack-settings" style={{ display: 'none' }}>
+          <div className={SETTINGS_GROUP} id="rolling-stack-settings" style={{ display: captionMode === 'rolling-stack' ? '' : 'none' }}>
             <label className={GROUP_LABEL}>Words per Layer</label>
             <div className={RADIO_GRID}>
               <label className={RADIO_TAB}>
@@ -342,30 +434,17 @@ export function SidebarInspector({ sectionFilter } = {}) {
           <div className={SETTINGS_GROUP}>
             <label className={GROUP_LABEL}>Preset Profile</label>
             <div className="grid grid-cols-2 gap-2">
-              <button type="button" className="preset-btn active bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="bold-yellow">
-                <span className="text-[11px] font-extrabold block text-center text-[#FEF08A] [text-shadow:0_0_4px_#000]">YELLOW</span>
-              </button>
-              <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="caps-white">
-                <span className="text-[11px] font-extrabold block text-center text-white [text-shadow:0_0_4px_#000]">WHITE</span>
-              </button>
-              <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="bg-black">
-                <span className="text-[11px] font-extrabold block text-center text-white bg-black p-0.5 rounded-sm">BOXED</span>
-              </button>
-              <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="signature-v1">
-                <span className="text-[11px] font-extrabold block text-center text-[#FFD60A] [font-family:Poppins,sans-serif] [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]">WAYLES</span>
-              </button>
-              <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="wayles-poppins">
-                <span className="text-[11px] font-extrabold block text-center text-white [font-family:Poppins,sans-serif] font-bold [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]">POPPINS</span>
-              </button>
-              <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="wayles-pen">
-                <span className="text-[11px] font-extrabold block text-center text-white [font-family:'PP_Editorial_New',serif] italic [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]">PEN</span>
-              </button>
-              <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="poppins-editorial">
-                <span className="text-[11px] font-extrabold block text-center text-white [font-family:Poppins,sans-serif] font-bold [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]">EDIT</span>
-              </button>
-              <button type="button" className="preset-btn bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200 hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)] [&.active]:border-[var(--accent-color)] [&.active]:bg-[rgba(217,119,87,0.08)]" data-preset="blend-chrome">
-                <span className="text-[11px] font-extrabold block text-center text-white [font-family:'PP_Editorial_New',serif] italic [text-shadow:1px_1px_3px_rgba(0,0,0,0.6)]">CHROME</span>
-              </button>
+              {PRESET_BUTTONS.map(({ key, label, labelClassName }) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`${PRESET_BTN_BASE} ${currentPreset === key ? PRESET_BTN_ACTIVE : PRESET_BTN_INACTIVE}`}
+                  data-preset={key}
+                  onClick={() => applyPresetSelection(key)}
+                >
+                  <span className={`text-[11px] font-extrabold block text-center ${labelClassName}`}>{label}</span>
+                </button>
+              ))}
             </div>
           </div>
 
@@ -388,7 +467,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
                 <label className={COLOR_PICKER_ITEM_LABEL}>Box</label>
                 <SidebarColorField fieldKey="backgroundColor" label="Background Color" openField={openColorField} setOpenField={setOpenColorField} />
               </div>
-              <div className={COLOR_PICKER_ITEM} id="shadow-color-item">
+              <div className={COLOR_PICKER_ITEM} id="shadow-color-item" style={{ display: shadowMode === 'individual' ? '' : 'none' }}>
                 <label className={COLOR_PICKER_ITEM_LABEL}>Shadow</label>
                 <SidebarColorField fieldKey="shadowColor" label="Shadow Color" openField={openColorField} setOpenField={setOpenColorField} />
               </div>
@@ -408,15 +487,15 @@ export function SidebarInspector({ sectionFilter } = {}) {
             <label className={GROUP_LABEL}>Shadow Mode</label>
             <div className={RADIO_GRID}>
               <label className={RADIO_TAB}>
-                <input type="radio" name="shadow-mode" value="none" className={RADIO_TAB_INPUT} />
+                <input type="radio" name="shadow-mode" value="none" className={RADIO_TAB_INPUT} checked={shadowMode === 'none'} onChange={() => updateState({ shadowMode: 'none' })} />
                 <span className={RADIO_TAB_SPAN}>None</span>
               </label>
               <label className={RADIO_TAB}>
-                <input type="radio" name="shadow-mode" value="individual" className={RADIO_TAB_INPUT} defaultChecked />
+                <input type="radio" name="shadow-mode" value="individual" className={RADIO_TAB_INPUT} checked={shadowMode === 'individual'} onChange={() => updateState({ shadowMode: 'individual' })} />
                 <span className={RADIO_TAB_SPAN}>Individual</span>
               </label>
               <label className={RADIO_TAB}>
-                <input type="radio" name="shadow-mode" value="unified" className={RADIO_TAB_INPUT} />
+                <input type="radio" name="shadow-mode" value="unified" className={RADIO_TAB_INPUT} checked={shadowMode === 'unified'} onChange={() => updateState({ shadowMode: 'unified' })} />
                 <span className={RADIO_TAB_SPAN}>Unified</span>
               </label>
             </div>
@@ -436,7 +515,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
             <p className={FIELD_HINT}>Blends caption text with the video colors underneath it, like the "blend mode text" effect in CapCut/Premiere.</p>
           </div>
 
-          <div id="individual-shadow-controls" className="flex flex-col gap-3.5">
+          <div id="individual-shadow-controls" hidden={shadowMode !== 'individual'} className="flex flex-col gap-3.5">
             <div className={SETTINGS_GROUP}>
               <div className={LABEL_JUSTIFY}>
                 <span className={GROUP_LABEL}>Shadow Intensity</span>
@@ -462,7 +541,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
             </div>
           </div>
 
-          <div id="unified-shadow-controls" hidden className="flex flex-col gap-3.5">
+          <div id="unified-shadow-controls" hidden={shadowMode !== 'unified'} className="flex flex-col gap-3.5">
             <div className={SETTINGS_GROUP}>
               <label className={GROUP_LABEL}>Unified Shadow Color</label>
               <div className={COLOR_PICKER_GRID}>

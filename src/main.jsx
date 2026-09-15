@@ -1,5 +1,5 @@
 /**
- * Caption Studio entry point (migration plan's Stage 4).
+ * BHYND entry point (migration plan's Stage 4).
  *
  * All orchestration previously in main.js now lives in App.jsx as a single
  * React tree — this file only bootstraps the root.

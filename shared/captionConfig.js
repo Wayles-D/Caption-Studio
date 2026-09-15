@@ -1,5 +1,5 @@
 /**
- * Caption Studio Central Shared Caption Configuration Schema
+ * BHYND Central Shared Caption Configuration Schema
  * Single source of truth for creator profiles, animation modes, font scaling, positions, colors, and styling rules.
  * Shared across both Frontend workspace preview and Backend ASS subtitle generator.
  */

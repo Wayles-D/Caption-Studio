@@ -1,5 +1,5 @@
 /**
- * State Store & Reactive Event System for Caption Studio
+ * State Store & Reactive Event System for BHYND
  *
  * This module is now a thin compatibility shim over two Zustand stores
  * (src/store/editorStore.js, src/store/transformStore.js — see the
@@ -16,7 +16,7 @@ import { useEditorStore, STYLE_DEFAULTS, SESSION_DEFAULTS } from '../store/edito
 import { useTransformStore, TRANSFORM_DEFAULTS } from '../store/transformStore.js';
 
 export const MOCK_SUBTITLES = [
-  { start: 0.0, end: 2.2, text: "WELCOME TO THE CAPTION STUDIO." },
+  { start: 0.0, end: 2.2, text: "WELCOME TO BHYND." },
   { start: 2.4, end: 5.2, text: "WE EXTRACT AUDIO AND GENERATE SPEECH-TO-TEXT AUTOMATICALLY." },
   { start: 5.5, end: 8.2, text: "THEN WE BURN STYLISH SUBTITLES RIGHT INTO YOUR SHORT-FORM VIDEOS." },
   { start: 8.5, end: 11.5, text: "CHANNELS THAT USE CAPTIONS SEE A 40% INCREASE IN WATCH TIME!" },

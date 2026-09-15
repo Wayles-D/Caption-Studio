@@ -28,12 +28,21 @@ export function Toolbar({ onExportVideo }) {
   return (
     <>
       <div className="flex items-center gap-2.5">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="text-[var(--accent-color)]">
-          <rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-          <path d="M7 10H17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M7 14H13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        {/* BHYND mark — two interlocking brackets (the "bind/behind" weave —
+            see the brand sheet). The "under" stroke is drawn three times:
+            once in the header's own background color as a cutout so the
+            "over" stroke reads as genuinely woven through it rather than
+            just overlapping, then again at reduced opacity for depth,
+            before the "over" stroke completes the weave. Colors come from
+            the app's own theme tokens (accent teal / bg-toolbar) instead of
+            the brand sheet's black-on-white so it sits naturally in both
+            light and dark theme. */}
+        <svg width="22" height="22" viewBox="0 0 100 100" fill="none">
+          <path d="M 18 26 L 42 26 L 42 74 L 82 74" stroke="var(--bg-toolbar)" strokeWidth="20" strokeLinecap="square" strokeLinejoin="round" />
+          <path d="M 18 26 L 42 26 L 42 74 L 82 74" stroke="var(--accent-color)" strokeWidth="14" strokeLinecap="square" strokeLinejoin="round" opacity="0.45" />
+          <path d="M 18 74 L 58 74 L 58 26 L 82 26" stroke="var(--accent-color)" strokeWidth="14" strokeLinecap="square" strokeLinejoin="round" />
         </svg>
-        <span className="font-bold text-[15px] tracking-[-0.02em] text-[var(--text-primary)]">Caption Studio</span>
+        <span className="font-bold text-[15px] tracking-[-0.02em] text-[var(--text-primary)]">BHYND</span>
       </div>
 
       <div className="flex-1 max-w-[320px] mx-5">

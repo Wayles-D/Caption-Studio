@@ -25,6 +25,7 @@ import {
 } from './videoTransform.js';
 import { resolveVideoTransformAtTime } from '../../../shared/videoTransform.js';
 import { appState } from '../state.js';
+import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 
 let overlayEl, boxEl, hitAreaEl, rotateHandleEl;
 let drag = null; // { kind: 'move'|'resize'|'rotate', startClientX, startClientY, start*, moved }
@@ -32,9 +33,11 @@ let rafId = null;
 
 const MOVE_CLICK_THRESHOLD_PX = 4;
 
+// getCanvasContentRect() (see src/js/utils/canvasGeometry.js), NOT
+// .phone-frame's own rect — its 4px CSS border is included in that rect,
+// but resize/rotate need the actual content surface's true center.
 function getPhoneFrameRect() {
-  const frame = document.querySelector('.phone-frame');
-  return frame ? frame.getBoundingClientRect() : null;
+  return getCanvasContentRect();
 }
 
 /** Called once per render tick (see preview.js) — shows/hides the overlay and keeps the box's CSS transform in sync with the video's own, so the selection box always visually wraps the video exactly, at whatever time the playhead is at. */
@@ -43,6 +46,19 @@ export function updateVideoTransformOverlay(currentTime) {
   const active = isVideoTargetSelected();
   overlayEl.classList.toggle('active', active);
   if (!active) return;
+
+  // Overlay is `position: fixed` (see style.css's .caption-transform-overlay
+  // doc comment, shared by this video-target overlay) so .phone-frame's
+  // overflow:hidden can't clip the resize/rotate handles once the video is
+  // panned/zoomed near an edge — needs its own left/top/width/height kept in
+  // sync with the real content rect explicitly every time it's shown.
+  const rect = getPhoneFrameRect();
+  if (rect) {
+    overlayEl.style.left = `${rect.left}px`;
+    overlayEl.style.top = `${rect.top}px`;
+    overlayEl.style.width = `${rect.width}px`;
+    overlayEl.style.height = `${rect.height}px`;
+  }
 
   const resolved = resolveVideoTransformAtTime(appState.videoTransform, currentTime);
   if (boxEl) {

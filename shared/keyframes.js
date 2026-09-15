@@ -84,41 +84,67 @@ function isValidList(list) {
 
 /**
  * Given an incoming field write (e.g. { offsetXPx: 12 }) and the target's
- * EXISTING override object, re-routes any field whose mapped property has
- * already been keyframed at least once into the SAME unified keyframe entry
- * at `time` (creating that entry if none exists yet there) instead of
- * overwriting the plain static field — this is what makes "edit a property
- * normally while its keyframe track is already active" auto-key the right
- * instant, whether the edit came from an on-canvas drag (captions/words,
- * see src/js/components/canvasTransform.js) or a property-inspector control
- * (the video target, see src/js/components/videoTransform.js — same
- * function, same behavior, one shared implementation). A field whose
- * property has never been keyframed is returned completely untouched, so a
- * target nobody has keyframed writes exactly like it did before this
- * feature existed.
+ * EXISTING override object, ACTION-DRIVEN auto-keying: any field whose
+ * mapped property is one of KEYFRAME_PROPERTIES always routes into the
+ * unified keyframe entry at `time` — creating both the entry and the
+ * property's very first keyframe point if neither existed yet, not only
+ * updating an already-active track. This is deliberately unconditional
+ * (earlier versions of this function required the property to already have
+ * a keyframe before an ordinary edit would auto-key it — the diamond button
+ * was the only way to ever START keyframing something); real editors don't
+ * make you pre-declare "this is now animated" before you're allowed to
+ * change something at a point in time.
+ *
+ * The resulting entry is always a FULL snapshot of every KEYFRAME_PROPERTY,
+ * not just the field(s) this particular call happens to touch:
+ * `readCurrentValue(property)` supplies whatever an untouched property
+ * currently resolves to (its own keyframe-interpolated value if it has a
+ * track, else its plain static value) so it's carried forward into this
+ * entry unchanged. This matters because a keyframe entry containing ONLY
+ * `{ rotation: 45 }` would make evaluatePropertyAtTime treat 45 as
+ * rotation's value for the ENTIRE timeline (a single-point track is
+ * constant everywhere) the instant this becomes that property's first
+ * keyframe — silently "moving" every earlier moment in the video too,
+ * rather than leaving everything before this instant exactly as it was and
+ * only introducing motion from here onward. Full-snapshotting is what lets
+ * a later, unrelated edit elsewhere in time correctly interpolate this
+ * property between two real points instead of discovering it only has one.
+ *
+ * Reused identically by an on-canvas drag (captions/words, see
+ * src/js/components/canvasTransform.js) and a property-inspector control
+ * (the video target, see src/js/components/videoTransform.js) — one shared
+ * implementation, one behavior.
  *
  * @param {object} existing - The target's current override object (may be undefined).
  * @param {object} fields - Raw field writes, e.g. `{ offsetXPx: 12, rotationDeg: 5 }`.
  * @param {object} fieldToProperty - PHRASE_FIELD_TO_PROPERTY / WORD_FIELD_TO_PROPERTY / VIDEO_FIELD_TO_PROPERTY.
  * @param {number} time - The playhead time to key at, if any field routes through.
+ * @param {(property: string) => number} readCurrentValue - Resolves a KEYFRAME_PROPERTY's current value (keyframed-or-static) for whatever this call doesn't itself touch.
  * @returns {{ remainingFields: object, nextKeyframes: object[]|null }}
  */
-export function routeFieldsThroughKeyframes(existing, fields, fieldToProperty, time) {
+export function routeFieldsThroughKeyframes(existing, fields, fieldToProperty, time, readCurrentValue) {
   const remainingFields = {};
-  const valuesPatch = {};
-  let anyKeyed = false;
+  const touchedValues = {}; // property -> the NEW value this call is writing
 
   Object.entries(fields).forEach(([field, value]) => {
     const property = fieldToProperty[field];
-    if (property && getPropertyTrack(existing?.keyframes, property).length > 0) {
-      valuesPatch[property] = value;
-      anyKeyed = true;
+    if (property) {
+      touchedValues[property] = value;
     } else {
       remainingFields[field] = value;
     }
   });
 
-  const nextKeyframes = anyKeyed ? upsertKeyframeEntry(existing?.keyframes, time, valuesPatch) : null;
+  if (Object.keys(touchedValues).length === 0) {
+    return { remainingFields, nextKeyframes: null };
+  }
+
+  const valuesPatch = {};
+  KEYFRAME_PROPERTIES.forEach((property) => {
+    valuesPatch[property] = property in touchedValues ? touchedValues[property] : readCurrentValue(property);
+  });
+
+  const nextKeyframes = upsertKeyframeEntry(existing?.keyframes, time, valuesPatch);
   return { remainingFields, nextKeyframes };
 }
 
@@ -138,13 +164,31 @@ export function getPropertyTrack(keyframeList, property) {
 }
 
 /**
+ * Shortest signed angular delta from `fromDeg` to `toDeg`, in (-180, 180] —
+ * so a 350°->10° pair rotates forward 20° (350->360/0->10) instead of naive
+ * linear interpolation's -340° (350 down through 180 to 10, spinning the
+ * long way around). Stored rotation values are already constrained to
+ * [-180, 180] by the timeline's own numeric field range (see
+ * timelinePanel.js's RANGE_BY_FAMILY), but this normalizes regardless of
+ * that so it's correct even if that ever changes.
+ */
+function shortestAngleDelta(fromDeg, toDeg) {
+  let delta = (toDeg - fromDeg) % 360;
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  return delta;
+}
+
+/**
  * Resolves a property track's value at `time`:
  *   - before the first keyframe -> hold the first value
  *   - after the last keyframe -> hold the last value
- *   - between two keyframes -> eased linear interpolation, using the LATER
+ *   - between two keyframes -> eased interpolation, using the LATER
  *     keyframe's own easing (the curve describes the transition INTO that
  *     keyframe, matching how the entrance-animation's own single easing
- *     field is interpreted).
+ *     field is interpreted). `rotation` interpolates by the SHORTEST
+ *     angular path (see shortestAngleDelta) rather than a naive numeric
+ *     lerp; every other property is a plain linear interpolation.
  * Returns undefined when the property has no keyframed points at all.
  */
 export function evaluatePropertyAtTime(keyframeList, property, time) {
@@ -161,6 +205,7 @@ export function evaluatePropertyAtTime(keyframeList, property, time) {
       const span = b.t - a.t;
       const progress = span > 0 ? (time - a.t) / span : 1;
       const eased = applyEasing(progress, b.e || DEFAULT_KEYFRAME_EASING);
+      if (property === 'rotation') return a.v + shortestAngleDelta(a.v, b.v) * eased;
       return a.v + (b.v - a.v) * eased;
     }
   }

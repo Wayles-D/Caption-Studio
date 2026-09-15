@@ -250,7 +250,14 @@ export async function uploadAndExtractAudio(req, res, next) {
       renderedVideoPath: relativeRenderedVideoPath,
       transcription: transcriptionJSON,
       words,
-      phrases
+      phrases,
+      // Lets the frontend warn the user when caption transform keyframes
+      // (position/rotation/scale) and text blend mode silently couldn't
+      // reach this render — those only exist in the graphics pipeline (see
+      // tryRenderCaptionsWithGraphics's own doc comment); the ASS/libass
+      // fallback it swaps to on any failure renders plain, un-transformed
+      // captions with no way to tell from the video alone that it happened.
+      renderedWithEffects: usedGraphicsRenderer
     };
 
     console.log(`[Pipeline] [${baseName}] Returning response payload keys:`, Object.keys(responsePayload));
@@ -402,7 +409,11 @@ export async function regenerateCaptions(req, res, next) {
       success: true,
       message: 'Captions regenerated and video re-rendered successfully.',
       renderedVideoPath: relativeRenderedVideoPath,
-      phrases
+      phrases,
+      // See the matching field on the initial-upload response above —
+      // false means caption transform keyframes/blend mode were silently
+      // dropped this render (ASS fallback).
+      renderedWithEffects: usedGraphicsRenderer
     };
 
     console.log(`[Regenerate] [${baseName}] Returning response payload keys:`, Object.keys(responsePayload));

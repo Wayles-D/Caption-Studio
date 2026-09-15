@@ -1,5 +1,5 @@
 /**
- * Caption Studio Graphics Renderer.
+ * BHYND Graphics Renderer.
  *
  * A single Canvas2D drawing engine meant to eventually replace BOTH the
  * HTML/CSS preview and the ASS/FFmpeg export as the one place that turns a
@@ -159,18 +159,76 @@ const OVERLAY_HORIZONTAL_PADDING_PX = 20;
 const PHONE_FRAME_CSS_WIDTH = 330;
 
 /**
- * Resolves every px-domain drawing quantity as a proportion of the preview's
- * phone-frame box, then scales that proportion to the caller's actual canvas
- * via pxScale = canvasWidth / referenceCssWidth. The preview passes the
- * phone-frame's live on-screen width (so this also absorbs devicePixelRatio);
- * export passes the fixed PHONE_FRAME_CSS_WIDTH constant. Both callers are
- * otherwise identical — this is the ONE place a caption's size/spacing/shadow
- * numbers are computed, so preview and export can't drift apart by having two
- * separately-maintained formulas.
+ * Converts a word-level position override (offsetXPx/offsetYPx — see
+ * src/js/components/canvasTransform.js's drag gestures) from its authored
+ * unit into the caller's own canvas pixels.
+ *
+ * The authored unit is "px within the 330px-wide reference box", the SAME
+ * unit fontSize/wordSpacing/outline/shadow/padding are authored in (see
+ * resolveGeometry, which multiplies each of them by pxScale). Word offsets
+ * were previously the ONE px-domain quantity that skipped that conversion:
+ * they were written in, and applied as, raw canvas backing-store px. Since
+ * the preview canvas (~168-322px wide, sized from the live on-screen
+ * phone-frame) and the export canvas (the output video's real width, e.g.
+ * 1080px) have very different pixel widths, the same stored number meant a
+ * completely different distance in each renderer — a word dragged far left
+ * in the preview travelled ~6x less of the frame in export, landing back
+ * near its default laid-out position. Confirmed by pixel-scanning both
+ * renderers with an identical payload: preview put the glyph's center at
+ * 21.1% of frame width, export at 44.6% (default center is 50%).
+ *
+ * Deliberately derived from canvasWidth and the constant directly rather
+ * than from geometry.pxScale: the preview currently passes its LIVE frame
+ * width as resolveGeometry's referenceCssWidth (not the fixed 330), so
+ * pxScale is not a reliable "canvas px per reference px" there. This
+ * formula is correct in both renderers regardless of that.
  */
-function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, referenceCssWidth) {
+export function wordOffsetToCanvasPx(offset, canvasWidth) {
+  if (!offset) return 0;
+  return offset * (canvasWidth / PHONE_FRAME_CSS_WIDTH);
+}
+
+/** Inverse of wordOffsetToCanvasPx — canvas px back into the authored 330-box unit. */
+export function canvasPxToWordOffset(canvasPx, canvasWidth) {
+  if (!canvasPx || !canvasWidth) return 0;
+  return canvasPx * (PHONE_FRAME_CSS_WIDTH / canvasWidth);
+}
+
+/**
+ * Resolves every px-domain drawing quantity as a proportion of the preview's
+ * phone-frame box, then scales that proportion to the caller's actual canvas.
+ * This is the ONE place a caption's size/spacing/shadow numbers are computed,
+ * so preview and export can't drift apart by having two separately-maintained
+ * formulas.
+ *
+ * TWO DIFFERENT SCALES, deliberately — they are not interchangeable:
+ *
+ *  - `pxScale` = canvasWidth / PHONE_FRAME_CSS_WIDTH — "canvas px per
+ *    AUTHORED px". Every authored quantity (font size, word spacing,
+ *    outline, shadow, box padding, keyword emphasis) multiplies by this.
+ *    Always referenced to the fixed 330px box, in BOTH renderers, so a 14px
+ *    font always covers 14/330 of the frame no matter what resolution it
+ *    is finally rasterised at. This used to take `referenceCssWidth` from
+ *    the caller, and the preview passed its LIVE on-screen frame width —
+ *    which made pxScale collapse to devicePixelRatio and silently redefined
+ *    the authored unit as "1/live-width of the frame". Whenever the layout
+ *    shrank the phone-frame below 330px (the common case — it is ~168px at
+ *    a 1280x720 window), the preview drew every caption proportionally
+ *    LARGER than the export did: measured 56.5% of frame width in preview
+ *    vs 27.3% in export for one identical caption, converging to 29.5% vs
+ *    27.3% once the frame was allowed to reach its natural ~322px.
+ *
+ *  - `cssPxScale` = canvasWidth / cssPixelWidth — "canvas px per ON-SCREEN
+ *    CSS px". Nothing drawn here uses it; it exists purely so the measure*
+ *    functions can hand the on-canvas transform overlay
+ *    (src/js/components/canvasTransform.js) the number it needs to map
+ *    canvas coordinates to DOM coordinates for its selection box/handles.
+ *    Export has no DOM and ignores it.
+ */
+function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth) {
   const profile = cssConfig.profile;
-  const pxScale = canvasWidth / (referenceCssWidth || canvasWidth);
+  const pxScale = canvasWidth / PHONE_FRAME_CSS_WIDTH;
+  const cssPxScale = canvasWidth / (cssPixelWidth || canvasWidth);
 
   const fontSizePx = (parseFloat(cssConfig.text.fontSize) || 14) * pxScale;
   const wordSpacingPx = (cssConfig.wordSpacingPx || 0) * pxScale;
@@ -233,7 +291,7 @@ function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, reference
   const borderRadiusPx = (parseFloat(cssConfig.text.borderRadius) || 0) * pxScale;
   const backgroundColor = cssConfig.backgroundColor;
 
-  return { pxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge, rotationDeg, isBoxed, boxPadXPx, boxPadYPx, borderRadiusPx, backgroundColor };
+  return { pxScale, cssPxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge, rotationDeg, isBoxed, boxPadXPx, boxPadYPx, borderRadiusPx, backgroundColor };
 }
 
 /**
@@ -552,7 +610,13 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
         targetCtx.save();
         const pivotX = word.centerX;
         const pivotY = word.centerY;
-        targetCtx.translate(pivotX + (override.offsetXPx || 0), pivotY + (override.offsetYPx || 0));
+        // Offsets are authored in 330-box px, NOT canvas px — see
+        // wordOffsetToCanvasPx's doc comment for why applying them raw made
+        // a dragged word land in a different place in export than preview.
+        targetCtx.translate(
+          pivotX + wordOffsetToCanvasPx(override.offsetXPx, canvasWidth),
+          pivotY + wordOffsetToCanvasPx(override.offsetYPx, canvasWidth)
+        );
         if (override.rotationDeg) targetCtx.rotate((override.rotationDeg * Math.PI) / 180);
         if (override.fontScale && override.fontScale !== 1) targetCtx.scale(override.fontScale, override.fontScale);
         targetCtx.translate(-pivotX, -pivotY);
@@ -762,7 +826,13 @@ export function measureSentenceFrame(ctx, opts) {
     centerX: computed.centerX,
     centerY: computed.centerY,
     rotationDeg: geometry.rotationDeg,
-    pxScale: geometry.pxScale,
+    // The ON-SCREEN CSS mapping, NOT the authored pxScale — this box is
+    // consumed by the DOM overlay (src/js/components/canvasTransform.js),
+    // which needs "canvas px per CSS px" to place its selection box and
+    // handles. Deliberately a DIFFERENT name from geometry.pxScale: the two
+    // are different numbers, and one px-scale name carrying two meanings is
+    // exactly what silently broke preview/export parity before.
+    cssPxScale: geometry.cssPxScale,
     words
   };
 }
@@ -1140,7 +1210,11 @@ function paintRollingStackLines(ctx, positionedLines, params, currentTime, canva
       const pivotY = word.y + word.height / 2;
       if (override) {
         ctx.save();
-        ctx.translate(pivotX + (override.offsetXPx || 0), pivotY + (override.offsetYPx || 0));
+        // Same authored-unit conversion as sentence mode's paint step above.
+        ctx.translate(
+          pivotX + wordOffsetToCanvasPx(override.offsetXPx, canvasWidth),
+          pivotY + wordOffsetToCanvasPx(override.offsetYPx, canvasWidth)
+        );
         if (override.rotationDeg) ctx.rotate((override.rotationDeg * Math.PI) / 180);
         if (override.fontScale && override.fontScale !== 1) ctx.scale(override.fontScale, override.fontScale);
         ctx.translate(-pivotX, -pivotY);
@@ -1344,7 +1418,13 @@ export function measureRollingStackFrame(ctx, opts) {
     centerX: layout.centerX,
     centerY: layout.centerY,
     rotationDeg: geometry.rotationDeg,
-    pxScale: geometry.pxScale,
+    // The ON-SCREEN CSS mapping, NOT the authored pxScale — this box is
+    // consumed by the DOM overlay (src/js/components/canvasTransform.js),
+    // which needs "canvas px per CSS px" to place its selection box and
+    // handles. Deliberately a DIFFERENT name from geometry.pxScale: the two
+    // are different numbers, and one px-scale name carrying two meanings is
+    // exactly what silently broke preview/export parity before.
+    cssPxScale: geometry.cssPxScale,
     chunks
   };
 }

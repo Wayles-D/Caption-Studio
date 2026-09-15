@@ -1,8 +1,8 @@
 /**
- * Left Sidebar Inspector UI Component for Caption Studio
+ * Left Sidebar Inspector UI Component for BHYND
  */
 import { appState, updateState, subscribe, getStyleParams } from '../state.js';
-import { getCSSPreviewFromConfig, resolveUnifiedShadowParams, CREATOR_PROFILES } from '../../../shared/captionConfig.js';
+import { getCSSPreviewFromConfig, resolveUnifiedShadowParams } from '../../../shared/captionConfig.js';
 import { initNumericControl } from './numericControl.js';
 import { getCurrentProfile } from '../utils/colorFallbacks.js';
 
@@ -55,24 +55,31 @@ function getFallbackUnifiedShadow() {
  */
 const numeric = {};
 
-// Guards against double-initialization: initSidebarInspector() is meant to
-// run exactly ONCE for the page's lifetime (it's a one-time getElementById +
-// addEventListener wiring pass, not per-render styling), called from
-// SidebarInspector.jsx's `useEffect(() => { initSidebarInspector(); }, [])`.
-// A plain effect like that normally only runs once — but Vite/React Fast
-// Refresh can remount a component (re-running its effects, with no cleanup
-// to undo the first run) whenever this file's own source changes. Without
-// this guard, each such remount during a dev session attaches a second,
-// third, ... set of listeners on top of the still-live first set (most
-// visibly on numericControl.js's sliders). A real page load (or production
-// build, which never Fast-Refreshes) only ever calls this once anyway, so
-// the guard is a no-op there.
-let initialized = false;
+// Guards the ONE subscribe('*', ...) call at the end of initSidebarInspector
+// so it registers exactly once for the page's lifetime, however many times
+// that function itself gets called — see its own doc comment there.
+let subscribedToStateChanges = false;
 
+// NOTE: this used to guard against double-initialization with a permanent
+// `if (initialized) return` — correct back when SidebarInspector.jsx was a
+// single always-mounted sidebar, but WRONG now that it's shown one section
+// at a time in a bottom-sheet/side-panel (see its `sectionFilter` prop):
+// switching tools directly (e.g. Style -> Text -> Style, without closing in
+// between) does NOT unmount/remount this component — React reuses the SAME
+// instance across different `sectionFilter` props, since neither the
+// component type nor its position in the tree changes, only which
+// section's DOM its render produces. A permanent "only ever wire once"
+// guard (or even just calling this from a mount-only effect — see
+// SidebarInspector.jsx) meant whichever section happened to be visible the
+// FIRST time this ran got its listeners attached, and every OTHER section
+// shown afterward via a direct tool switch (e.g. Rolling Stack's
+// caption-mode radios, or the preset buttons) got fresh DOM nodes with NO
+// listeners ever attached to them. SidebarInspector.jsx now calls this
+// again every time `sectionFilter` changes, so re-querying and
+// re-attaching on every call here is exactly correct — there's nothing
+// stale left over to double-bind, since each call targets whatever's
+// CURRENTLY in the DOM.
 export function initSidebarInspector() {
-  if (initialized) return;
-  initialized = true;
-
   // 1. Accordion Header Toggle Binding
   const accordionHeaders = document.querySelectorAll('.accordion-header');
   accordionHeaders.forEach(header => {
@@ -82,67 +89,24 @@ export function initSidebarInspector() {
     });
   });
 
-  // 2. Preset Selection Buttons
-  const presetBtns = document.querySelectorAll('.preset-btn');
-  presetBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      presetBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      const presetKey = btn.dataset.preset;
-      // Presets define style only (typography, border, shadow, padding) — never colors.
-      // Custom color overrides must survive a preset switch.
-      const updates = { currentPreset: presetKey };
-      // Font Family is otherwise a global override independent of preset; a
-      // preset can opt into a one-time convenience default the moment it's
-      // selected via autoFontFamilyOnSelect (still just a regular override
-      // afterward — the user can change it like any other preset's font).
-      const targetProfile = CREATOR_PROFILES[presetKey];
-      if (targetProfile?.autoFontFamilyOnSelect) {
-        updates.fontFamily = targetProfile.autoFontFamilyOnSelect;
-      }
-      // Same one-time-convenience-default pattern as autoFontFamilyOnSelect
-      // above — animationMode/position both already have concrete, non-null
-      // defaults in STYLE_DEFAULTS, so a profile's own defaultAnimationMode
-      // fallback (in shared/captionConfig.js) never gets a chance to apply on
-      // its own; these two fields push a preset's intended reveal/placement
-      // into state once, still fully overridable afterward like any control.
-      if (targetProfile?.autoAnimationModeOnSelect) {
-        updates.animationMode = targetProfile.autoAnimationModeOnSelect;
-      }
-      if (targetProfile?.autoPositionOnSelect) {
-        updates.position = targetProfile.autoPositionOnSelect;
-      }
-      updateState(updates);
-    });
-  });
+  // 2. Preset Selection Buttons — now a real React component
+  // (SidebarInspector.jsx's PRESET_BUTTONS/applyPresetSelection), reading
+  // currentPreset from useEditorStore and re-rendering on change instead of
+  // a manually-toggled `.active` class here. See that file's own comment
+  // for why: "one state, several DOM effects" is exactly the shape that
+  // made the OLD imperative wiring here fragile (a section re-wired on the
+  // wrong mount silently never got its listeners at all).
 
   // 3. Typography Inputs
-  const captionModeRadios = document.getElementsByName('caption-mode');
   const fontFamilySelect = document.getElementById('font-family-select');
   const textCaseRadios = document.getElementsByName('text-case');
 
-  captionModeRadios.forEach(radio => {
-    radio.addEventListener('change', (e) => {
-      const updates = { captionMode: e.target.value };
-      // Rolling Stack needs genuinely distinct normal/keyword typography to
-      // read as a two-layer stack; if the user hasn't already picked a
-      // keyword-driven preset, default to EDIT's Poppins + PP Editorial New
-      // Ultra Bold Italic pairing (this spec's default typography) the first
-      // time Rolling Stack is chosen — the same one-time convenience-default
-      // pattern a preset's own autoFontFamilyOnSelect already uses. Every
-      // font/color is still a regular override afterward, and this never
-      // re-fires once a keyword-driven preset is active.
-      if (e.target.value === 'rolling-stack' && !getCurrentProfile().keywordDriven) {
-        const editProfile = CREATOR_PROFILES['poppins-editorial'];
-        updates.currentPreset = 'poppins-editorial';
-        if (editProfile?.autoFontFamilyOnSelect) {
-          updates.fontFamily = editProfile.autoFontFamilyOnSelect;
-        }
-      }
-      updateState(updates);
-    });
-  });
+  // Caption Mode radios — now a real React component (SidebarInspector.jsx's
+  // handleCaptionModeChange), same reasoning as the preset buttons above:
+  // this control's own cascading side effects (the Rolling Stack settings
+  // group's visibility, and the one-time preset+font auto-switch) are
+  // exactly the "one state affects multiple things" shape that a DOM-query-
+  // based sync function keeps getting subtly out of step with.
 
   // Rolling Stack: words-per-layer (2/3, user-controlled, never auto-decided)
   // and layer alignment — only meaningful while Rolling Stack is selected;
@@ -229,14 +193,11 @@ export function initSidebarInspector() {
     onChange: (v) => updateState({ backgroundOpacity: v })
   });
 
-  // 4c. Shadow Mode (None / Individual / Unified) & the Unified shadow's own controls
-  const shadowModeRadios = document.getElementsByName('shadow-mode');
-
-  shadowModeRadios.forEach(radio => {
-    radio.addEventListener('change', (e) => {
-      updateState({ shadowMode: e.target.value });
-    });
-  });
+  // 4c. Shadow Mode (None / Individual / Unified) — now a real React
+  // component (SidebarInspector.jsx), same "one state, several DOM
+  // effects" reasoning as the preset buttons/caption mode above: it drives
+  // its own selected tab AND which of three settings groups (Individual's
+  // sliders, its own color swatch, Unified's controls) is visible.
 
   // Text Blend Mode: 'normal' is stored as null ("unset, defer to the active
   // preset's own textBlendMode" — same convention activeWordColor/shadowColor
@@ -415,10 +376,21 @@ export function initSidebarInspector() {
     onChange: (v) => updateState({ keywordOpacity: v })
   });
 
-  // 9. Subscribe to global state changes to synchronize UI controls
-  subscribe('*', () => {
-    syncSidebarUI();
-  });
+  // 9. Subscribe to global state changes to synchronize UI controls — only
+  // ONCE ever (unlike everything above, which re-runs per call — see this
+  // function's own doc comment): syncSidebarUI() re-queries the DOM fresh
+  // every time it fires (querySelectorAll/getElementById, not a captured
+  // reference), so it stays correct regardless of which section is
+  // currently visible. Subscribing again on every call would leak one more
+  // duplicate subscription per tool switch for the lifetime of the page —
+  // still correct (each would just redundantly re-run the same sync), but
+  // needlessly growing memory/work over a long editing session.
+  if (!subscribedToStateChanges) {
+    subscribedToStateChanges = true;
+    subscribe('*', () => {
+      syncSidebarUI();
+    });
+  }
 
   syncSidebarUI();
 }
@@ -427,24 +399,11 @@ export function initSidebarInspector() {
  * Synchronize input controls with global appState values
  */
 function syncSidebarUI() {
-  // Preset Buttons
-  const presetBtns = document.querySelectorAll('.preset-btn');
-  presetBtns.forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.preset === appState.currentPreset);
-  });
-
-  // Caption Mode
-  const captionModeRadios = document.getElementsByName('caption-mode');
-  const captionMode = (appState.captionMode === 'word' || appState.captionMode === 'rolling-stack')
-    ? appState.captionMode
-    : 'sentence';
-  captionModeRadios.forEach(r => { r.checked = r.value === captionMode; });
-
-  // Rolling Stack's own controls only make sense while it's the active mode.
-  const rollingStackSettings = document.getElementById('rolling-stack-settings');
-  if (rollingStackSettings) {
-    rollingStackSettings.style.display = captionMode === 'rolling-stack' ? '' : 'none';
-  }
+  // Preset Buttons and Caption Mode are now real React components
+  // (SidebarInspector.jsx's PRESET_BUTTONS/handleCaptionModeChange) reading
+  // directly from useEditorStore — nothing to sync here anymore, including
+  // the Rolling Stack settings group's visibility, which used to be derived
+  // from captionMode right here too.
   document.getElementsByName('rolling-stack-layer-count').forEach((r) => {
     r.checked = parseInt(r.value, 10) === (appState.rollingStackLayerCount ?? 2);
   });
@@ -473,20 +432,8 @@ function syncSidebarUI() {
   numeric.textOpacity?.sync(appState.textOpacity ?? 100);
   numeric.backgroundOpacity?.sync(appState.backgroundOpacity ?? 100);
 
-  // Shadow Mode + Unified Shadow controls
-  const shadowMode = appState.shadowMode || 'individual';
-  const shadowModeRadios = document.getElementsByName('shadow-mode');
-  shadowModeRadios.forEach(r => { r.checked = r.value === shadowMode; });
-
-  const individualShadowControls = document.getElementById('individual-shadow-controls');
-  if (individualShadowControls) individualShadowControls.hidden = shadowMode !== 'individual';
-  // `.hidden` alone doesn't work here: .color-picker-item's own `display:
-  // flex` in style.css overrides the [hidden] UA default (author styles always
-  // beat UA styles), so the display value has to be set explicitly instead.
-  const shadowColorItem = document.getElementById('shadow-color-item');
-  if (shadowColorItem) shadowColorItem.style.display = shadowMode !== 'individual' ? 'none' : '';
-  const unifiedShadowControls = document.getElementById('unified-shadow-controls');
-  if (unifiedShadowControls) unifiedShadowControls.hidden = shadowMode !== 'unified';
+  // Shadow Mode + Unified Shadow controls are now a real React component
+  // (SidebarInspector.jsx) — nothing to sync here anymore.
 
   // Text Blend Mode: reflects the user's own override if set, else the
   // active preset's own textBlendMode, else 'normal' — mirrors

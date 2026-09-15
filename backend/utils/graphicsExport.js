@@ -39,7 +39,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   try {
     phrases = sanitizePhraseTimings(groupWordsToPhrases({ words }));
   } catch (err) {
-    console.error(`[GraphicsExport] Failed to group words into phrases, falling back to ASS: ${err.message}`);
+    console.error(`[GraphicsExport] Failed to group words into phrases, falling back to ASS: ${err.message}`, err.stack);
     return false;
   }
   if (!phrases.length) return false;
@@ -64,7 +64,14 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     console.log(`[GraphicsExport] Rendered ${segments.length} segments via the graphics pipeline (preset: ${params.preset || 'default'}).`);
     return true;
   } catch (err) {
+    // The full stack (not just err.message) is the whole point of this log
+    // line — this catch is the ONLY place a graphics-render bug ever
+    // surfaces (see this function's own doc comment: failures here are
+    // swallowed and silently degrade to the ASS pipeline, which can't
+    // reproduce caption transform keyframes or text blend mode at all), so
+    // without it a real bug here is unfindable from logs alone.
     console.error(`[GraphicsExport] Graphics render failed, falling back to ASS: ${err.message}`);
+    console.error(err.stack);
     return false;
   } finally {
     try {

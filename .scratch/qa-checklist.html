@@ -1,0 +1,659 @@
+<title>Caption Studio QA Bench</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+  :root {
+    --ink: #14201A;
+    --paper: #F6F5EF;
+    --panel: #FFFFFF;
+    --panel-2: #EFEDE3;
+    --line: #D8D6C9;
+    --text: #1B2620;
+    --text-dim: #5B6960;
+    --scope: #1E9A5C;
+    --scope-ink: #FFFFFF;
+    --scope-glow: rgba(30, 154, 92, 0.25);
+    --amber: #B4700A;
+    --amber-wash: rgba(180, 112, 10, 0.12);
+    --danger: #B23A2E;
+    --shadow: 0 1px 2px rgba(20, 32, 26, 0.06), 0 8px 24px rgba(20, 32, 26, 0.06);
+    --radius: 10px;
+    --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #E9EEE9;
+      --paper: #0A0F0C;
+      --panel: #10160F;
+      --panel-2: #151C14;
+      --line: #223226;
+      --text: #DCE6DF;
+      --text-dim: #7C9186;
+      --scope: #66F0A6;
+      --scope-ink: #06180F;
+      --scope-glow: rgba(102, 240, 166, 0.18);
+      --amber: #FFB454;
+      --amber-wash: rgba(255, 180, 84, 0.12);
+      --danger: #FF8A75;
+      --shadow: 0 1px 0 rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ink: #E9EEE9;
+    --paper: #0A0F0C;
+    --panel: #10160F;
+    --panel-2: #151C14;
+    --line: #223226;
+    --text: #DCE6DF;
+    --text-dim: #7C9186;
+    --scope: #66F0A6;
+    --scope-ink: #06180F;
+    --scope-glow: rgba(102, 240, 166, 0.18);
+    --amber: #FFB454;
+    --amber-wash: rgba(255, 180, 84, 0.12);
+    --danger: #FF8A75;
+    --shadow: 0 1px 0 rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    padding-bottom: 64px;
+  }
+
+  h1, h2, h3 { text-wrap: balance; }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+
+  /* ---------- Header / bench panel ---------- */
+  .bench {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    padding: 18px 0 14px;
+  }
+
+  .bench-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .bench-title {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .bench-title strong {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .bench-readout {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--scope);
+    letter-spacing: 0.02em;
+  }
+
+  .bench-readout span {
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 500;
+    margin-left: 6px;
+  }
+
+  .meter {
+    margin-top: 10px;
+    height: 8px;
+    border-radius: 5px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .meter-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--scope), var(--scope));
+    box-shadow: 0 0 12px var(--scope-glow);
+    width: 0%;
+    transition: width 300ms ease;
+  }
+
+  .bench-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    padding: 7px 12px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: border-color 150ms, color 150ms;
+  }
+
+  .btn:hover { border-color: var(--scope); color: var(--scope); }
+  .btn:focus-visible { outline: 2px solid var(--scope); outline-offset: 2px; }
+
+  .since {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    letter-spacing: 0.02em;
+  }
+
+  /* ---------- Intro ---------- */
+  .intro {
+    padding: 22px 0 6px;
+  }
+
+  .intro p {
+    color: var(--text-dim);
+    max-width: 62ch;
+  }
+
+  .intro .legend {
+    display: flex;
+    gap: 16px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+    font-size: 12.5px;
+    color: var(--text-dim);
+  }
+
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    line-height: 1.6;
+  }
+
+  .chip.touch { background: var(--amber-wash); color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); }
+  .chip.wysiwyg { background: var(--scope-glow); color: var(--scope); border: 1px solid color-mix(in srgb, var(--scope) 40%, transparent); }
+
+  /* ---------- Passes ---------- */
+  .pass {
+    margin-top: 26px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .pass-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+  }
+
+  .pass-head-left { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+
+  .pass-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--scope);
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+
+  .pass-title {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pass-count {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+
+  .pass-note {
+    padding: 10px 18px 0;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .items { padding: 6px 8px 10px; }
+
+  .item {
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 10px;
+    padding: 10px 10px;
+    border-radius: 8px;
+    align-items: start;
+  }
+
+  .item:hover { background: var(--panel-2); }
+
+  .item input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    border: 1.5px solid var(--line);
+    background: var(--panel);
+    cursor: pointer;
+    margin-top: 2px;
+    position: relative;
+    transition: border-color 150ms, background 150ms;
+  }
+
+  .item input[type="checkbox"]:checked {
+    background: var(--scope);
+    border-color: var(--scope);
+  }
+
+  .item input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: 2px;
+    width: 5px;
+    height: 10px;
+    border: solid var(--scope-ink);
+    border-width: 0 2px 2px 0;
+    transform: rotate(40deg);
+  }
+
+  .item input[type="checkbox"]:focus-visible { outline: 2px solid var(--scope); outline-offset: 2px; }
+
+  .item-body { min-width: 0; }
+
+  .item-label {
+    font-size: 14px;
+    color: var(--text);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .item.checked .item-label { color: var(--text-dim); }
+  .item.checked .step { text-decoration: line-through; text-decoration-color: var(--line); text-decoration-thickness: 1.5px; }
+
+  .item-expect {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  .item-expect b { color: var(--scope); font-weight: 600; }
+
+  /* ---------- Footer ---------- */
+  .footer {
+    margin-top: 36px;
+    padding: 18px 0 6px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .footer .theme-toggle {
+    display: flex;
+    gap: 6px;
+  }
+
+  @media (max-width: 600px) {
+    .bench-readout { font-size: 18px; }
+    .pass-title { font-size: 14px; }
+  }
+</style>
+
+<div class="wrap">
+  <div class="bench">
+    <div class="bench-top">
+      <div class="bench-title">Caption Studio &nbsp;/&nbsp; <strong>QA Bench</strong></div>
+      <div class="bench-readout" id="readout">0<span>/ 0 checks</span></div>
+    </div>
+    <div class="meter"><div class="meter-fill" id="meterFill"></div></div>
+    <div class="bench-actions">
+      <button class="btn" id="resetBtn">Start new pass</button>
+      <button class="btn" id="checkAllVisible">Check all in view</button>
+      <span class="since" id="since"></span>
+    </div>
+  </div>
+
+  <div class="intro">
+    <p>A manual regression pass for the keyframe/export work — run it top to bottom on a real upload before calling a build good. Every check states what you should actually see, not just what to click.</p>
+    <div class="legend">
+      <span class="legend-item"><span class="chip touch">TOUCH</span> do this on the Android device itself, not desktop Chrome DevTools' mobile emulator</span>
+      <span class="legend-item"><span class="chip wysiwyg">WYSIWYG</span> compare the exported file frame-for-frame against what the preview showed</span>
+    </div>
+  </div>
+
+  <div id="passes"></div>
+
+  <div class="footer">
+    <span>Progress is saved locally on this device/browser — resets only when you hit "Start new pass".</span>
+    <span class="theme-toggle">
+      <button class="btn" id="themeLight">Light</button>
+      <button class="btn" id="themeDark">Dark</button>
+      <button class="btn" id="themeSystem">System</button>
+    </span>
+  </div>
+</div>
+
+<script>
+(function () {
+  var DATA = [
+    {
+      title: 'Upload & baseline',
+      note: 'Confirm the pipeline runs end to end before testing anything specific to keyframes.',
+      items: [
+        { step: 'Upload a real video (not "Try Demo Video") and let transcription finish.', expect: 'Words appear in the Transcript panel matching the audio.' },
+        { step: 'Scrub the timeline ruler from 0:00 to the end.', expect: 'The playhead line tracks the click position; captions update live underneath it.' },
+        { step: 'Toggle the theme switch top-right.', expect: 'The whole UI switches light/dark with no unstyled or invisible text anywhere.' }
+      ]
+    },
+    {
+      title: 'Presets, style & auto-switch',
+      note: 'These drive several things at once from one click — that cascade is what to watch.',
+      items: [
+        { step: 'Open Text, pick Rolling Stack, then switch straight to Style (do not close Text first).', expect: 'Style panel highlights <b>EDIT</b>, not Yellow — the preset actually changed, not just the preview.' },
+        { step: 'Check the right sidebar\'s Video Inspector tags.', expect: 'Shows Poppins / POPPINS-EDITORIAL, matching the highlighted preset.' },
+        { step: 'Click CHROME preset directly from Style.', expect: 'Preview text picks up the blend/italic look immediately; CHROME stays highlighted.' },
+        { step: 'Set Shadow Mode to Unified, then None, then back to Individual.', expect: 'Each mode shows only its own controls (Unified color / nothing / Individual sliders) — never two at once, never none.' },
+        { step: 'Switch directly between Text → Style → Text → Style five times.', expect: 'Every control still responds on the first click each time — nothing goes dead after switching.' }
+      ]
+    },
+    {
+      title: 'Caption modes',
+      note: '',
+      items: [
+        { step: 'Switch Sentence → Word → Rolling Stack → Sentence.', expect: 'Preview layout changes correctly each time; no leftover Rolling Stack layers in Sentence mode.' },
+        { step: 'In Rolling Stack, change Words per Layer and Layer Alignment.', expect: 'Preview reflows immediately to match.' }
+      ]
+    },
+    {
+      title: 'On-canvas transform & scope',
+      note: 'This Caption vs All Captions changes WHERE an edit is saved, not how it looks right now.',
+      items: [
+        { step: 'Select "This Caption" scope, drag one caption to a new spot.', expect: 'Only that specific caption instance moves; scrub elsewhere in the timeline and other captions stay put.' },
+        { step: 'Switch to "All Captions" scope, drag a caption.', expect: 'Every caption without its own override now uses the new position — check a second, later caption on the timeline.' },
+        { step: 'Resize and rotate a caption using the corner/rotate handles.', expect: 'Scale and rotation apply around the caption\'s own center, not the frame\'s corner.' },
+        { step: 'Drag a single WORD inside a caption (not the whole block).', expect: 'Only that word moves; the rest of the caption stays in place.' }
+      ]
+    },
+    {
+      title: 'Keyframes — action-driven',
+      note: 'The core of this pass: dragging/rotating should key automatically. You should never need the diamond for this to work.',
+      items: [
+        { step: 'Move the playhead to ~0:02, select a caption, drag it — do NOT click the diamond first.', expect: 'A ◆ appears on the KEYFRAMES lane at 0:02 immediately.' },
+        { step: 'Move the playhead to ~0:05 on the same caption, rotate it.', expect: 'A second ◆ appears at 0:05. Open Advanced: position at 0:05 still shows your 0:02 drag’s values, not reset to 0/0.' },
+        { step: 'Scrub freely between 0:00 and the end, back and forth, several times.', expect: 'No new ◆ appears anywhere on the KEYFRAMES lane just from scrubbing.' },
+        { step: 'Park the playhead exactly between your two keyframes.', expect: 'Preview shows a position/rotation partway between the two — visibly mid-transition, not snapped to either end.' },
+        { step: 'Click the ◆ Keyframe button once on a fresh moment.', expect: 'A new keyframe appears at the playhead capturing the full current state.' },
+        { step: 'Click ◆ Keyframe again at the exact same spot.', expect: 'No duplicate marker — same single ◆, values updated in place.' },
+        { step: 'Drag a ◆ marker left/right along the KEYFRAMES lane.', expect: 'The keyframe’s time moves; the transition reflows around its new position.' },
+        { step: 'Select a ◆ and press Delete.', expect: 'That keyframe is gone; the property holds whatever the remaining keyframes resolve to.' },
+        { step: 'Make an edit, then click the timeline’s Undo button.', expect: 'The specific edit is undone cleanly — no orphaned keyframe left behind.' }
+      ]
+    },
+    {
+      title: 'Video’s own keyframes',
+      note: 'Separate from caption keyframes — the whole frame moving/zooming/rotating.',
+      items: [
+        { step: 'Select the 🎬 Video chip, keyframe a zoom+pan at one time and a different one later.', expect: 'The whole video visibly pans/zooms between those two points during playback.' },
+        { step: 'With a Chrome/blend-style preset active, repeat the above.', expect: 'Caption blend effect AND the video’s own zoom/rotation both show together in preview.' }
+      ]
+    },
+    {
+      title: 'Color picker',
+      items: [
+        { step: 'Open any color swatch, drag inside the saturation square.', expect: 'Color updates live; the picker stays open the whole drag.' },
+        { step: 'Type a hex value directly into the hex field.', expect: 'Swatch updates to match; picker stays open.' },
+        { step: 'Click somewhere else entirely on the page.', expect: 'Picker closes normally.' }
+      ]
+    },
+    {
+      title: 'Layout — bottom dock & sidebar',
+      items: [
+        { step: 'On desktop width, confirm the right sidebar is visible without clicking anything.', expect: 'Shows Video Inspector by default, permanently docked.' },
+        { step: 'Open Transcript from the bottom bar, then close it.', expect: 'Sidebar shows Transcript, then reverts to Video Inspector — it never disappears entirely.' },
+        { step: 'On the Android device, open each bottom-bar tool one at a time.', tag: 'touch', expect: 'Each opens a full sheet above the bar; dragging inside a slider never closes the sheet.' },
+        { step: 'On the Android device, scroll a long panel (e.g. Style with Unified Shadow open).', tag: 'touch', expect: 'Content scrolls smoothly with no visible scrollbar track.' },
+        { step: 'On the Android device, swipe the bottom icon strip left/right.', tag: 'touch', expect: 'The strip scrolls horizontally if it overflows; no icons are ever cut off unreachable.' }
+      ]
+    },
+    {
+      title: 'Export — WYSIWYG verification',
+      note: 'This is the check that matters most: what exports must be what you saw.',
+      items: [
+        { step: 'With at least one caption keyframe, one video keyframe, and a non-default preset all active, click Export.', expect: 'No "rendered without effects" warning toast appears.' },
+        { step: 'If the warning DOES appear, open the server console.', expect: 'A full stack trace is logged (not just one line) — capture it before retrying.', tag: 'wysiwyg' },
+        { step: 'Play the exported file at the exact times you placed keyframes (e.g. 0:02 and 0:05).', tag: 'wysiwyg', expect: 'Position/rotation/scale at those instants match what the editor preview showed at the same times.' },
+        { step: 'Check the exported file between two keyframes.', tag: 'wysiwyg', expect: 'Motion is smoothly interpolated, not a hard jump cut between the two states.' },
+        { step: 'Check the preset’s look (font, color, blend/Chrome effect) in the export.', tag: 'wysiwyg', expect: 'Matches the preview exactly — no fallback plain-white opaque text.' },
+        { step: 'Check Rolling Stack / keyword styling in the export, if used.', tag: 'wysiwyg', expect: 'Layer stacking and keyword tier styling match the preview.' }
+      ]
+    },
+    {
+      title: 'Quick regression sweep',
+      note: 'Fast re-checks of things that have broken before — run these last.',
+      items: [
+        { step: 'Re-render / regenerate after editing the transcript text.', expect: 'New wording appears burned into the exported captions.' },
+        { step: 'Reload the app fresh and repeat one Rolling Stack + preset switch.', expect: 'Still works identically to a mid-session switch — no first-load-only bug.' }
+      ]
+    }
+  ];
+
+  var passesEl = document.getElementById('passes');
+  var allCheckboxes = [];
+  var STORAGE_KEY = 'cs-qa-bench-v1';
+  var SINCE_KEY = 'cs-qa-bench-since-v1';
+
+  function loadState() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (e) { return {}; }
+  }
+  function saveState(state) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  var state = loadState();
+
+  DATA.forEach(function (pass, pIdx) {
+    var passEl = document.createElement('div');
+    passEl.className = 'pass';
+
+    var head = document.createElement('div');
+    head.className = 'pass-head';
+    var left = document.createElement('div');
+    left.className = 'pass-head-left';
+    var num = document.createElement('span');
+    num.className = 'pass-num';
+    num.textContent = 'PASS ' + String(pIdx + 1).padStart(2, '0');
+    var title = document.createElement('span');
+    title.className = 'pass-title';
+    title.textContent = pass.title;
+    left.appendChild(num);
+    left.appendChild(title);
+    var count = document.createElement('span');
+    count.className = 'pass-count';
+    head.appendChild(left);
+    head.appendChild(count);
+    passEl.appendChild(head);
+
+    if (pass.note) {
+      var noteEl = document.createElement('div');
+      noteEl.className = 'pass-note';
+      noteEl.textContent = pass.note;
+      passEl.appendChild(noteEl);
+    }
+
+    var itemsEl = document.createElement('div');
+    itemsEl.className = 'items';
+
+    pass.items.forEach(function (it, iIdx) {
+      var id = 'p' + pIdx + '-i' + iIdx;
+      var row = document.createElement('label');
+      row.className = 'item';
+      row.setAttribute('for', id);
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.id = id;
+      cb.checked = !!state[id];
+      if (cb.checked) row.classList.add('checked');
+
+      var body = document.createElement('div');
+      body.className = 'item-body';
+
+      var labelEl = document.createElement('div');
+      labelEl.className = 'item-label';
+      var stepSpan = document.createElement('span');
+      stepSpan.className = 'step';
+      stepSpan.textContent = it.step;
+      labelEl.appendChild(stepSpan);
+      if (it.tag) {
+        var chip = document.createElement('span');
+        chip.className = 'chip ' + it.tag;
+        chip.textContent = it.tag === 'touch' ? 'TOUCH' : 'WYSIWYG';
+        labelEl.appendChild(chip);
+      }
+      body.appendChild(labelEl);
+
+      if (it.expect) {
+        var expectEl = document.createElement('div');
+        expectEl.className = 'item-expect';
+        expectEl.innerHTML = '→ ' + it.expect;
+        body.appendChild(expectEl);
+      }
+
+      row.appendChild(cb);
+      row.appendChild(body);
+      itemsEl.appendChild(row);
+
+      cb.addEventListener('change', function () {
+        state[id] = cb.checked;
+        saveState(state);
+        row.classList.toggle('checked', cb.checked);
+        updateCounts();
+      });
+
+      allCheckboxes.push({ id: id, el: cb, passIdx: pIdx });
+    });
+
+    passEl.appendChild(itemsEl);
+    passesEl.appendChild(passEl);
+
+    passEl._countEl = count;
+  });
+
+  function updateCounts() {
+    var totalChecked = 0;
+    DATA.forEach(function (pass, pIdx) {
+      var passItems = allCheckboxes.filter(function (c) { return c.passIdx === pIdx; });
+      var checked = passItems.filter(function (c) { return c.el.checked; }).length;
+      totalChecked += checked;
+      var passEl = passesEl.children[pIdx];
+      if (passEl && passEl._countEl) {
+        passEl._countEl.textContent = checked + ' / ' + passItems.length;
+      }
+    });
+    var total = allCheckboxes.length;
+    document.getElementById('readout').innerHTML = totalChecked + '<span>/ ' + total + ' checks</span>';
+    document.getElementById('meterFill').style.width = (total ? (totalChecked / total * 100) : 0) + '%';
+  }
+
+  updateCounts();
+
+  document.getElementById('resetBtn').addEventListener('click', function () {
+    if (!confirm('Start a new test pass? This clears every checked box on this device.')) return;
+    allCheckboxes.forEach(function (c) { c.el.checked = false; c.el.closest('.item').classList.remove('checked'); });
+    state = {};
+    saveState(state);
+    localStorage.setItem(SINCE_KEY, new Date().toISOString());
+    updateCounts();
+    renderSince();
+  });
+
+  document.getElementById('checkAllVisible').addEventListener('click', function () {
+    var rect0 = window.scrollY, rectH = window.innerHeight;
+    allCheckboxes.forEach(function (c) {
+      var r = c.el.getBoundingClientRect();
+      if (r.top >= 0 && r.top <= rectH) {
+        c.el.checked = true;
+        c.el.closest('.item').classList.add('checked');
+        state[c.id] = true;
+      }
+    });
+    saveState(state);
+    updateCounts();
+  });
+
+  function renderSince() {
+    var since = localStorage.getItem(SINCE_KEY);
+    if (!since) { since = new Date().toISOString(); localStorage.setItem(SINCE_KEY, since); }
+    var d = new Date(since);
+    document.getElementById('since').textContent = 'Pass started ' + d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  renderSince();
+
+  function setTheme(mode) {
+    if (mode === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', mode);
+    try { localStorage.setItem('cs-qa-theme', mode); } catch (e) {}
+  }
+  document.getElementById('themeLight').addEventListener('click', function () { setTheme('light'); });
+  document.getElementById('themeDark').addEventListener('click', function () { setTheme('dark'); });
+  document.getElementById('themeSystem').addEventListener('click', function () { setTheme('system'); });
+  try {
+    var savedTheme = localStorage.getItem('cs-qa-theme');
+    if (savedTheme && savedTheme !== 'system') document.documentElement.setAttribute('data-theme', savedTheme);
+  } catch (e) {}
+})();
+</script>

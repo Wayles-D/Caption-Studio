@@ -91,7 +91,14 @@ const MOBILE_TOOLS = [
 // DaVinci/CapCut Desktop keep certain properties panels docked to a side
 // rather than as a bottom sheet. Below the desktop breakpoint this key
 // behaves exactly like every other MOBILE_TOOLS entry (bottom sheet).
-const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['transcript']);
+const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript']);
+
+// The desktop side panel's default/home content — always visible (an
+// anchored sidebar, like the app's original layout), showing Video
+// Inspector until the user opens Advanced or Transcript, which TEMPORARILY
+// replace it there; closing either reverts to this rather than the panel
+// itself disappearing.
+const DESKTOP_SIDE_PANEL_DEFAULT = 'video-info';
 
 const MOBILE_TOOLBAR_HEIGHT = 80; // px — kept in sync with the `h-20` toolbar below
 const TIMELINE_HEIGHT = 232; // px — kept in sync with TimelinePanel.jsx's `h-[232px]`
@@ -122,13 +129,17 @@ export function App() {
     mobileActivePanel !== null
   );
 
-  // Desktop-only right side panel — shared by the timeline's "Advanced"
-  // button (see TimelinePanel's isAdvancedOpenGetter/onAdvancedToggle
-  // props) and the bottom toolbar's "Transcript" tool (see
-  // DESKTOP_SIDE_PANEL_TOOL_KEYS). null | 'advanced' | 'transcript', same
-  // toggle-closes-itself shape as mobileActivePanel above.
+  // Desktop-only right side panel — an always-visible anchored sidebar
+  // (like the app's original layout), not a toggle-it-open-and-it-vanishes
+  // panel. 'video-info' | 'advanced' | 'transcript' — defaults to Video
+  // Inspector and never goes back to "nothing"; opening Advanced (the
+  // timeline's own button — see TimelinePanel's isAdvancedOpenGetter/
+  // onAdvancedToggle props) or Transcript (the bottom toolbar tool — see
+  // DESKTOP_SIDE_PANEL_TOOL_KEYS) temporarily REPLACES what's shown there,
+  // and closing either reverts to Video Inspector rather than hiding the
+  // panel itself.
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT_QUERY);
-  const [desktopSidePanel, setDesktopSidePanel] = useState(null);
+  const [desktopSidePanel, setDesktopSidePanel] = useState(DESKTOP_SIDE_PANEL_DEFAULT);
   const desktopSidePanelElRef = useRef(null);
   const advancedPanelBodyRef = useRef(null);
   const timelinePanelRef = useRef(null);
@@ -151,15 +162,17 @@ export function App() {
   useEffect(() => { desktopSidePanelRef.current = desktopSidePanel; }, [desktopSidePanel]);
 
   const toggleDesktopSidePanel = useCallback((key) => {
-    setDesktopSidePanel((current) => (current === key ? null : key));
+    setDesktopSidePanel((current) => (current === key ? DESKTOP_SIDE_PANEL_DEFAULT : key));
   }, []);
 
-  const closeDesktopSidePanel = useCallback(() => setDesktopSidePanel(null), []);
+  // "Close" now means "revert to the home view", not "hide the sidebar" —
+  // the sidebar itself is always visible on desktop.
+  const closeDesktopSidePanel = useCallback(() => setDesktopSidePanel(DESKTOP_SIDE_PANEL_DEFAULT), []);
 
   useClickOutside(
     [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef],
     closeDesktopSidePanel,
-    isDesktop && desktopSidePanel !== null
+    isDesktop && desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT
   );
 
   const isDesktopGetter = useCallback(() => isDesktopRef.current, []);
@@ -168,19 +181,20 @@ export function App() {
   const onAdvancedToggle = useCallback(() => toggleDesktopSidePanel('advanced'), [toggleDesktopSidePanel]);
   const getPlaybackRowContainer = useCallback(() => mobilePlaybackRowRef.current, []);
 
-  // Crossing the desktop breakpoint while one of these is open moves it to
-  // wherever that tool lives on the OTHER side of the breakpoint instead of
-  // leaving it open in a spot that no longer makes sense (a bottom sheet
-  // showing content the desktop toolbar routes elsewhere, or a desktop
-  // panel with no bottom-sheet equivalent to fall back to).
+  // Crossing the desktop breakpoint while a NON-default bottom-sheet tool
+  // (Transcript) is open moves it to the sidebar instead of leaving it open
+  // in a spot that no longer makes sense; leaving desktop resets the
+  // sidebar back to its home view (its value is irrelevant while
+  // unmounted, but starting fresh avoids re-entering desktop later on
+  // whatever Advanced/Transcript state happened to be active last).
   useEffect(() => {
     if (isDesktop) {
       if (mobileActivePanel && DESKTOP_SIDE_PANEL_TOOL_KEYS.has(mobileActivePanel)) {
         setMobileActivePanel(null);
         setDesktopSidePanel(mobileActivePanel);
       }
-    } else if (desktopSidePanel) {
-      setDesktopSidePanel(null);
+    } else if (desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT) {
+      setDesktopSidePanel(DESKTOP_SIDE_PANEL_DEFAULT);
     }
   }, [isDesktop, mobileActivePanel, desktopSidePanel]);
 
@@ -289,21 +303,30 @@ export function App() {
    * this directly rather than each keeping their own copy of this logic —
    * one canonical path from "current editor state" to "server-rendered file."
    *
-   * Returns true on success, false on failure/no-op (nothing to render) —
-   * callers decide what to do next (Generate just reports success; Download
-   * only proceeds to serve the file when this returns true, so a failed
-   * render can never result in a stale/wrong file being downloaded instead).
+   * Returns `{ ok, renderedWithEffects }` — `ok` false on failure/no-op
+   * (nothing to render), callers decide what to do next (Generate just
+   * reports success; Download only proceeds to serve the file when `ok` is
+   * true, so a failed render can never result in a stale/wrong file being
+   * downloaded instead). `renderedWithEffects` is false when the backend
+   * silently fell back to the ASS/libass pipeline (see
+   * backend/utils/graphicsExport.js) — that fallback can't reproduce
+   * caption transform keyframes (position/rotation/scale) or text blend
+   * mode at all, so the export would otherwise look "broken" with zero
+   * indication why. Returned (not shown as its own toast here) so callers
+   * can fold the warning into whatever toast they show LAST — showToast has
+   * no queue, so a toast shown here would just get clobbered a moment later
+   * by triggerRegeneration's/handleDownloadVideo's own follow-up toast.
    */
   const renderCurrentEditsToServer = useCallback(async () => {
     if (!appState.baseName || appState.isProcessing) {
       showToast("Please upload a video first.");
-      return false;
+      return { ok: false, renderedWithEffects: true };
     }
 
     const editedWords = collectEditedWords(appState);
     if (editedWords.length === 0) {
       showToast("No transcript words to render.");
-      return false;
+      return { ok: false, renderedWithEffects: true };
     }
 
     updateState({ isProcessing: true }, { recordHistory: false });
@@ -329,20 +352,24 @@ export function App() {
       }, { recordHistory: false });
 
       setViewState('video');
-      return true;
+      return { ok: true, renderedWithEffects: result.renderedWithEffects !== false };
     } catch (err) {
       console.error("Regeneration Error:", err);
       setViewState('video');
       updateState({ isProcessing: false }, { recordHistory: false });
       showToast(`Render failed: ${describeFetchError(err)}`);
-      return false;
+      return { ok: false, renderedWithEffects: true };
     }
   }, [showToast]);
 
   const triggerRegeneration = useCallback(async () => {
     showToast("Re-rendering captioned video...");
-    const ok = await renderCurrentEditsToServer();
-    if (ok) showToast("Render complete! Ready to download.");
+    const { ok, renderedWithEffects } = await renderCurrentEditsToServer();
+    if (ok) {
+      showToast(renderedWithEffects
+        ? "Render complete! Ready to download."
+        : "Rendered, but without some caption effects (position/rotation/blend) — the advanced renderer couldn't run this time.");
+    }
   }, [renderCurrentEditsToServer, showToast]);
 
   /**
@@ -380,7 +407,7 @@ export function App() {
     }
 
     showToast("Rendering your latest edits before download...");
-    const ok = await renderCurrentEditsToServer();
+    const { ok, renderedWithEffects } = await renderCurrentEditsToServer();
     if (!ok || !appState.renderedVideoPath) return;
 
     // Cache-bust: the backend writes every regenerate to the SAME
@@ -400,7 +427,9 @@ export function App() {
     document.body.appendChild(dlLink);
     dlLink.click();
     document.body.removeChild(dlLink);
-    showToast("Download started!");
+    showToast(renderedWithEffects
+      ? "Download started!"
+      : "Download started — but without some caption effects (position/rotation/blend); the advanced renderer couldn't run this time.");
   }, [renderCurrentEditsToServer, videoSrc, showToast]);
 
   return (
@@ -470,48 +499,54 @@ export function App() {
         />
       </div>
 
-      {/* Desktop-only right side panel (Keyframe Advanced / Transcript) —
-          spans only the PREVIEW's height (top-14 down to just above the
-          timeline), not the full column, so it sits beside the preview the
-          way a real sidebar would rather than covering the timeline's own
-          header controls (including the very "Advanced" button that opens
-          this). Gated on `isDesktop` itself (not just CSS) — the mobile
-          bottom sheet mounts its OWN <RightInspector sectionFilter=
-          "transcript"> with the same internal DOM ids, so both must never
-          be mounted at once. Within that, the panel div stays mounted
-          across desktopSidePanel toggles (only `display` changes) so
+      {/* Desktop-only right side panel — an always-visible anchored sidebar
+          (Video Inspector by default; Advanced/Transcript temporarily take
+          over, then it reverts). Spans only the PREVIEW's height (top-14
+          down to just above the timeline), not the full column, so it sits
+          beside the preview the way a real sidebar would rather than
+          covering the timeline's own header controls (including the very
+          "Advanced" button that opens one of its views). Gated on
+          `isDesktop` itself (not just CSS) — the mobile bottom sheet mounts
+          its OWN <RightInspector sectionFilter="transcript"/"video-info">
+          with the same internal DOM ids, so both must never be mounted at
+          once. Within that, the panel div and all three content blocks stay
+          permanently mounted (only `display` changes) so
           timelinePanel.js's Advanced fields have a stable container to
-          relocate into and the transcript word-chips don't get rebuilt on
-          every open/close. */}
+          relocate into and the transcript word-chips/video info don't get
+          rebuilt every time the view switches. */}
       {isDesktop && (
         <div
           ref={desktopSidePanelElRef}
-          className={`flex-col fixed top-14 right-0 z-40 w-[340px] bg-[var(--bg-sidebar)]
-            border-l border-[var(--border-color)] ${desktopSidePanel ? 'flex' : 'hidden'}`}
+          className="flex flex-col fixed top-14 right-0 z-40 w-[340px] bg-[var(--bg-sidebar)] border-l border-[var(--border-color)]"
           style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
             <span className="text-xs font-bold uppercase tracking-wide text-[var(--text-secondary)]">
-              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : 'Transcript Editor'}
+              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : 'Video Inspector'}
             </span>
-            <button
-              type="button"
-              onClick={closeDesktopSidePanel}
-              aria-label="Close panel"
-              className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="w-4.5 h-4.5">
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
+            {desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT && (
+              <button
+                type="button"
+                onClick={closeDesktopSidePanel}
+                aria-label="Back to Video Inspector"
+                className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="w-4.5 h-4.5">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+          <div className="overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'video-info' ? 'block' : 'none' }}>
+            <RightInspector sectionFilter="video-info" onRegenerateCaptions={() => triggerRegeneration()} />
           </div>
           <div className="overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'transcript' ? 'block' : 'none' }}>
             <RightInspector sectionFilter="transcript" onRegenerateCaptions={() => triggerRegeneration()} />
           </div>
-          {/* Not conditionally rendered within isDesktop — see
-              relocatePrecisionFields() in timelinePanel.js, which physically
-              moves the SAME lane input elements in here rather than this
-              being separate React-owned content. */}
+          {/* Not conditionally rendered — see relocatePrecisionFields() in
+              timelinePanel.js, which physically moves the SAME lane input
+              elements in here rather than this being separate React-owned
+              content. */}
           <div
             ref={advancedPanelBodyRef}
             className="overflow-y-auto flex-1 p-4 flex flex-col gap-4"
@@ -574,8 +609,7 @@ export function App() {
       <nav
         ref={mobileToolbarRef}
         className="flex fixed bottom-0 left-0 right-0 z-50 h-20 bg-[var(--bg-toolbar)]
-          border-t border-[var(--border-color)] overflow-x-auto justify-center items-center [&::-webkit-scrollbar]:hidden"
-        style={{ scrollbarWidth: 'none' }}
+          border-t border-[var(--border-color)] overflow-x-auto justify-center items-center"
       >
         <div className="flex h-full items-center gap-2.5 min-w-max mx-auto px-4">
           {MOBILE_TOOLS.map((tool) => {

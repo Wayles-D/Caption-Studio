@@ -268,16 +268,35 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
   }
 
   activeStages.push(`color=black:size=${canvasWidth}x${canvasHeight}:duration=${(trimEnd - trimStart).toFixed(3)}[vt_bg]`);
-  activeStages.push(`[vt_bg][${afterAlpha}]overlay=x='(W-w)/2+(${xExpr})/100*W':y='(H-h)/2+(${yExpr})/100*H',format=yuv420p[vt_active_out]`);
+  // `setsar=1` made explicit (not just relying on `scale` above defaulting
+  // to it) so this segment's SAR is guaranteed to match the pre/post
+  // segments' own explicit `setsar=1` below regardless of ffmpeg version —
+  // `concat` fails outright the moment any segment disagrees.
+  activeStages.push(`[vt_bg][${afterAlpha}]overlay=x='(W-w)/2+(${xExpr})/100*W':y='(H-h)/2+(${yExpr})/100*H',format=yuv420p,setsar=1[vt_active_out]`);
 
   // Segments outside the animated window: a plain trim, no per-pixel
   // filtering of any kind — just format-normalized so `concat` can stitch
-  // them to the transformed middle segment.
+  // them to the transformed middle segment. `setsar=1` matters here even
+  // though nothing else about these segments changes: the active segment
+  // above goes through `scale` (line 246), which normalizes SAR to 1:1
+  // regardless of the source's own pixel aspect ratio, but a plain
+  // trim+format never touches SAR at all — it stays whatever the SOURCE
+  // video's own metadata says. Any source with non-square-pixel SAR
+  // (common for real phone-recorded video, confirmed via a real ffmpeg
+  // repro at 1080x1920 with a non-1:1 SAR source) then has a pre/post
+  // segment whose SAR doesn't match the active segment's, and ffmpeg's
+  // `concat` filter refuses to join segments with mismatched frame
+  // parameters at all ("Failed to configure output pad on Parsed_concat"),
+  // failing the ENTIRE export — this only manifests when keyframes don't
+  // span the whole clip (leaving a real pre and/or post segment to concat),
+  // which is exactly "a couple of rotation keyframes" rather than one
+  // continuous animation, and losing keyframes/blend-mode/every other
+  // graphics-only effect at once when it silently falls back to ASS.
   const preStages = trimStart > EPS
-    ? [`[0:v]trim=start=0:end=${trimStart.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p[vt_pre]`]
+    ? [`[0:v]trim=start=0:end=${trimStart.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p,setsar=1[vt_pre]`]
     : [];
   const postStages = trimEnd < duration - EPS
-    ? [`[0:v]trim=start=${trimEnd.toFixed(3)}:end=${duration.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p[vt_post]`]
+    ? [`[0:v]trim=start=${trimEnd.toFixed(3)}:end=${duration.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p,setsar=1[vt_post]`]
     : [];
 
   const segmentLabels = [...(preStages.length ? ['[vt_pre]'] : []), '[vt_active_out]', ...(postStages.length ? ['[vt_post]'] : [])];

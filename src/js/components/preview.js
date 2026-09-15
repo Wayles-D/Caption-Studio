@@ -1,5 +1,5 @@
 /**
- * Center Preview Workspace Component for Caption Studio
+ * Center Preview Workspace Component for BHYND
  */
 import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from '../state.js';
 import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, applyOpacityToColor } from '../../../shared/captionConfig.js';
@@ -9,6 +9,7 @@ import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawR
 import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay } from './canvasTransform.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
 import { initVideoCanvasControls } from './videoCanvasControls.js';
+import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
 // backend/fonts/ + shared/fontRegistry.js) and served statically by the
@@ -91,16 +92,25 @@ function ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx) {
 }
 
 /**
- * Sizes the graphics canvas to the phone-frame's current on-screen box
- * (device pixels) and kicks off font-readiness loading for the base font —
- * shared prep step for both the sentence-mode and Rolling Stack canvas draw
- * paths below. Returns null when the phone-frame isn't laid out yet.
+ * Sizes the graphics canvas to the ACTUAL rendering surface's current
+ * on-screen box (device pixels) and kicks off font-readiness loading for the
+ * base font — shared prep step for both the sentence-mode and Rolling Stack
+ * canvas draw paths below. Returns null when that surface isn't laid out yet.
+ *
+ * Uses getCanvasContentRect() (see src/js/utils/canvasGeometry.js), NOT
+ * `.phone-frame`'s own getBoundingClientRect() — .phone-frame has its own 4px
+ * CSS border, included in its rect, while the canvas itself renders INSET
+ * inside that border. Sizing the canvas's backing store off the
+ * border-inclusive rect made it a few percent too large for its own actually
+ * displayed CSS size, which the browser then silently downscaled to fit —
+ * confirmed via direct pixel-buffer scanning against the reported caption
+ * geometry (see private-notes debugging journal). getCanvasContentRect()
+ * reads #preview-video, which shares this exact same box.
  */
 function prepareGraphicsCanvas(canvas, fontFamily, fontWeight, fontSizePx) {
-  const phoneFrame = document.querySelector('.phone-frame');
-  if (!phoneFrame) return null;
+  const rect = getCanvasContentRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
 
-  const rect = phoneFrame.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const targetW = Math.round(rect.width * dpr);
   const targetH = Math.round(rect.height * dpr);
@@ -329,13 +339,16 @@ export function initPreviewWorkspace() {
  */
 function initManualDragPositioning() {
   const subtitlesOverlay = document.getElementById('subtitles-overlay');
-  const phoneFrame = document.querySelector('.phone-frame');
-  if (!subtitlesOverlay || !phoneFrame) return;
+  if (!subtitlesOverlay) return;
 
   let isDragging = false;
 
   function updatePositionFromPointer(e) {
-    const rect = phoneFrame.getBoundingClientRect();
+    // getCanvasContentRect() (see src/js/utils/canvasGeometry.js), NOT
+    // .phone-frame's own rect — its 4px CSS border is included in that rect,
+    // but customPosX/Y are percentages of the actual content surface.
+    const rect = getCanvasContentRect();
+    if (!rect) return;
     const xPct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
     const yPct = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
     updateState({ customPosX: xPct, customPosY: yPct }, { recordHistory: false });

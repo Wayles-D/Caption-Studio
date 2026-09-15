@@ -3,7 +3,7 @@
  * Content thinly wrapping @radix-ui/react-popover), styled with this app's
  * own design tokens (var(--bg-sidebar) etc., matching every other Stage 5
  * Tailwind conversion) rather than shadcn's default zinc/gray palette, so it
- * looks native to Caption Studio instead of visually foreign.
+ * looks native to BHYND instead of visually foreign.
  *
  * Using the real Radix primitive (not a hand-rolled document-click listener)
  * is the actual fix for this app's long-running outside-click/focus

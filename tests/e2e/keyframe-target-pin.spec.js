@@ -47,7 +47,9 @@ test('caption keyframe target stays pinned after scrubbing to a different captio
 
   // Click the caption's padding (not a specific word) to select it as a
   // whole — the pinnable "caption" keyframe target kind.
-  const frameBox = await page.locator('.phone-frame').boundingBox();
+  // #preview-video, not .phone-frame — the app's coordinate math is relative
+  // to the actual rendering surface, inset inside .phone-frame's 4px border.
+  const frameBox = await page.locator('#preview-video').boundingBox();
   const captionRect = await page.evaluate(() => window.__debugCaptionBoxRect());
   await page.mouse.click(frameBox.x + captionRect.centerX, frameBox.y + captionRect.centerY);
 

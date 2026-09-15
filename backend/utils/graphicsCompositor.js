@@ -162,14 +162,30 @@ function buildCaptionCompositeStages(baseVideoLabel, textBlendMode) {
     return [`${baseVideoLabel}[captrack]overlay=x=0:y=0:format=yuv420[outv]`];
   }
 
+  // The blend branch needs the base video TWICE — once to derive the blended
+  // RGB layer, once again as the base the masked result is overlaid onto.
+  // Referencing a raw demuxed input label like [0:v] twice is fine (ffmpeg
+  // fans out real input streams automatically), which is why this worked
+  // with no video transform active. But when a video transform IS active,
+  // `baseVideoLabel` is a FILTER-GRAPH-DEFINED pad instead (e.g. [vt_out],
+  // the video transform chain's own output — see buildVideoTransformFilterChain)
+  // and a filter's output pad can only feed ONE downstream input unless
+  // explicitly duplicated — reusing it a second time produced ffmpeg's
+  // "Invalid stream specifier" / "matches no streams" errors and silently
+  // fell back to the ASS pipeline (losing the blend mode AND, since [0:v]
+  // was the fallback path, the video transform too). `split` here is always
+  // valid (works for both a raw input and a filter-graph label), so it's
+  // applied unconditionally rather than only when a video transform happens
+  // to be active — one code path, no special-casing to keep in sync.
   return [
     `[captrack]split=2[ct_blend_src][ct_alpha_src]`,
     `[ct_blend_src]format=rgb24[ct_opaque]`,
     `[ct_alpha_src]alphaextract[ct_alpha]`,
-    `${baseVideoLabel}format=rgb24[ct_base_rgb]`,
+    `${baseVideoLabel}split=2[ct_base_src][ct_overlay_base]`,
+    `[ct_base_src]format=rgb24[ct_base_rgb]`,
     `[ct_base_rgb][ct_opaque]blend=all_mode=${textBlendMode}:all_opacity=1[ct_blended_rgb]`,
     `[ct_blended_rgb][ct_alpha]alphamerge[ct_blended_masked]`,
-    `${baseVideoLabel}[ct_blended_masked]overlay=x=0:y=0:format=rgb[ct_composited_rgb]`,
+    `[ct_overlay_base][ct_blended_masked]overlay=x=0:y=0:format=rgb[ct_composited_rgb]`,
     `[ct_composited_rgb]format=yuv420p[outv]`
   ];
 }

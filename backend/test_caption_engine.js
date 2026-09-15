@@ -4,6 +4,7 @@ import { resolveASSStyle, generateASSHeader, generateASSDialogueLine } from './u
 import { generateSubtitleFromTranscript } from './services/subtitleService.js';
 import { getASSStyleFromConfig, getCSSPreviewFromConfig, CREATOR_PROFILES, ANIMATION_MODES, hexToASSColor } from '../shared/captionConfig.js';
 import { balancePhraseLines } from './utils/phraseGrouper.js';
+import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../shared/captionGraphics.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -247,6 +248,41 @@ const popDialogue = generateASSDialogueLine(samplePhrase, { animationMode: 'pop'
 assert.ok(popDialogue.includes('\\fscx135\\fscy135'), 'Pop dialogue line must contain \\fscx135 tag when popScale is 135');
 
 console.log('✓ Word Spacing, Color Customization & Pop Scale alignment verified!');
+
+// 8. Word position offsets must be RESOLUTION-INDEPENDENT
+console.log('\n[Test 8] Word Offset Unit Is Resolution-Independent (preview/export parity)');
+// Regression guard for a real bug: offsetXPx/offsetYPx (a word's on-canvas
+// drag position) used to be stored in, and applied as, RAW canvas
+// backing-store px. The preview canvas is sized from the live on-screen
+// phone-frame (~168-322px wide) while the export canvas is the output
+// video's real width (e.g. 1080px), so the identical stored number moved the
+// word a completely different fraction of the frame in each renderer — a
+// word dragged far left in the preview rendered back near its default
+// position in the exported file. Verified by pixel-scanning both renderers
+// with one payload: preview placed the glyph center at 21.1% of frame width,
+// export at 44.6%. The offset is now authored in the SAME 330px-reference-box
+// unit as fontSize/spacing/outline, converted per-renderer by
+// wordOffsetToCanvasPx. This asserts the invariant that actually matters:
+// one stored offset == one fraction of the frame, at ANY canvas width.
+const PREVIEW_CANVAS_W = 168;   // live phone-frame preview, devicePixelRatio 1
+const EXPORT_CANVAS_W = 1080;   // 1080x1920 output video
+const STORED_OFFSET = -60;
+
+const previewFraction = wordOffsetToCanvasPx(STORED_OFFSET, PREVIEW_CANVAS_W) / PREVIEW_CANVAS_W;
+const exportFraction = wordOffsetToCanvasPx(STORED_OFFSET, EXPORT_CANVAS_W) / EXPORT_CANVAS_W;
+console.log(`Offset ${STORED_OFFSET} -> preview fraction ${previewFraction.toFixed(6)}, export fraction ${exportFraction.toFixed(6)}`);
+assert.ok(
+  Math.abs(previewFraction - exportFraction) < 1e-9,
+  `A stored word offset must cover the SAME fraction of the frame in every renderer — got preview ${previewFraction} vs export ${exportFraction}`
+);
+
+// Round-trip: canvas px -> stored unit -> canvas px, at each resolution.
+[PREVIEW_CANVAS_W, EXPORT_CANVAS_W].forEach((canvasW) => {
+  const canvasPx = 42;
+  const roundTripped = wordOffsetToCanvasPx(canvasPxToWordOffset(canvasPx, canvasW), canvasW);
+  assert.ok(Math.abs(roundTripped - canvasPx) < 1e-9, `Offset round-trip must be lossless at canvasWidth ${canvasW} (got ${roundTripped})`);
+});
+console.log('✓ Word offsets resolve to an identical frame fraction in preview and export');
 
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');
 

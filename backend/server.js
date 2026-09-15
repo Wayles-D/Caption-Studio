@@ -105,7 +105,7 @@ app.use('/api/upload', uploadRouter);
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
-    message: 'Caption Studio Audio Extraction Backend is running.'
+    message: 'BHYND Audio Extraction Backend is running.'
   });
 });
 
@@ -169,7 +169,7 @@ app.use((err, req, res, next) => {
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, async () => {
     console.log(`===============================================`);
-    console.log(`Caption Studio Backend running on port ${PORT}`);
+    console.log(`BHYND Backend running on port ${PORT}`);
     console.log(`Endpoints available:`);
     console.log(`  - Health Check:   GET  http://localhost:${PORT}/api/health`);
     console.log(`  - Video Upload:   POST http://localhost:${PORT}/api/upload`);

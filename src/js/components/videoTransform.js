@@ -56,7 +56,7 @@ export function getCurrentVideoValue(property) {
 export function setVideoValue(property, value, { recordHistory = true } = {}) {
   const field = STATIC_FIELD_BY_PROPERTY[property];
   const existing = getOverride();
-  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, { [field]: value }, VIDEO_FIELD_TO_PROPERTY, getPlayheadTime());
+  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, { [field]: value }, VIDEO_FIELD_TO_PROPERTY, getPlayheadTime(), getCurrentVideoValue);
   const next = { ...existing, ...remainingFields };
   if (nextKeyframes) next.keyframes = nextKeyframes;
   updateState({ videoTransform: next }, { recordHistory });
@@ -67,7 +67,7 @@ export function setVideoValues(valuesByProperty, { recordHistory = true } = {}) 
   const fields = {};
   Object.entries(valuesByProperty).forEach(([property, value]) => { fields[STATIC_FIELD_BY_PROPERTY[property]] = value; });
   const existing = getOverride();
-  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, fields, VIDEO_FIELD_TO_PROPERTY, getPlayheadTime());
+  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(existing, fields, VIDEO_FIELD_TO_PROPERTY, getPlayheadTime(), getCurrentVideoValue);
   const next = { ...existing, ...remainingFields };
   if (nextKeyframes) next.keyframes = nextKeyframes;
   updateState({ videoTransform: next }, { recordHistory });

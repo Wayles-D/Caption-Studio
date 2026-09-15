@@ -1,5 +1,5 @@
 /**
- * Caption Studio Font Registry — the single source of truth for every font
+ * BHYND Font Registry — the single source of truth for every font
  * bundled with the project. Both the HTML/CSS preview and the ASS/FFmpeg
  * export resolve fonts exclusively through this registry; neither renderer
  * hardcodes a font name or depends on a font already installed on the OS or

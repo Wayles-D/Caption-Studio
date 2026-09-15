@@ -320,6 +320,26 @@ function buildDom(container, options) {
   lanesEl.id = 'timeline-lanes';
   laneEls = {};
 
+  // ONE unified keyframe lane — CapCut-style: a single ◆ per keyframe ENTRY
+  // (whatever properties it happens to hold), not four separate per-
+  // property tracks. The 4 property rows below still exist for VALUE
+  // EDITING (the Advanced numeric fields — see relocatePrecisionFields) but
+  // no longer host their own markers; this is the only clickable/
+  // draggable/deletable keyframe track now (see refreshLanes below).
+  const keyframeLaneRow = document.createElement('div');
+  keyframeLaneRow.className = 'timeline-lane timeline-keyframe-lane';
+  const keyframeLaneGutter = document.createElement('div');
+  keyframeLaneGutter.className = 'timeline-lane-gutter';
+  const keyframeLaneLabel = document.createElement('span');
+  keyframeLaneLabel.className = 'timeline-lane-label';
+  keyframeLaneLabel.textContent = 'Keyframes';
+  keyframeLaneGutter.appendChild(keyframeLaneLabel);
+  const keyframeTrack = document.createElement('div');
+  keyframeTrack.className = 'timeline-lane-track';
+  keyframeLaneRow.appendChild(keyframeLaneGutter);
+  keyframeLaneRow.appendChild(keyframeTrack);
+  lanesEl.appendChild(keyframeLaneRow);
+
   LANES.forEach((lane) => {
     const row = document.createElement('div');
     row.className = 'timeline-lane';
@@ -397,7 +417,7 @@ function buildDom(container, options) {
 
   container.appendChild(scroll);
 
-  return { header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead };
+  return { header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack };
 }
 
 function timeToX(time, trackWidth, duration) {
@@ -445,15 +465,28 @@ function clearMarkers(track) {
   track.querySelectorAll('.timeline-marker').forEach((el) => el.remove());
 }
 
-function buildMarker(entry, laneProperties, trackWidth, duration) {
+function buildMarker(entry, duration, role) {
   const marker = document.createElement('div');
   marker.className = 'timeline-marker';
-  const hasAnyValue = laneProperties.some(({ property }) => entry.values && entry.values[property] != null);
-  if (hasAnyValue) marker.classList.add('filled');
+  // Every entry on the unified lane always has at least one property value
+  // by construction (see shared/keyframes.js's upsertKeyframeEntry) — no
+  // per-lane "does THIS lane's property happen to be in this entry" filter
+  // needed now that there's one shared track instead of four.
+  marker.classList.add('filled');
+  // `role` is 'start' | 'end' | null — null for every keyframe strictly
+  // BETWEEN the first and last in a sequence of 3+, which are neither. Only
+  // 'end' gets a second color (see style.css's --keyframe-end-color); the
+  // sequence's first keyframe already reads as "the start" by being the
+  // plain accent color every OTHER marker in the app already uses, so it
+  // needs no marking of its own beyond the label below. A lone keyframe
+  // gets role=null too (refreshLanes never marks it 'end' — nothing to
+  // distinguish it FROM).
+  if (role === 'end') marker.classList.add('marker-end');
   if (selectedMarkerTime != null && Math.abs(entry.t - selectedMarkerTime) <= 0.03) marker.classList.add('selected');
   marker.style.left = `${(entry.t / duration) * 100}%`;
   marker.dataset.time = String(entry.t);
-  marker.title = `Keyframe @ ${entry.t.toFixed(2)}s — click to jump, drag to retime, Delete to remove`;
+  const roleLabel = role === 'start' ? 'Start ' : role === 'end' ? 'End ' : '';
+  marker.title = `${roleLabel}keyframe @ ${entry.t.toFixed(2)}s — click to jump, drag to retime, Delete to remove`;
   marker.tabIndex = 0;
 
   // A plain click and the start of a drag both begin with the same
@@ -533,15 +566,15 @@ function refreshLanes(duration) {
 
   if (signature !== lastLaneSignature && !dragMarker) {
     lastLaneSignature = signature;
-    LANES.forEach((lane) => {
-      const { track } = laneEls[lane.key];
-      clearMarkers(track);
-      const rect = track.getBoundingClientRect();
-      entries.forEach((entry) => {
-        const relevant = lane.properties.some(({ property }) => entry.values && entry.values[property] != null);
-        if (!relevant) return;
-        track.appendChild(buildMarker(entry, lane.properties, rect.width, duration));
-      });
+    clearMarkers(els.keyframeTrack);
+    // `entries` is time-sorted (shared/keyframes.js's upsertKeyframeEntry/
+    // moveKeyframeEntry both keep it that way) — so index 0 and the last
+    // index really are the earliest/latest keyframes, not just whichever
+    // happen to be first/last in insertion order.
+    const lastIdx = entries.length - 1;
+    entries.forEach((entry, idx) => {
+      const role = entries.length < 2 ? null : idx === 0 ? 'start' : idx === lastIdx ? 'end' : null;
+      els.keyframeTrack.appendChild(buildMarker(entry, duration, role));
     });
   }
 
@@ -650,7 +683,8 @@ function tick() {
   if (hasTarget && duration > 0) {
     refreshLanes(duration);
   } else {
-    LANES.forEach((lane) => clearMarkers(laneEls[lane.key].track));
+    clearMarkers(els.keyframeTrack);
+    lastLaneSignature = null;
   }
 
   rafId = requestAnimationFrame(tick);
