@@ -251,10 +251,48 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // quantized durations, so that guarantee carries over unchanged.
     const COMPOSITOR_FPS = 50;
     const FRAME_QUANTUM = 1 / COMPOSITOR_FPS;
-    const quantizeDuration = (raw) => Math.max(FRAME_QUANTUM, Math.round(raw / FRAME_QUANTUM) * FRAME_QUANTUM);
 
-    const quantizedDurations = segments.map((segment) => quantizeDuration(Math.max(0.001, segment.end - segment.start)));
-    const totalCaptionDuration = quantizedDurations.reduce((sum, d) => sum + d, 0);
+    // Quantize each segment's BOUNDARY onto the frame grid, then take each
+    // duration as the difference between consecutive boundaries — rather than
+    // quantizing each duration independently.
+    //
+    // Independent per-duration quantization had an asymmetric floor
+    // (`Math.max(FRAME_QUANTUM, ...)`) that stretched any segment shorter than
+    // one frame up to a full frame. Because segments are CONTIGUOUS and tile
+    // the video exactly, stretching one pushes every later segment later, so
+    // the error accumulated as caption timing drift against the audio — not
+    // merely a longer file. Measured on a real 4.02s export: segments summed
+    // to exactly 4.020s raw, but 4.100s quantized, with the entire +0.080s
+    // coming from 8 sub-frame segments hitting that floor (symmetric rounding
+    // contributed -0.000s). By 35s the track ran ~0.46s long, and every
+    // caption after the first sub-frame segment was late by the accumulated
+    // amount.
+    //
+    // Boundary quantization is drift-free by construction: each segment starts
+    // at its own true time snapped to the grid, errors never compound, and the
+    // total is exactly the video duration snapped to the grid.
+    const quantizeTime = (t) => Math.round(t / FRAME_QUANTUM) * FRAME_QUANTUM;
+
+    // A segment whose quantized span is zero is SHORTER THAN ONE FRAME at the
+    // compositor's rate, so it cannot be displayed at all — there is no frame
+    // boundary inside it. It is dropped, and the following entry's duration
+    // absorbs its span (that neighbour's image covers those sub-frame
+    // milliseconds instead). Dropping it is what keeps every other segment on
+    // time; the old floor kept it at the cost of delaying everything after it.
+    const timeline = [];
+    let cursor = quantizeTime(segments[0].start);
+    const trackStart = cursor;
+    segments.forEach((segment) => {
+      const end = quantizeTime(segment.end);
+      if (end - cursor < FRAME_QUANTUM / 2) return; // sub-frame — not displayable
+      timeline.push({ file: segment.file, duration: end - cursor });
+      cursor = end;
+    });
+    if (!timeline.length) return reject(new Error('compositeGraphicsCaptionTrack: every segment quantized away to sub-frame length.'));
+
+    const orderedSegments = timeline;
+    const quantizedDurations = timeline.map((entry) => entry.duration);
+    const totalCaptionDuration = cursor - trackStart;
 
     // ffmpeg's concat-demuxer manifest format: one `file '<path>'` line per
     // segment, each preceded by the `duration` (in seconds) that segment
@@ -271,11 +309,11 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // ffmpeg's own filter/manifest path parsing).
     const escapeConcatPath = (p) => p.replace(/\\/g, '/').replace(/'/g, `'\\''`);
     const listLines = [];
-    segments.forEach((segment, idx) => {
-      listLines.push(`file '${escapeConcatPath(segment.file)}'`);
+    orderedSegments.forEach((entry, idx) => {
+      listLines.push(`file '${escapeConcatPath(entry.file)}'`);
       listLines.push(`duration ${quantizedDurations[idx].toFixed(3)}`);
     });
-    listLines.push(`file '${escapeConcatPath(segments[segments.length - 1].file)}'`);
+    listLines.push(`file '${escapeConcatPath(orderedSegments[orderedSegments.length - 1].file)}'`);
 
     const concatListPath = path.join(os.tmpdir(), `caption-studio-concat-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
     fs.writeFileSync(concatListPath, listLines.join('\n'), 'utf8');
@@ -355,7 +393,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       outputPath
     ];
 
-    console.log(`Executing FFmpeg Graphics Composite command (${segments.length} segments, via 1 concat-manifest input): ${ffmpegPath} ${args.slice(0, 4).join(' ')} ... [concat list: ${concatListPath}] ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
+    console.log(`Executing FFmpeg Graphics Composite command (${orderedSegments.length} of ${segments.length} segments displayable, via 1 concat-manifest input): ${ffmpegPath} ${args.slice(0, 4).join(' ')} ... [concat list: ${concatListPath}] ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
 
     const cleanupScript = () => {
       try { fs.unlinkSync(filterScriptPath); } catch (cleanupErr) { /* best-effort; a leftover temp file is harmless */ }

@@ -34,10 +34,15 @@
  *  2. Skip `pad`+`rotate` entirely when rotation is never actually animated
  *     away from 0 — no need for rotation headroom (a larger-than-source
  *     canvas) or the rotate filter itself for a plain move/zoom.
- *  3. Skip `geq` (the most expensive single stage — real per-pixel
- *     expression evaluation) entirely when opacity is never animated away
+ *  3. Skip the opacity stage entirely when opacity is never animated away
  *     from 100 — the common case (most edits are position/scale/rotation,
  *     not a fade).
+ *
+ * A third pass then removed the single worst cost that remained: opacity was
+ * applied with `geq`, a PER-PIXEL filter, to compute a value that is uniform
+ * across each frame. See the `sendcmd`/colorchannelmixer stage below for the
+ * measurements — that one stage was ~87% of filter cost and pushed a real 35s
+ * export to 31.3 minutes, past the client's own abort timeout.
  */
 import { resolveVideoTransformAtTime, isIdentityVideoTransform } from '../../shared/videoTransform.js';
 
@@ -57,6 +62,18 @@ const MIN_SAMPLE_STEP_SECONDS = 0.05;
 // failing outright (a slightly coarser interpolation is still correct, just
 // less smooth, which is preferable to silently losing the whole export).
 const MAX_TOTAL_SAMPLES = 120;
+
+// Video opacity is a per-FRAME scalar — the same number for every pixel in a
+// frame — so it is driven by timed `sendcmd` commands into a native
+// colorchannelmixer gain rather than evaluated per pixel. These control how
+// finely that ramp is quantized in time. 0.04s (25 steps/sec) is finer than
+// any source frame rate this app targets, so the ramp is frame-accurate in
+// practice; the cap keeps the emitted command list bounded on long fades
+// (a 35s full-clip fade emits ~875 commands, ~40KB, which the filter SCRIPT
+// file carries fine — see graphicsCompositor.js on why the graph is never
+// passed as a command-line argument).
+const OPACITY_COMMAND_STEP_SECONDS = 0.04;
+const MAX_OPACITY_COMMANDS = 2000;
 
 function getSortedKeyframeTimes(videoTransform) {
   return Array.from(new Set((videoTransform?.keyframes || []).map((k) => k.t))).sort((a, b) => a - b);
@@ -96,10 +113,11 @@ function buildSampleTimes(rawTimes, windowStart, windowEnd) {
  * between, matching shared/keyframes.js's own evaluateTrack semantics (the
  * samples themselves already carry whatever easing the real evaluator
  * applied). `timeVar` is the filter-specific name for "current time in
- * seconds" — most filters (scale/pad/rotate/overlay) use lowercase `t`, but
- * geq (the only filter here with real expression support for alpha)
- * confusingly uses uppercase `T` instead — verified empirically, not just
- * assumed, since ffmpeg's own docs are inconsistent about this per-filter.
+ * seconds"; every filter this now feeds (scale/pad/rotate/overlay) uses
+ * lowercase `t`. It stays a parameter because that has NOT been uniform
+ * historically — geq, which this used to drive for opacity, used uppercase
+ * `T` instead, so the name is kept explicit per call site rather than
+ * assumed, since ffmpeg's own docs are inconsistent about it per-filter.
  */
 function buildPiecewiseExpr(samples, timeVar = 't') {
   if (samples.length === 1) return formatNum(samples[0].value);
@@ -114,6 +132,43 @@ function buildPiecewiseExpr(samples, timeVar = 't') {
     expr = `if(between(${timeVar},${formatNum(a.t)},${formatNum(b.t)}),${lerp},${expr})`;
   }
   return `if(lt(${timeVar},${formatNum(samples[0].t)}),${formatNum(samples[0].value)},${expr})`;
+}
+
+/**
+ * Builds the `sendcmd` command list that ramps the video layer's alpha gain
+ * over the active segment.
+ *
+ * Emitted times are SEGMENT-LOCAL (the active segment's own timeline is
+ * zero-based — see activeStages), while the opacity VALUES are sampled from
+ * the canonical resolver at ABSOLUTE timeline time. That is the same
+ * absolute-vs-segment pairing the `shifted()` helper handles for the
+ * expression-driven filters, and it is equally load-bearing here: getting it
+ * wrong shifts the whole fade by `trimStart`.
+ *
+ * Because each command carries a value sampled directly from
+ * resolveVideoTransformAtTime, this is strictly MORE faithful to the preview
+ * than the old piecewise-linear expression was — it follows the real eased
+ * curve at 25 steps/sec instead of linearly interpolating between 15 samples.
+ *
+ * `;` is escaped as `\;` so the list survives the filtergraph parser, which
+ * would otherwise read it as a chain separator. Only `;` needs escaping —
+ * one target per command means no commas appear.
+ */
+function buildOpacityCommandList(videoTransform, trimStart, trimEnd) {
+  const span = Math.max(0, trimEnd - trimStart);
+  const step = Math.max(OPACITY_COMMAND_STEP_SECONDS, span / MAX_OPACITY_COMMANDS);
+  const gainAt = (absT) => {
+    const pct = resolveVideoTransformAtTime(videoTransform, absT).opacity;
+    return Math.min(1, Math.max(0, (pct == null ? 100 : pct) / 100));
+  };
+  const commands = [];
+  for (let t = trimStart; t < trimEnd - EPS; t += step) {
+    commands.push(`${(t - trimStart).toFixed(3)} colorchannelmixer aa ${gainAt(t).toFixed(6)}`);
+  }
+  // Pin the exact end value so a fade always lands precisely on its last
+  // keyframe rather than on whatever the final step happened to sample.
+  commands.push(`${span.toFixed(3)} colorchannelmixer aa ${gainAt(trimEnd).toFixed(6)}`);
+  return commands.join('\\;');
 }
 
 function formatNum(n) {
@@ -187,14 +242,56 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
 
   const everRotates = samples.some((s) => Math.abs(s.rotation) > EPS);
   const everFades = samples.some((s) => Math.abs(s.opacity - 100) > EPS);
+  // `eval=frame` makes scale/pad re-parse their size expressions and rebuild
+  // the swscale context on EVERY frame. That is only needed when the frame size
+  // actually changes over time — i.e. when scale is ANIMATED. A static
+  // non-identity scale, or a rotation-only animation (where scale stays 1),
+  // resolves to the same size on every frame, so the size can be computed once.
+  //
+  // The two halves of this are load-bearing together: dropping `eval=frame`
+  // ALONE is not enough, because the emitted size is still a `t`-dependent
+  // expression and `t` does not exist at filter-init time — ffmpeg rejects the
+  // whole graph with "Error initializing filters". So when scale is constant
+  // the expression is replaced by a plain literal as well, which is also what
+  // makes the two provably equivalent: a constant cannot evaluate differently
+  // on a later frame. Measured on a 1080x1920 clip, the scale stage cost 4.04s
+  // with eval=frame vs 2.80s without.
+  const scaleAnimates = samples.some((s) => Math.abs(s.scale - samples[0].scale) > EPS);
+  const sizeEval = scaleAnimates ? ':eval=frame' : '';
 
-  const scaleExpr = buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.scale })));
-  const rotationExpr = everRotates ? buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.rotation }))) : null;
-  const xExpr = buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.offsetXPct })));
-  const yExpr = buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.offsetYPct })));
-  // geq (below) is the one filter here whose expression language uses
-  // uppercase `T` instead of `t` — see buildPiecewiseExpr's doc comment.
-  const opacityExpr = everFades ? buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.opacity })), 'T') : null;
+  // The active segment's own timeline is ZERO-BASED (its trim resets PTS —
+  // see activeStages below), but every sample above is keyed to ABSOLUTE
+  // timeline time. So each filter reads `t + trimStart` rather than bare `t`.
+  //
+  // This pairing is load-bearing and must stay in sync. The active segment
+  // used to skip the PTS reset precisely so these expressions could read
+  // absolute `t` directly, on the assumption that ffmpeg's `concat` filter
+  // re-stamps whatever it's handed and therefore doesn't care that the
+  // segment's PTS weren't zero-based. That assumption is WRONG: `concat`
+  // offsets each segment by the ACCUMULATED DURATION of the ones before it
+  // and does not subtract the segment's own start PTS, so a segment starting
+  // at 0.5s landed 0.5s late in the output. Measured on a 5s clip with
+  // rotation keyframed 0deg->40deg from t=0.5: the exported file ran 5.52s
+  // (0.5s long) and every sampled frame showed the angle the preview had
+  // ~0.5s earlier (17.5deg vs 6.37deg at t=1.25, 30deg vs 21.62deg at t=2.0).
+  // The same mismatch also left the first trimStart seconds of the segment
+  // showing bare `[vt_bg]` background, because that generator starts at 0
+  // while the video frames started at trimStart.
+  //
+  // Only applied when there IS a pre segment (trimStart > 0); otherwise `t`
+  // is already absolute and the emitted expression stays byte-identical to
+  // before, so the no-keyframe/static-transform path is provably unchanged.
+  const shifted = (v) => (trimStart > EPS ? `(${v}+${formatNum(trimStart)})` : v);
+  const tVar = shifted('t');
+
+  // A constant literal when scale never animates — see `sizeEval` above for why
+  // the literal and the missing `eval=frame` have to go together.
+  const scaleExpr = scaleAnimates
+    ? buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.scale })), tVar)
+    : formatNum(samples[0].scale);
+  const rotationExpr = everRotates ? buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.rotation })), tVar) : null;
+  const xExpr = buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.offsetXPct })), tVar);
+  const yExpr = buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: s.offsetYPct })), tVar);
 
   // Canvas the (possibly rotated) scaled frame is composited within — only
   // needs rotation headroom (a canvas bigger than the source) when rotation
@@ -233,41 +330,78 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
     padH = Math.ceil(neededH);
   }
 
-  // The animated window, trimmed from the source with its ORIGINAL absolute
-  // timestamps preserved (no setpts reset) — the piecewise expressions above
-  // were built against the real timeline's `t`/`T`, exactly like
-  // resolveVideoTransformAtTime expects, so the trimmed segment must keep
-  // seeing the same absolute time or every sample would land in the wrong
-  // place. ffmpeg's `concat` FILTER (unlike the concat protocol/demuxer)
-  // re-stamps output timestamps sequentially from the frames it's handed,
-  // so it doesn't care that this segment's own input PTS aren't zero-based.
-  const activeStages = [`[0:v]trim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)}[vt_active_src]`];
+  // The animated window, trimmed from the source and reset to a ZERO-BASED
+  // timeline (`setpts=PTS-STARTPTS`) exactly like the pre/post segments
+  // below. Two things depend on this being zero-based:
+  //   1. `concat` (see segmentLabels below) offsets each segment by the
+  //      accumulated duration of the previous ones WITHOUT subtracting that
+  //      segment's own start PTS — a segment still carrying absolute PTS
+  //      therefore lands `trimStart` seconds late, stretching the output by
+  //      the same amount.
+  //   2. `[vt_bg]` (the overlay's background, generated below) always starts
+  //      at 0, so a non-zero-based video layer simply isn't there for the
+  //      overlay to composite during its first `trimStart` seconds.
+  // The piecewise expressions compensate by reading `t + trimStart` instead
+  // of bare `t` — see the `shifted()` helper above, which is the other half
+  // of this pairing.
+  // `split` so the overlay's BACKGROUND is derived from the very same trimmed
+  // frames as the transformed layer, rather than from a synthetic `color`
+  // generator. This is not cosmetic: the background is the overlay's MAIN
+  // input, so IT dictates the output frame rate, and `color` has no `rate`
+  // option set here — it defaults to 25fps. That silently resampled every
+  // transformed export to 25fps (confirmed on a real 29.58fps source: a
+  // caption-only export stayed 29.58fps, the same clip WITH a video transform
+  // came out 25fps). Deriving the background from the source instead means it
+  // inherits the source's exact frame rate, PTS and frame count, so no
+  // resampling happens at all and there is no generator/video timing mismatch
+  // to drift. It also removes the need to guess the generator's `duration`.
+  const activeStages = [`[0:v]trim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},setpts=PTS-STARTPTS,split=2[vt_active_src][vt_bg_src]`];
+  // drawbox with t=fill paints the whole frame black in place — the cheap way
+  // to get "a black frame carrying this exact source frame's timing". The
+  // explicit scale keeps the documented guarantee that the composite canvas is
+  // exactly canvasWidth x canvasHeight even if that ever differs from the
+  // source's own dimensions (a same-size scale is a verified no-op).
+  activeStages.push(`[vt_bg_src]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,scale=${canvasWidth}:${canvasHeight},format=yuv420p,setsar=1[vt_bg]`);
   activeStages.push(`[vt_active_src]format=rgba[vt_fmt]`);
-  activeStages.push(`[vt_fmt]scale=w='iw*(${scaleExpr})':h='ih*(${scaleExpr})':eval=frame[vt_scaled]`);
+  activeStages.push(`[vt_fmt]scale=w='iw*(${scaleExpr})':h='ih*(${scaleExpr})'${sizeEval}[vt_scaled]`);
 
   let afterGeometry = 'vt_scaled';
   if (everRotates) {
-    activeStages.push(`[vt_scaled]pad=${padW}:${padH}:(ow-iw)/2:(oh-ih)/2:color=black@0:eval=frame[vt_padded]`);
+    activeStages.push(`[vt_scaled]pad=${padW}:${padH}:(ow-iw)/2:(oh-ih)/2:color=black@0${sizeEval}[vt_padded]`);
     activeStages.push(`[vt_padded]rotate=angle='(${rotationExpr})*PI/180':fillcolor=black@0:out_w=${padW}:out_h=${padH}[vt_rotated]`);
     afterGeometry = 'vt_rotated';
   }
 
   let afterAlpha = afterGeometry;
   if (everFades) {
-    // colorchannelmixer's aa option is a plain static float — it does NOT
-    // evaluate per-frame expressions (confirmed empirically: ffmpeg rejects
-    // an expression string there outright). geq is the filter that actually
-    // supports a real per-frame expression for alpha; `alpha(X,Y)` reads the
-    // existing per-pixel alpha (0 in the transparent pad area, opaque over
-    // the video) so multiplying by it preserves the pad's transparency
-    // while scaling only the visible video's own alpha. This is the single
-    // most expensive stage here (real per-pixel expression evaluation), so
-    // it's only ever included when opacity is actually animated.
-    activeStages.push(`[${afterGeometry}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*(${opacityExpr})/100'[vt_faded]`);
+    // Opacity is applied by RAMPING colorchannelmixer's alpha gain with timed
+    // `sendcmd` commands. `aa` multiplies the existing per-pixel alpha, which
+    // is exactly what this stage did before — the transparent pad area stays
+    // transparent (0 * gain = 0) and only the visible video's own alpha is
+    // scaled — so this is a drop-in at the same point in the chain.
+    //
+    // It replaces a `geq` doing `a='alpha(X,Y)*(<expr>)/100'`. That was by far
+    // the most expensive stage in the whole pipeline, for a stupid reason:
+    // opacity is a per-FRAME scalar (identical for every pixel), but geq is a
+    // per-PIXEL filter, so it re-derived that one number for every pixel on
+    // every plane. Measured on a real 35s 1920x1080 export with rotation +
+    // opacity: the rotation pad inflates the canvas to 2524x1747 (2.13x the
+    // source), giving 17.6 MILLION expression evaluations per frame and 18.3
+    // BILLION across the clip — to produce 1038 distinct values. Each of those
+    // walked an interpreted 1768-char, 16-branch if(between(...)) tree. That
+    // one stage was ~87% of filter cost and took the export to 31.3 minutes,
+    // past the client's own abort timeout, which is what made "every feature
+    // at once" look like a broken render rather than a slow one.
+    //
+    // colorchannelmixer has no `eval` option in ffmpeg 6.1 (checked), but all
+    // of its gains are runtime-settable, so sendcmd drives it: the value is
+    // computed once per command and the actual pixel work is a native SIMD
+    // multiply.
+    const opacityCommands = buildOpacityCommandList(videoTransform, trimStart, trimEnd);
+    activeStages.push(`[${afterGeometry}]sendcmd=c='${opacityCommands}',colorchannelmixer=aa=1[vt_faded]`);
     afterAlpha = 'vt_faded';
   }
 
-  activeStages.push(`color=black:size=${canvasWidth}x${canvasHeight}:duration=${(trimEnd - trimStart).toFixed(3)}[vt_bg]`);
   // `setsar=1` made explicit (not just relying on `scale` above defaulting
   // to it) so this segment's SAR is guaranteed to match the pre/post
   // segments' own explicit `setsar=1` below regardless of ffmpeg version —

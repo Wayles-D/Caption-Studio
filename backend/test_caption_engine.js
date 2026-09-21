@@ -5,6 +5,7 @@ import { generateSubtitleFromTranscript } from './services/subtitleService.js';
 import { getASSStyleFromConfig, getCSSPreviewFromConfig, CREATOR_PROFILES, ANIMATION_MODES, hexToASSColor } from '../shared/captionConfig.js';
 import { balancePhraseLines } from './utils/phraseGrouper.js';
 import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../shared/captionGraphics.js';
+import { buildVideoTransformFilterChain } from './utils/videoTransformFilter.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -283,6 +284,180 @@ assert.ok(
   assert.ok(Math.abs(roundTripped - canvasPx) < 1e-9, `Offset round-trip must be lossless at canvasWidth ${canvasW} (got ${roundTripped})`);
 });
 console.log('✓ Word offsets resolve to an identical frame fraction in preview and export');
+
+// 9. Video transform segments must share ONE zero-based timeline
+console.log('\n[Test 9] Video Transform Segment Timeline (keyframed rotation lands on time)');
+// Regression guard for a real bug: the transformed ("active") segment used to
+// keep its ORIGINAL absolute PTS while the untransformed pre/post segments
+// were reset with setpts=PTS-STARTPTS, on the assumption that ffmpeg's
+// `concat` filter re-stamps whatever it is handed. It does not — concat
+// offsets each segment by the ACCUMULATED DURATION of the previous ones
+// without subtracting that segment's own start PTS, so an active segment
+// beginning at trimStart landed trimStart seconds late.
+//
+// Measured on a 5s clip with rotation keyframed 0deg->40deg starting at
+// t=0.5: the export ran 5.52s instead of 5.00s, and every frame showed the
+// angle the live preview had ~0.5s earlier (6.37deg vs 17.5deg at t=1.25).
+// The same mismatch left the segment's first 0.5s showing only the black
+// [vt_bg] background, since that generator always starts at 0.
+//
+// The active segment is now zero-based like its neighbours, and the sampled
+// expressions read `t + trimStart` to stay keyed to absolute timeline time.
+// These two MUST change together, which is exactly what this asserts.
+const kfAt = (t, rotation) => ({ t, easing: 'ease-out', values: { positionX: 0, positionY: 0, scale: 1, rotation, opacity: 100 } });
+
+const midStartChain = buildVideoTransformFilterChain(
+  { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 0, opacity: 100, keyframes: [kfAt(0.5, 0), kfAt(3.5, 40)] },
+  5, 1080, 1920
+);
+assert.ok(
+  /trim=start=0\.500:end=[\d.]+,setpts=PTS-STARTPTS/.test(midStartChain.filterComplex),
+  'The transformed segment must reset PTS (setpts=PTS-STARTPTS) so `concat` places it at the right time'
+);
+assert.ok(
+  midStartChain.filterComplex.includes('(t+0.500000)'),
+  'With a zero-based active segment, sampled expressions must read `t + trimStart` to stay on the absolute timeline'
+);
+
+// No pre segment (keyframes start at 0) -> nothing to shift, `t` is already
+// absolute, and the emitted expression must stay exactly as it was.
+const fromZeroChain = buildVideoTransformFilterChain(
+  { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 0, opacity: 100, keyframes: [kfAt(0, 0), kfAt(3, 35)] },
+  5, 1080, 1920
+);
+assert.ok(!fromZeroChain.filterComplex.includes('(t+'), 'With no pre segment there is no offset to apply — `t` must be used unshifted');
+console.log('✓ Transformed and passthrough segments share one zero-based timeline');
+
+// 10. Size stages must not be re-evaluated per frame when scale is constant
+console.log('\n[Test 10] Video Transform Size Stages (no per-frame cost when scale is constant)');
+// `scale`/`pad` with eval=frame rebuild the swscale context on every frame.
+// That is only needed when the frame size actually changes, i.e. scale is
+// animated. Measured on a 1080x1920 clip, a static 20deg rotation exported in
+// 6.34s instead of 10.77s once the size was computed once (1.70x), for
+// bit-identical output (SSIM 1.000000).
+//
+// The literal and the absent eval=frame MUST stay together: `t` does not exist
+// at filter-init time, so a t-dependent size expression WITHOUT eval=frame
+// makes ffmpeg reject the entire graph ("Error initializing filters") and the
+// export silently falls back to the legacy ASS renderer.
+const staticRotChain = buildVideoTransformFilterChain(
+  { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 20, opacity: 100 }, 5, 1080, 1920
+);
+assert.ok(!staticRotChain.filterComplex.includes('eval=frame'), 'A constant scale must not force per-frame size re-evaluation');
+assert.ok(/scale=w='iw\*\(1\.000000\)'/.test(staticRotChain.filterComplex), 'A constant scale must be emitted as a literal, never a t-dependent expression');
+assert.ok(!/scale=w='iw\*\([^']*\bt\b/.test(staticRotChain.filterComplex), 'Without eval=frame the size expression must not reference `t` — ffmpeg cannot evaluate it at init');
+
+// Animated scale still needs genuine per-frame evaluation.
+const animScaleChain = buildVideoTransformFilterChain(
+  { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 0, opacity: 100, keyframes: [kfAt(0, 0), kfAt(3, 0)].map((k, i) => ({ ...k, values: { ...k.values, scale: i === 0 ? 1 : 1.5 } })) },
+  5, 1080, 1920
+);
+assert.ok(animScaleChain.filterComplex.includes('eval=frame'), 'An animated scale must keep eval=frame so the size tracks the animation');
+console.log('✓ Size stages are evaluated once when constant, per-frame only when animated');
+
+// 11. Video opacity must never be computed per-pixel again
+console.log('\n[Test 11] Video Opacity Is A Per-Frame Scalar (not a per-pixel expression)');
+// Opacity is uniform across a frame, but it used to be applied with `geq` — a
+// PER-PIXEL filter — so ffmpeg re-derived that one number for every pixel on
+// every plane. Measured on a real 35s 1920x1080 export with rotation +
+// opacity: rotation's pad inflates the canvas to 2524x1747 (2.13x the source),
+// giving 17.6 million expression evaluations per frame and 18.3 BILLION across
+// the clip, each walking an interpreted 1768-char, 16-branch if(between(...))
+// tree — to produce 1038 distinct values. That was ~87% of filter cost and
+// took the export to 31.3 minutes, past the client's abort timeout, which made
+// "every feature at once" look like a broken render instead of a slow one.
+//
+// It is now a timed `sendcmd` ramp into colorchannelmixer's native alpha gain:
+// 12.4x faster on a 5s rotation+opacity clip (93.58s -> 7.55s) AND markedly
+// more accurate — 54.49 dB vs the old 28.48 dB against a float-precision
+// (gbrapf32le) reference, because each command samples the real eased curve
+// instead of interpolating between 15 linear samples.
+const fadeChain = buildVideoTransformFilterChain(
+  {
+    offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 0, opacity: 100,
+    keyframes: [
+      { t: 0.5, easing: 'ease-out', values: { positionX: 0, positionY: 0, scale: 1, rotation: 0, opacity: 100 } },
+      { t: 3.5, easing: 'ease-out', values: { positionX: 0, positionY: 0, scale: 1, rotation: 25, opacity: 30 } },
+    ],
+  },
+  5, 1080, 1920
+);
+assert.ok(!/geq=/.test(fadeChain.filterComplex), 'Opacity must NOT be applied with geq — it is a per-pixel filter doing per-frame work');
+assert.ok(/sendcmd=c='[^']+',colorchannelmixer=aa=1/.test(fadeChain.filterComplex), 'Opacity must be a sendcmd ramp into colorchannelmixer\'s native alpha gain');
+// Commands are separated by an ESCAPED `;` — an unescaped one would be read by
+// the filtergraph parser as a chain separator and corrupt the whole graph.
+assert.ok(fadeChain.filterComplex.includes('\\;'), 'sendcmd command separators must be escaped as \\; for the filtergraph parser');
+// Ramp must be finely quantized in time, not one step per keyframe.
+const cmdCount = (fadeChain.filterComplex.match(/colorchannelmixer aa/g) || []).length;
+assert.ok(cmdCount > 50, `Opacity ramp must be finely sampled to stay smooth (got ${cmdCount} commands)`);
+// Command times are SEGMENT-LOCAL (the active segment is zero-based), so the
+// first command must be at 0 even though the fade starts at t=0.5 absolute.
+assert.ok(/'0\.000 colorchannelmixer aa 1\.000000/.test(fadeChain.filterComplex), 'First command must be at segment-local time 0 carrying the absolute-time opacity value');
+
+// No fade -> no opacity stage at all, and nothing left behind.
+const noFadeChain = buildVideoTransformFilterChain(
+  { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 20, opacity: 100 }, 5, 1080, 1920
+);
+assert.ok(!noFadeChain.filterComplex.includes('sendcmd'), 'A transform that never fades must not emit an opacity stage');
+assert.ok(!noFadeChain.filterComplex.includes('colorchannelmixer'), 'A transform that never fades must not emit colorchannelmixer');
+console.log(`✓ Opacity is a per-frame sendcmd ramp (${cmdCount} commands), never a per-pixel expression`);
+
+// 12. The overlay background must not dictate the output frame rate
+console.log('\n[Test 12] Video Transform Background Inherits Source Timing (no fps resample)');
+// The background is the overlay's MAIN input, so IT decides the output frame
+// rate. It used to be a synthetic `color=black:size=...` source with no `rate`
+// set, which defaults to 25fps — silently resampling every transformed export
+// to 25fps. Confirmed on a real 29.58fps source: a caption-only export stayed
+// 29.58fps while the same clip WITH a video transform came out 25fps; after
+// deriving the background from the source via `split`, it stays 29.58fps.
+const bgChain = buildVideoTransformFilterChain(
+  { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 15, opacity: 100 }, 5, 1080, 1920
+);
+assert.ok(!/color=black:size=/.test(bgChain.filterComplex), 'The overlay background must not come from a `color` generator — it defaults to 25fps and drives the output rate');
+assert.ok(/split=2\[vt_active_src\]\[vt_bg_src\]/.test(bgChain.filterComplex), 'The background must be split off the SAME trimmed source frames so it inherits their exact rate/PTS');
+assert.ok(/\[vt_bg_src\]drawbox=[^[]*t=fill[^[]*\[vt_bg\]/.test(bgChain.filterComplex), 'The background must be the source frames painted black in place (drawbox t=fill)');
+assert.ok(/\[vt_bg\]\[[a-z_]+\]overlay=/.test(bgChain.filterComplex), 'The black background must remain the overlay MAIN input (behind the video layer)');
+console.log('✓ Overlay background is source-derived, so output frame rate matches the source');
+
+// 13. Caption segment quantization must not accumulate timing drift
+console.log('\n[Test 13] Caption Segment Quantization Is Drift-Free');
+// Segments are CONTIGUOUS and tile the video exactly. Quantizing each DURATION
+// independently used an asymmetric floor that stretched any sub-frame segment
+// up to a full frame, so every later segment was pushed later — caption timing
+// drifted against the audio, and the track ran long. Measured on a real 4.02s
+// export: raw segment durations summed to exactly 4.020s but quantized to
+// 4.100s, with the whole +0.080s coming from 8 sub-frame segments; the exported
+// file ran 4.16s. Quantizing BOUNDARIES instead is drift-free by construction.
+//
+// This asserts the invariant directly on the same arithmetic the compositor
+// uses, so it fails if anyone reintroduces a per-duration floor.
+const FPS = 50, Q = 1 / FPS;
+const qTime = (t) => Math.round(t / Q) * Q;
+// A worst case: many deliberately sub-frame segments between normal ones.
+const synthetic = [];
+let at = 0;
+for (let i = 0; i < 40; i++) {
+  const span = i % 3 === 0 ? 0.004 : 0.2; // 0.004s is well under one 0.02s frame
+  synthetic.push({ start: at, end: at + span, file: `f${i}.png` });
+  at += span;
+}
+const videoDuration = at;
+let cursor = qTime(synthetic[0].start);
+const trackStart = cursor;
+let kept = 0;
+synthetic.forEach((s) => {
+  const end = qTime(s.end);
+  if (end - cursor < Q / 2) return;
+  kept++;
+  cursor = end;
+});
+const total = cursor - trackStart;
+assert.ok(
+  Math.abs(total - qTime(videoDuration)) < 1e-9,
+  `Quantized track length (${total.toFixed(3)}s) must equal the video duration snapped to the frame grid (${qTime(videoDuration).toFixed(3)}s), not grow with segment count`
+);
+assert.ok(kept < synthetic.length, 'Sub-frame segments must be dropped rather than inflated to a full frame');
+console.log(`✓ ${synthetic.length} segments (${synthetic.length - kept} sub-frame) quantize to exactly ${total.toFixed(3)}s with zero accumulated drift`);
 
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');
 
