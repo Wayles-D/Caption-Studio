@@ -1039,3 +1039,99 @@ body.light-theme {
     height: 18px;
   }
 }
+
+/* --- Video filmstrip -------------------------------------------------------
+   A row of real frames sampled across the loaded video, sitting directly under
+   the ruler (see src/js/components/filmstrip.js). It reuses the ruler/lane grid
+   so its track column lines up exactly with the ruler ticks, the keyframe
+   markers and the shared .timeline-playhead, which already spans this row
+   because it is absolutely positioned in the same .timeline-scroll parent.
+
+   This is editor chrome, NOT canvas content — deliberately outside the
+   phone-frame/canvas overflow rules, which must never clip or scroll it. */
+.timeline-filmstrip-row {
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  margin-bottom: 6px;
+}
+
+.timeline-filmstrip-gutter {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding-left: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeline-filmstrip-track {
+  position: relative;
+  display: flex;
+  height: 44px; /* must match FILMSTRIP_TILE_HEIGHT_PX in filmstrip.js */
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  /* Rounded corners clip only the outer edges, so the tiles themselves stay
+     square-edged and butt together as one continuous strip. */
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Tiles are sized in PERCENT by filmstrip.js so the strip re-flows with the
+   editor — a time axis must never carry baked-in pixel coordinates. They are
+   flush by design: no gap, no margin, no individual radius. */
+.timeline-filmstrip-tile {
+  position: relative;
+  height: 100%;
+  flex: 0 0 auto;
+  background-color: var(--bg-card);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  /* Hairline separator instead of a gap, so frames read as a filmstrip rather
+     than as detached cards while still being individually legible. */
+  box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.timeline-filmstrip-tile.is-loaded {
+  opacity: 1;
+}
+
+/* Lightweight loading state: the placeholder tiles are already laid out at
+   their final size (so nothing shifts when frames arrive) and just shimmer
+   until filled. */
+.timeline-filmstrip-track.is-loading .timeline-filmstrip-tile:not(.is-loaded) {
+  opacity: 1;
+  background-image: linear-gradient(
+    90deg,
+    var(--bg-card) 0%,
+    var(--bg-input) 50%,
+    var(--bg-card) 100%
+  );
+  background-size: 200% 100%;
+  animation: filmstrip-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes filmstrip-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-filmstrip-tile { transition: none; }
+  .timeline-filmstrip-track.is-loading .timeline-filmstrip-tile:not(.is-loaded) { animation: none; }
+}
+
+@media (max-width: 900px) {
+  /* Height only. The gutter width is deliberately NOT overridden: .timeline-lane
+     and .timeline-ruler-row keep their 168px gutter at every breakpoint, and the
+     filmstrip must stay on that same grid or its tiles stop lining up with the
+     ruler ticks and the shared playhead. */
+  .timeline-filmstrip-track { height: 36px; }
+}

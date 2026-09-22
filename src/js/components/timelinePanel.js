@@ -16,6 +16,7 @@
  */
 import * as keyframeEngine from './keyframeEngine.js';
 import { undo, redo, getHistoryState } from '../state.js';
+import { getFilmstrip, computeTileCount, FILMSTRIP_TILE_HEIGHT_PX, FILMSTRIP_COUNT_CHANGE_THRESHOLD } from './filmstrip.js';
 
 const LANES = [
   { key: 'position', label: 'Position', properties: [
@@ -316,6 +317,24 @@ function buildDom(container, options) {
   rulerRow.appendChild(ruler);
   scroll.appendChild(rulerRow);
 
+  // Video filmstrip — real frames sampled across the clip, rendered as a row
+  // under the ruler so the timeline reads like a video editor's. Shares the
+  // ruler's grid (168px gutter + 1fr track) so tiles line up exactly with the
+  // ruler ticks and keyframe markers, and lives inside `scroll` so the single
+  // existing playhead crosses it with no second indicator. Purely a VIEW of
+  // #preview-video's timeline — see filmstrip.js on why it owns no time state.
+  const filmstripRow = document.createElement('div');
+  filmstripRow.className = 'timeline-filmstrip-row';
+  const filmstripGutter = document.createElement('div');
+  filmstripGutter.className = 'timeline-filmstrip-gutter';
+  filmstripGutter.textContent = 'Video';
+  const filmstripTrack = document.createElement('div');
+  filmstripTrack.className = 'timeline-filmstrip-track';
+  filmstripTrack.id = 'timeline-filmstrip-track';
+  filmstripRow.appendChild(filmstripGutter);
+  filmstripRow.appendChild(filmstripTrack);
+  scroll.appendChild(filmstripRow);
+
   const lanesEl = document.createElement('div');
   lanesEl.id = 'timeline-lanes';
   laneEls = {};
@@ -417,7 +436,7 @@ function buildDom(container, options) {
 
   container.appendChild(scroll);
 
-  return { header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack };
+  return { header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack };
 }
 
 function timeToX(time, trackWidth, duration) {
@@ -612,6 +631,103 @@ function refreshRangesForTarget(kind) {
 let lastTargetKind = undefined;
 let lastPaused = undefined;
 
+// --- Video filmstrip -------------------------------------------------------
+// Regenerated ONLY when the underlying video changes or the ideal tile count
+// moves materially (a resize). Caption state — position, scale, opacity,
+// rotation, style, Rolling Stack, keyframes — is deliberately not an input
+// here: thumbnails depend on the VIDEO, so none of those cause a rebuild.
+let filmstripSrc = null;
+let filmstripCount = 0;
+let filmstripToken = 0;
+
+function currentVideoSrc() {
+  const video = getVideo();
+  // currentSrc is the resolved URL the element actually decoded; it is empty
+  // until a source is attached, which is the "no video yet" case.
+  return video?.currentSrc || video?.src || null;
+}
+
+function clearFilmstrip() {
+  if (els?.filmstripTrack) els.filmstripTrack.replaceChildren();
+  filmstripSrc = null;
+  filmstripCount = 0;
+}
+
+/**
+ * Paints `count` placeholder tiles immediately, then fills each one in as its
+ * frame arrives. Placeholders are what keep the row from shifting layout when
+ * extraction finishes, and give a lightweight loading state for free.
+ */
+async function rebuildFilmstrip(src, count, trackWidth) {
+  const token = ++filmstripToken;
+  const track = els.filmstripTrack;
+  track.replaceChildren();
+  track.classList.add('is-loading');
+
+  const tiles = [];
+  for (let i = 0; i < count; i++) {
+    const tile = document.createElement('div');
+    tile.className = 'timeline-filmstrip-tile';
+    // Width as a PERCENTAGE, never fixed px: the row is a time axis, so tiles
+    // must re-flow with the editor rather than carry baked-in coordinates.
+    tile.style.width = `${100 / count}%`;
+    track.appendChild(tile);
+    tiles.push(tile);
+  }
+
+  try {
+    await getFilmstrip(src, {
+      count,
+      shouldAbort: () => token !== filmstripToken,
+      onTile: (index, url) => {
+        if (token !== filmstripToken) return;
+        const tile = tiles[index];
+        if (!tile) return;
+        tile.style.backgroundImage = `url("${url}")`;
+        tile.classList.add('is-loaded');
+      }
+    });
+  } catch (err) {
+    // A video that cannot be sampled at all (unsupported codec, decode error)
+    // leaves the placeholders in place rather than breaking the timeline.
+    console.warn('[Filmstrip] Thumbnail extraction failed:', err?.message || err);
+  } finally {
+    if (token === filmstripToken) track.classList.remove('is-loading');
+  }
+}
+
+/**
+ * Called from the existing tick loop. Cheap on every frame: it only measures
+ * and compares, and does real work when the video or the ideal count changed.
+ */
+function syncFilmstrip(duration) {
+  const track = els?.filmstripTrack;
+  if (!track) return;
+  const src = currentVideoSrc();
+
+  if (!src || !(duration > 0)) {
+    if (filmstripSrc !== null) clearFilmstrip();
+    return;
+  }
+
+  const trackWidth = track.clientWidth;
+  if (!(trackWidth > 0)) return; // not laid out yet (hidden/zero-width)
+
+  const video = getVideo();
+  const aspect = (video?.videoWidth || 0) / (video?.videoHeight || 1);
+  const tileWidth = aspect > 0 ? FILMSTRIP_TILE_HEIGHT_PX * aspect : 0;
+  const count = computeTileCount(trackWidth, duration, tileWidth);
+  if (!count) return;
+
+  const srcChanged = src !== filmstripSrc;
+  const countChanged = Math.abs(count - filmstripCount) > FILMSTRIP_COUNT_CHANGE_THRESHOLD;
+  if (!srcChanged && !countChanged) return;
+
+  filmstripSrc = src;
+  filmstripCount = count;
+  rebuildFilmstrip(src, count, trackWidth);
+}
+
 function tick() {
   const video = getVideo();
   const duration = video?.duration || 0;
@@ -619,6 +735,9 @@ function tick() {
 
   refreshRulerTicks(duration);
   refreshPlayhead(currentTime, duration);
+  // Same cadence as the ruler/playhead, and equally cheap: this only rebuilds
+  // when the video or the ideal tile count actually changed.
+  syncFilmstrip(duration);
   if (els.timeReadout) els.timeReadout.textContent = formatTime(currentTime);
 
   const paused = video?.paused ?? true;
@@ -716,6 +835,27 @@ export function initTimelinePanel(container, options = {}) {
   });
   els.ruler.addEventListener('pointermove', (e) => { if (scrubbing) scrub(e.clientX); });
   els.ruler.addEventListener('pointerup', () => { scrubbing = false; });
+
+  // The filmstrip is a second view of the SAME axis, so it scrubs through the
+  // same helper against its own track rect — it never becomes the source of
+  // truth, it just writes #preview-video.currentTime like the ruler does.
+  const scrubFilmstrip = (clientX) => {
+    const video = getVideo();
+    const duration = video?.duration || 0;
+    if (!video || duration <= 0) return;
+    const rect = els.filmstripTrack.getBoundingClientRect();
+    if (!rect.width) return;
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    video.currentTime = xToTime(x, rect.width, duration);
+  };
+  let filmstripScrubbing = false;
+  els.filmstripTrack.addEventListener('pointerdown', (e) => {
+    filmstripScrubbing = true;
+    els.filmstripTrack.setPointerCapture(e.pointerId);
+    scrubFilmstrip(e.clientX);
+  });
+  els.filmstripTrack.addEventListener('pointermove', (e) => { if (filmstripScrubbing) scrubFilmstrip(e.clientX); });
+  els.filmstripTrack.addEventListener('pointerup', () => { filmstripScrubbing = false; });
 
   els.scroll.addEventListener('pointerdown', (e) => {
     // Clicking empty lane space (not a marker) clears the "selected keyframe" (Delete-key target).
