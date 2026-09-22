@@ -34,7 +34,12 @@
 // arrive (no layout shift); width follows the source aspect ratio, clamped so
 // an extreme aspect can't produce absurd tiles.
 const TILE_HEIGHT_PX = 44;
-const MIN_TILE_WIDTH_PX = 28;
+// The floor is deliberately generous. Tile WIDTH is what drives the tile count
+// (count = trackWidth / tileWidth), so a small floor produces many very narrow
+// tiles — at 28px a portrait frame became a ~31px sliver that read as blurry
+// even when rasterized pixel-perfect, simply because there was almost nothing
+// to see. A wider floor yields fewer, larger, actually legible frames.
+const MIN_TILE_WIDTH_PX = 44;
 const MAX_TILE_WIDTH_PX = 96;
 
 // Never fewer than this (a filmstrip of 2 frames is not a filmstrip), never
@@ -161,13 +166,66 @@ function loadMetadata(video, timeoutMs = 15000) {
   });
 }
 
+/**
+ * Draws `source` into `ctx` cover-fitted, halving through a scratch canvas
+ * whenever the reduction is extreme.
+ *
+ * A single `drawImage` from (say) 608x1080 straight down to 63x88 undersamples
+ * badly — the browser's bilinear filter samples far too few source pixels, so
+ * detail turns to mush and edges alias. Repeatedly halving keeps every step
+ * within bilinear's competent range, which is the standard fix and is why
+ * these tiles look sharp rather than smeared.
+ */
+function drawFrameScaled(ctx, source, sw, sh, buffers) {
+  const dw = ctx.canvas.width;
+  const dh = ctx.canvas.height;
+  // Cover-fit: fill the tile, cropping the overflowing axis, so tiles are a
+  // uniform size and butt together with no letterboxing gaps.
+  const coverScale = Math.max(dw / sw, dh / sh);
+  const targetW = sw * coverScale;
+  const targetH = sh * coverScale;
+
+  let curSrc = source;
+  let curW = sw;
+  let curH = sh;
+  let slot = 0;
+
+  // Halve while a further halving would still be at or above the target size.
+  // Two buffers are alternated because assigning canvas.width CLEARS that
+  // canvas — halving in place would read an empty bitmap on the second pass.
+  while (curW / 2 >= targetW && curH / 2 >= targetH && curW > 2 && curH > 2) {
+    const nextW = Math.max(1, Math.round(curW / 2));
+    const nextH = Math.max(1, Math.round(curH / 2));
+    const buf = buffers[slot % 2];
+    slot++;
+    buf.canvas.width = nextW;
+    buf.canvas.height = nextH;
+    buf.ctx.imageSmoothingEnabled = true;
+    buf.ctx.imageSmoothingQuality = 'high';
+    buf.ctx.drawImage(curSrc, 0, 0, curW, curH, 0, 0, nextW, nextH);
+    curSrc = buf.canvas;
+    curW = nextW;
+    curH = nextH;
+  }
+
+  const finalScale = Math.max(dw / curW, dh / curH);
+  const drawW = curW * finalScale;
+  const drawH = curH * finalScale;
+  ctx.drawImage(curSrc, 0, 0, curW, curH, (dw - drawW) / 2, (dh - drawH) / 2, drawW, drawH);
+}
+
 function canvasToBlobUrl(canvas) {
   return new Promise((resolve) => {
     try {
+      // Tiles are small, so the file-size saving from aggressive compression is
+      // negligible while the quality cost is very visible — 0.6 JPEG was adding
+      // real mushiness on top of the scaling problems. WebP is preferred where
+      // supported (noticeably better at these sizes); browsers that don't
+      // support it silently hand back a PNG blob from toBlob, which is fine.
       canvas.toBlob(
         (blob) => resolve(blob ? URL.createObjectURL(blob) : null),
-        'image/jpeg',
-        0.6
+        'image/webp',
+        0.92
       );
     } catch (err) {
       // Tainted canvas or an unsupported type — treated as "this tile failed"
@@ -185,7 +243,7 @@ function canvasToBlobUrl(canvas) {
  * `shouldAbort()` is polled between frames so a video swap (or unmount) stops
  * the work immediately instead of finishing a strip nobody will see.
  */
-export async function extractThumbnails(src, { count, onTile, shouldAbort } = {}) {
+export async function extractThumbnails(src, { count, tileWidthPx, onTile, shouldAbort } = {}) {
   const video = document.createElement('video');
   video.preload = 'metadata';
   video.muted = true;
@@ -204,15 +262,30 @@ export async function extractThumbnails(src, { count, onTile, shouldAbort } = {}
     const vw = video.videoWidth || 16;
     const vh = video.videoHeight || 9;
     const aspect = vw / vh;
-    const tileWidth = tileWidthForAspect(aspect);
+    // The canvas MUST be sized from the width the tile is actually DISPLAYED
+    // at, not from the aspect-derived width used to pick the tile count. Those
+    // two are decoupled (tiles lay out at trackWidth/count), so sizing by the
+    // latter rendered a 28px-wide image into a ~32 CSS px slot — then the
+    // browser upscaled it again for HiDPI, which is what made tiles look soft.
+    const tileWidth = tileWidthPx > 0 ? tileWidthPx : tileWidthForAspect(aspect);
 
     const canvas = document.createElement('canvas');
     // Backing store at device scale keeps tiles crisp on HiDPI without
-    // re-extracting per display.
+    // re-extracting per display. Capped at 2 so a 3x phone doesn't quadruple
+    // the decode/encode cost for no visible gain at this size.
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = Math.round(tileWidth * dpr);
-    canvas.height = Math.round(TILE_HEIGHT_PX * dpr);
+    canvas.width = Math.max(1, Math.round(tileWidth * dpr));
+    canvas.height = Math.max(1, Math.round(TILE_HEIGHT_PX * dpr));
     const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Two alternating scratch buffers for stepped downscaling — see
+    // drawFrameScaled on why one is not enough.
+    const buffers = [0, 1].map(() => {
+      const c = document.createElement('canvas');
+      return { canvas: c, ctx: c.getContext('2d') };
+    });
 
     const times = sampleTimes(count, duration);
     for (let i = 0; i < times.length; i++) {
@@ -220,12 +293,7 @@ export async function extractThumbnails(src, { count, onTile, shouldAbort } = {}
       let url = null;
       try {
         await seekTo(video, times[i]);
-        // Cover-fit: fill the tile, cropping the overflowing axis, so tiles are
-        // a uniform size and butt together with no letterboxing gaps.
-        const scale = Math.max(canvas.width / vw, canvas.height / vh);
-        const dw = vw * scale;
-        const dh = vh * scale;
-        ctx.drawImage(video, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
+        drawFrameScaled(ctx, video, vw, vh, buffers);
         url = await canvasToBlobUrl(canvas);
       } catch (err) {
         // One unreadable frame must not kill the strip — that tile just stays
@@ -249,9 +317,14 @@ export async function extractThumbnails(src, { count, onTile, shouldAbort } = {}
  * Cache-aware entry point. Returns the cached strip when the same video has
  * already been sampled at a comparable count, otherwise extracts and stores it.
  */
-export async function getFilmstrip(src, { count, onTile, shouldAbort } = {}) {
+export async function getFilmstrip(src, { count, tileWidthPx, onTile, shouldAbort } = {}) {
   const cached = cache.get(src);
-  if (cached && Math.abs(cached.count - count) <= COUNT_CHANGE_THRESHOLD) {
+  // Re-extract if the tile is now rendered meaningfully LARGER than what the
+  // cached images were rasterized for, otherwise the browser upscales them and
+  // they look soft. Growing past the cached resolution is the only case worth
+  // paying for; rendering smaller just downsamples, which is fine.
+  const resolutionStale = cached && tileWidthPx > (cached.tileWidth || 0) * 1.25;
+  if (cached && !resolutionStale && Math.abs(cached.count - count) <= COUNT_CHANGE_THRESHOLD) {
     // Re-announce cached tiles so the caller paints without re-extracting.
     cached.tiles.forEach((tile, i) => { if (tile.url) onTile?.(i, tile.url, cached.tileWidth); });
     return cached;
@@ -261,7 +334,7 @@ export async function getFilmstrip(src, { count, onTile, shouldAbort } = {}) {
     cache.delete(src);
   }
 
-  const { tiles, tileWidth, aspect } = await extractThumbnails(src, { count, onTile, shouldAbort });
+  const { tiles, tileWidth, aspect } = await extractThumbnails(src, { count, tileWidthPx, onTile, shouldAbort });
   if (shouldAbort?.()) {
     // Discard rather than cache a half-built strip for a video that is gone.
     tiles.forEach((tile) => { if (tile.url) URL.revokeObjectURL(tile.url); });

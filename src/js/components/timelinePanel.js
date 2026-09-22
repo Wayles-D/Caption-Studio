@@ -659,6 +659,9 @@ function clearFilmstrip() {
  * extraction finishes, and give a lightweight loading state for free.
  */
 async function rebuildFilmstrip(src, count, trackWidth) {
+  // The width each tile actually occupies on screen. filmstrip.js rasterizes to
+  // exactly this (x devicePixelRatio) so tiles are never upscaled by the browser.
+  const renderedTileWidth = trackWidth / count;
   const token = ++filmstripToken;
   const track = els.filmstripTrack;
   track.replaceChildren();
@@ -678,6 +681,7 @@ async function rebuildFilmstrip(src, count, trackWidth) {
   try {
     await getFilmstrip(src, {
       count,
+      tileWidthPx: renderedTileWidth,
       shouldAbort: () => token !== filmstripToken,
       onTile: (index, url) => {
         if (token !== filmstripToken) return;
