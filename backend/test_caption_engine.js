@@ -6,6 +6,8 @@ import { getASSStyleFromConfig, getCSSPreviewFromConfig, CREATOR_PROFILES, ANIMA
 import { balancePhraseLines } from './utils/phraseGrouper.js';
 import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../shared/captionGraphics.js';
 import { buildVideoTransformFilterChain } from './utils/videoTransformFilter.js';
+import { routeFieldsThroughKeyframes, upsertKeyframeEntry, KEYFRAME_PROPERTIES, VIDEO_FIELD_TO_PROPERTY } from '../shared/keyframes.js';
+import { resolveVideoTransformAtTime } from '../shared/videoTransform.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -497,6 +499,47 @@ assert.ok(
 // as a filter separator and the entire graph fails to parse.
 assert.ok(!/max\(\d+,i[wh]\)/.test(rotChain.filterComplex), 'The comma inside max() must be escaped as \\, for the filtergraph parser');
 console.log('✓ pad/rotate size from the real stream (iw/ih), so a probe disagreement can no longer fail the render');
+
+// 15. Keyframing is opt-in, the way every production editor does it
+console.log('\n[Test 15] Animation Is Opt-In (static until the keyframe button is pressed)');
+// This gate has been flipped twice already — see routeFieldsThroughKeyframes's
+// own HISTORY note. Auto-keying was once made UNCONDITIONAL on the stated
+// grounds that "real editors don't make you pre-declare this is now animated",
+// which is not true: After Effects, Premiere, Final Cut and Resolve all gate
+// animation behind an explicit opt-in, and a property with no keyframes is
+// static.
+//
+// Making it unconditional deleted the static mode, which caused the reported
+// bug: setting opacity 0 on a never-animated video created ONE keyframe, and a
+// single-point track is constant across the whole timeline, so the video went
+// black from 0:00 — a change that looked like it reached backwards in time.
+const readDefault = (p) => ({ positionX: 0, positionY: 0, scale: 1, rotation: 0, opacity: 100 }[p]);
+
+// Static mode: an ordinary edit must NOT switch animation on.
+const staticWrite = routeFieldsThroughKeyframes({}, { opacity: 50 }, VIDEO_FIELD_TO_PROPERTY, 3, readDefault);
+assert.strictEqual(staticWrite.nextKeyframes, null, 'A never-animated target must stay static — an ordinary edit must not create a keyframe');
+assert.deepStrictEqual(staticWrite.remainingFields, { opacity: 50 }, 'The edit must fall through as a plain static value write');
+
+// The ◆ button is the opt-in, and snapshots the CURRENT values.
+const firstPatch = {};
+KEYFRAME_PROPERTIES.forEach((p) => { firstPatch[p] = readDefault(p); });
+const enabled = upsertKeyframeEntry(undefined, 5, firstPatch);
+assert.strictEqual(enabled.length, 1, 'The keyframe button creates the first entry');
+assert.strictEqual(enabled[0].values.opacity, 100, 'The first keyframe holds the value the property had when animation was enabled');
+
+// Animated mode: an edit at a DIFFERENT time now creates a second keyframe,
+// and everything before the first keyframe is left alone.
+const animated = routeFieldsThroughKeyframes({ keyframes: enabled }, { opacity: 0 }, VIDEO_FIELD_TO_PROPERTY, 7, readDefault);
+assert.ok(animated.nextKeyframes && animated.nextKeyframes.length === 2, 'Once animated, an edit at a new time adds a keyframe there');
+const animatedVt = { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 0, opacity: 100, keyframes: animated.nextKeyframes };
+assert.strictEqual(resolveVideoTransformAtTime(animatedVt, 0).opacity, 100, 'Time before the first keyframe must be untouched');
+assert.strictEqual(resolveVideoTransformAtTime(animatedVt, 7).opacity, 0, 'The edited keyframe holds its new value');
+assert.ok(resolveVideoTransformAtTime(animatedVt, 6).opacity > 0 && resolveVideoTransformAtTime(animatedVt, 6).opacity < 100, 'Between the two keyframes it interpolates');
+
+// Deleting the last keyframe returns the target to static mode.
+const backToStatic = routeFieldsThroughKeyframes({ keyframes: [] }, { opacity: 20 }, VIDEO_FIELD_TO_PROPERTY, 2, readDefault);
+assert.strictEqual(backToStatic.nextKeyframes, null, 'Removing every keyframe must return the target to static mode');
+console.log('✓ Static until opted in; the keyframe button enables animation; edits then key at the playhead');
 
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');
 

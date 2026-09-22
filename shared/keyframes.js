@@ -84,16 +84,30 @@ function isValidList(list) {
 
 /**
  * Given an incoming field write (e.g. { offsetXPx: 12 }) and the target's
- * EXISTING override object, ACTION-DRIVEN auto-keying: any field whose
- * mapped property is one of KEYFRAME_PROPERTIES always routes into the
- * unified keyframe entry at `time` — creating both the entry and the
- * property's very first keyframe point if neither existed yet, not only
- * updating an already-active track. This is deliberately unconditional
- * (earlier versions of this function required the property to already have
- * a keyframe before an ordinary edit would auto-key it — the diamond button
- * was the only way to ever START keyframing something); real editors don't
- * make you pre-declare "this is now animated" before you're allowed to
- * change something at a point in time.
+ * EXISTING override object, ACTION-DRIVEN auto-keying: once a target IS
+ * animated (it has at least one keyframe entry), any field whose mapped
+ * property is one of KEYFRAME_PROPERTIES routes into the unified keyframe
+ * entry at `time`, creating that entry if none exists there yet. A target
+ * with no keyframes is static, and the write falls through untouched.
+ *
+ * HISTORY — this gate has been flipped twice, so the reasoning matters. An
+ * earlier version required a property to already be keyframed before an
+ * ordinary edit would auto-key it; that was then removed to make auto-keying
+ * unconditional, on the stated grounds that "real editors don't make you
+ * pre-declare this is now animated". That premise is simply not true: After
+ * Effects, Premiere, Final Cut and Resolve all gate animation behind an
+ * explicit opt-in (the stopwatch / "Toggle animation" — here the ◆ button,
+ * which snapshots current values into a first keyframe via
+ * upsertKeyframeEntry), and a property with no keyframes is static.
+ *
+ * Making it unconditional removed the static mode entirely, which is what
+ * produced the reported bug: setting an opacity of 0 on a never-animated
+ * video created ONE keyframe, and a single-point track is constant across
+ * the whole timeline (see evaluatePropertyAtTime), so the video went black
+ * from 0:00 — a change that appeared to reach backwards in time, with a
+ * diamond on the timeline nobody asked for and animation switched on
+ * permanently. The evaluator was never at fault and is unchanged;
+ * hold-before-first and single-keyframe-is-constant are standard everywhere.
  *
  * The resulting entry is always a FULL snapshot of every KEYFRAME_PROPERTY,
  * not just the field(s) this particular call happens to touch:
@@ -123,6 +137,33 @@ function isValidList(list) {
  * @returns {{ remainingFields: object, nextKeyframes: object[]|null }}
  */
 export function routeFieldsThroughKeyframes(existing, fields, fieldToProperty, time, readCurrentValue) {
+  // A target that has never been keyframed is NOT animated, so an ordinary
+  // value edit writes the plain static value for the whole clip — it does not
+  // silently switch animation on.
+  //
+  // This is the two-mode model every production editor uses (After Effects,
+  // Premiere, Final Cut, Resolve): a property is static until you explicitly
+  // enable animation (the stopwatch — here the ◆ button, which snapshots the
+  // current values into a first keyframe via upsertKeyframeEntry), and only
+  // after that does changing a value create or update a keyframe at the
+  // playhead.
+  //
+  // Without this gate EVERY edit auto-created a keyframe, so there was no
+  // static mode at all: setting "opacity 50" with no keyframes produced a
+  // lone keyframe, and a single-point track is constant across the entire
+  // timeline (see evaluatePropertyAtTime). The value therefore applied to the
+  // whole video anyway, but with a diamond on the timeline and animation
+  // switched on permanently — which is what made keyframes feel like they
+  // "reached backwards in time". The evaluator itself was always correct and
+  // is deliberately unchanged here; hold-before-first and single-keyframe-is-
+  // constant are standard across all of those tools.
+  //
+  // Deleting the last keyframe returns the target to static mode, which is
+  // also how those tools behave when you switch the stopwatch back off.
+  if (!isValidList(existing?.keyframes)) {
+    return { remainingFields: { ...fields }, nextKeyframes: null };
+  }
+
   const remainingFields = {};
   const touchedValues = {}; // property -> the NEW value this call is writing
 
