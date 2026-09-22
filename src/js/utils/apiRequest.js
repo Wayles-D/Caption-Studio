@@ -1,25 +1,42 @@
 /**
  * Shared fetch helpers for calling the backend API, with error classification
- * that distinguishes a slow/hung connection, a network-level failure (which
- * covers both an actual CORS rejection and a dropped connection — browsers
- * deliberately give JS no way to tell those apart), and a normal HTTP error
- * response from the server, instead of collapsing all of them into a single
- * generic "Upload error" message.
+ * that distinguishes a network-level failure (which covers both an actual CORS
+ * rejection and a dropped connection — browsers deliberately give JS no way to
+ * tell those apart) from a normal HTTP error response from the server, instead
+ * of collapsing both into a single generic "Upload error" message.
+ *
+ * NO REQUEST TIMEOUT. There used to be a 10-minute abort on every call, which
+ * was actively harmful for the two things this module is used for: /api/upload
+ * and /api/upload/regenerate both run transcription and/or a full FFmpeg
+ * render synchronously inside one request/response cycle, and the Download
+ * button always re-renders the current edits before serving the file (see
+ * App.jsx's handleDownloadVideo). A long video, a slow machine, or a
+ * keyframe-heavy filter graph can legitimately take longer than any fixed
+ * limit, and aborting was pure loss: the browser gave up while the server kept
+ * rendering to completion, so the user saw "the server took too long" for a
+ * render that actually succeeded, with the finished file sitting on disk and
+ * no way to reach it.
+ *
+ * A hung connection is now surfaced by the transport itself (the socket
+ * closing yields the TypeError branch below) or by the user cancelling, rather
+ * than by this module guessing at how long a render is allowed to take.
+ * `fetchJson` still accepts an explicit `timeoutMs` for any future caller that
+ * genuinely needs a bounded wait — it is simply no longer imposed by default.
  */
-
-// The upload endpoint runs transcription + FFmpeg rendering synchronously
-// within a single request/response cycle, so a real render can legitimately
-// take minutes. This timeout exists only to catch a genuinely hung
-// connection (e.g. the backend process died without ever closing the
-// socket) — not to preempt normal long-running processing.
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * fetch() with an abort-based timeout. Behaves exactly like fetch() on
- * success; on timeout, rejects with a DOMException named 'AbortError' so
- * callers can distinguish it from other failures (see describeFetchError).
+ * fetch(), optionally bounded by an abort timer.
+ *
+ * With no `timeoutMs` (the default) this is a plain fetch that waits as long
+ * as the server needs. Pass a positive number to opt into an abort; on timeout
+ * it rejects with a DOMException named 'AbortError' so callers can distinguish
+ * it from other failures (see describeFetchError).
  */
-export async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+export async function fetchRequest(url, options = {}, timeoutMs = null) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return fetch(url, options);
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -40,7 +57,9 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TI
  */
 export function describeFetchError(err) {
   if (err && err.name === 'AbortError') {
-    return `The server took too long to respond (it may be restarting or overloaded). Please try again in a moment. (timed out)`;
+    // Only reachable when a caller opted into an explicit timeout, or the
+    // request was cancelled (e.g. the page navigating away mid-render).
+    return `The request was cancelled before the server responded. (aborted)`;
   }
 
   if (err && err.status != null) {
@@ -64,12 +83,13 @@ export function describeFetchError(err) {
 }
 
 /**
- * Fetches, applies the timeout above, and throws a classified Error for any
- * non-ok response (attaching `.status` so describeFetchError can label it)
- * so every caller gets the same failure-mode handling.
+ * Fetches and throws a classified Error for any non-ok response (attaching
+ * `.status` so describeFetchError can label it) so every caller gets the same
+ * failure-mode handling. Waits as long as the server needs unless an explicit
+ * `timeoutMs` is passed.
  */
-export async function fetchJson(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const response = await fetchWithTimeout(url, options, timeoutMs);
+export async function fetchJson(url, options = {}, timeoutMs = null) {
+  const response = await fetchRequest(url, options, timeoutMs);
 
   if (!response.ok) {
     const errData = await response.json().catch(() => ({}));

@@ -32,6 +32,11 @@ Thumbs.db
 /backend/subtitles/*
 !/backend/subtitles/.gitkeep
 
+# User-imported audio tracks (music/ambience/voiceover) uploaded for the
+# timeline's Audio lane — runtime data, same as the directories above.
+/backend/audio/*
+!/backend/audio/.gitkeep
+
 # Testing Intermediates
 /backend/test-source.mp4
 /backend/test-invalid.txt

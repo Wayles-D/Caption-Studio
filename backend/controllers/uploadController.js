@@ -5,10 +5,34 @@ import { extractAudio, burnSubtitles } from '../utils/ffmpeg.js';
 import { transcribeAudio } from '../services/whisperService.js';
 import { generateSubtitleFromTranscript, generateUnifiedShadowSubtitle } from '../services/subtitleService.js';
 import { resolveASSStyle } from '../utils/assWriter.js';
-import { analyzeKeywords } from '../services/keywordAnalysisService.js';
+import { analyzeTranscript } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
 import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor, getLastGraphicsFailure } from '../utils/graphicsExport.js';
+import { getVideoInfo, getAudioInfo } from '../utils/graphicsCompositor.js';
+import { normalizeAudioTimeline, hasAnyAudio } from '../../shared/audioTimeline.js';
+
+/**
+ * Everything the ASS/libass fallback burn needs to mix the audio timeline
+ * itself (see backend/utils/ffmpeg.js's burnSubtitles). The graphics path
+ * already probed the video, so this only runs on the fallback branch — and
+ * only when there is actually audio to mix, so an export with no audio edits
+ * pays for no extra probe at all.
+ *
+ * Returning `{}` on any failure is deliberate: a probe that didn't work must
+ * degrade to "burn the captions without the audio mix", never fail the render.
+ */
+async function resolveFallbackAudioOptions(videoPath, styles) {
+  const audio = normalizeAudioTimeline(styles?.audio);
+  if (!hasAnyAudio(audio)) return {};
+  try {
+    const { duration, hasAudio } = await getVideoInfo(videoPath);
+    return { audio, duration, hasSourceAudio: hasAudio };
+  } catch (err) {
+    console.warn(`[Pipeline] Could not probe video for the audio mix, burning captions without it: ${err.message}`);
+    return {};
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -162,12 +186,24 @@ export async function uploadAndExtractAudio(req, res, next) {
     // transcription payload before anything downstream reads it.
     let words = extractFlatWords(transcriptionJSON);
 
-    console.log(`[Pipeline] [${baseName}] Stage: AI Keyword Analysis Started`);
+    console.log(`[Pipeline] [${baseName}] Stage: AI Content Analysis Started`);
     const keywordAnalysisStart = Date.now();
-    words = await analyzeKeywords(words);
-    console.log(`[Pipeline] [${baseName}] Stage: AI Keyword Analysis Completed (Duration: ${Date.now() - keywordAnalysisStart}ms)`);
+    // ONE analysis pass now produces three things: emphasis keywords (as
+    // before), semantic content events, and suggested visual moments — see
+    // keywordAnalysisService.js's analyzeTranscript. The events carry
+    // timestamps already resolved from this transcript's own word timings, so
+    // the editor never has to reconcile two clocks.
+    const analysis = await analyzeTranscript(words);
+    words = analysis.words;
+    const contentEvents = analysis.contentEvents;
+    const visualSuggestions = analysis.visualSuggestions;
+    console.log(`[Pipeline] [${baseName}] Stage: AI Content Analysis Completed (Duration: ${Date.now() - keywordAnalysisStart}ms)`);
 
     mergeWordsIntoTranscription(transcriptionJSON, words);
+    // Persisted alongside the words so a later /regenerate (which reads this
+    // file) still has the analysis without paying for another model call.
+    transcriptionJSON.contentEvents = contentEvents;
+    transcriptionJSON.visualSuggestions = visualSuggestions;
 
     // 4. Save raw transcription JSON output (now enriched with keyword metadata)
     console.log(`[Pipeline] [${baseName}] Stage: Saving Transcript JSON...`);
@@ -209,7 +245,10 @@ export async function uploadAndExtractAudio(req, res, next) {
       await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
         onSpawn: (proc) => { activeProc = proc; },
         shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
-        unifiedShadow: resolvedStyle.unifiedShadow
+        unifiedShadow: resolvedStyle.unifiedShadow,
+        // The audio timeline is mixed on THIS path too, so falling back to the
+        // ASS renderer never silently drops the user's sound effects.
+        ...(await resolveFallbackAudioOptions(videoPath, req.body))
       });
     }
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Completed (${usedGraphicsRenderer ? 'graphics' : 'ass'} pipeline, Duration: ${Date.now() - renderStart}ms)`);
@@ -251,6 +290,14 @@ export async function uploadAndExtractAudio(req, res, next) {
       transcription: transcriptionJSON,
       words,
       phrases,
+      // What the speech is DOING, as semantic moments with timestamps already
+      // resolved from the word timings above (see analyzeTranscript). The
+      // editor — not the model — decides which sound, if any, each of these
+      // produces; see shared/soundProfiles.js.
+      contentEvents,
+      // Moments a supporting image would help. Surfaced as empty slots for the
+      // user to fill; nothing is ever placed into one automatically.
+      visualSuggestions,
       // Lets the frontend warn the user when caption transform keyframes
       // (position/rotation/scale) and text blend mode silently couldn't
       // reach this render — those only exist in the graphics pipeline (see
@@ -276,6 +323,77 @@ export async function uploadAndExtractAudio(req, res, next) {
   } finally {
     activeJobIds.delete(baseName);
   }
+}
+
+/**
+ * Receives one imported audio file (music, ambience, voiceover) and returns
+ * the `assetId` the export pipeline will later resolve to a real path.
+ *
+ * WHY AN UPLOAD IS REQUIRED AT ALL. The preview decodes the file locally from
+ * a blob URL and would work perfectly without ever contacting the server —
+ * which is precisely the trap: the export runs server-side and cannot read a
+ * blob URL, so a track that was never uploaded would sound correct in the
+ * editor and be silently missing from the downloaded MP4. The client treats a
+ * failure here as "the import failed" and creates no clip at all, rather than
+ * leaving one that can only ever be heard in the preview.
+ *
+ * The duration is probed with the same FFmpeg banner read used for video, so
+ * a browser that can't decode the format (FFmpeg's format support is much
+ * broader than the Web Audio API's) still gets a usable clip length.
+ */
+export async function uploadAudioAsset(req, res) {
+  const audioFile = req.file;
+
+  if (!audioFile) {
+    return res.status(400).json({
+      success: false,
+      message: 'No audio file provided or file rejected by validations.'
+    });
+  }
+
+  let duration = null;
+  try {
+    ({ duration } = await getAudioInfo(audioFile.path));
+  } catch (err) {
+    // Not fatal: the client reads the decoded buffer's own duration too, and
+    // an untrimmed clip exports correctly without a declared length.
+    console.warn(`[AudioUpload] Could not probe duration for ${audioFile.filename}: ${err.message}`);
+  }
+
+  console.log(`[AudioUpload] Stored "${audioFile.originalname}" as ${audioFile.filename} (${(audioFile.size / 1024 / 1024).toFixed(2)} MB${duration ? `, ${duration.toFixed(2)}s` : ''}).`);
+
+  return res.status(200).json({
+    success: true,
+    assetId: audioFile.filename,
+    name: audioFile.originalname,
+    duration
+  });
+}
+
+/**
+ * Re-runs the transcript content analysis on demand, without re-transcribing
+ * or re-rendering.
+ *
+ * This is the SAME single analysis pass the upload pipeline runs (same
+ * service, same prompt) — it exists because the user needs a way to ask for
+ * automatic sound effects on a project where the analysis hadn't run, or
+ * hadn't succeeded, without re-uploading the video. Keyword tags come back
+ * too; the caller decides whether to use them.
+ */
+export async function analyzeContent(req, res) {
+  const { words } = req.body;
+
+  if (!Array.isArray(words) || words.length === 0) {
+    return res.status(400).json({ success: false, message: 'words array is required and must not be empty.' });
+  }
+
+  const analysis = await analyzeTranscript(words);
+  return res.status(200).json({
+    success: true,
+    words: analysis.words,
+    contentEvents: analysis.contentEvents,
+    visualSuggestions: analysis.visualSuggestions
+  });
 }
 
 /**
@@ -366,8 +484,20 @@ export async function regenerateCaptions(req, res, next) {
   });
 
   try {
-    // 1. Save the edited words back to the transcript file for persistence
-    const editedTranscript = { words };
+    // 1. Save the edited words back to the transcript file for persistence.
+    // The content analysis (semantic events / visual suggestions) stored by
+    // the original upload is carried across rather than overwritten — it
+    // describes the same speech, it cost a model call to produce, and
+    // re-rendering with a different font has no bearing on it.
+    let previousAnalysis = {};
+    try {
+      const previous = JSON.parse(fs.readFileSync(transcriptPath, 'utf8'));
+      if (previous.contentEvents) previousAnalysis.contentEvents = previous.contentEvents;
+      if (previous.visualSuggestions) previousAnalysis.visualSuggestions = previous.visualSuggestions;
+    } catch {
+      // No prior transcript (or unreadable) — nothing to carry over.
+    }
+    const editedTranscript = { words, ...previousAnalysis };
     fs.writeFileSync(transcriptPath, JSON.stringify(editedTranscript, null, 2));
     console.log(`[Regenerate] [${baseName}] Updated transcript JSON with ${words.length} edited words.`);
 
@@ -394,7 +524,11 @@ export async function regenerateCaptions(req, res, next) {
       await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
         onSpawn: (proc) => { activeProc = proc; },
         shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
-        unifiedShadow: resolvedStyle.unifiedShadow
+        unifiedShadow: resolvedStyle.unifiedShadow,
+        // See the matching call in uploadAndExtractAudio: the audio timeline
+        // is mixed on the fallback path too, so a fallback can't silently
+        // strip the sound effects out of the export.
+        ...(await resolveFallbackAudioOptions(videoPath, styles))
       });
     }
     console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Completed (${usedGraphicsRenderer ? 'graphics' : 'ass'} pipeline, Duration: ${Date.now() - renderStart}ms)`);

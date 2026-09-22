@@ -9,6 +9,7 @@ import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawR
 import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay } from './canvasTransform.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
 import { initVideoCanvasControls } from './videoCanvasControls.js';
+import { initAudioEngine } from './audioEngine.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
@@ -324,6 +325,12 @@ export function initPreviewWorkspace() {
   initManualDragPositioning();
   initCanvasTransform();
   initVideoCanvasControls();
+  // Sound effects + audio tracks (see src/js/components/audioEngine.js). Like
+  // the three above it binds itself to the same #preview-video element this
+  // function already treats as the single source of playback time, so the
+  // audio timeline stays in lockstep with the captions and keyframes rather
+  // than running on a clock of its own.
+  initAudioEngine();
 
   applyCSSPreviewStyles();
   syncVideoSubtitles();

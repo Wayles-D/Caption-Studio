@@ -9,6 +9,13 @@ const uploadsDir = path.resolve(__dirname, '../uploads');
 const outputDir = path.resolve(__dirname, '../output');
 const transcriptsDir = path.resolve(__dirname, '../transcripts');
 const subtitlesDir = path.resolve(__dirname, '../subtitles');
+// User-imported audio tracks (see multerConfig.js's uploadAudio). Deliberately
+// NOT in the `dirs` list the 30-minute sweep below walks: those directories
+// hold per-job render intermediates, whereas an imported music bed stays
+// referenced by the timeline for as long as the user is editing — a 30-minute
+// sweep would delete it out from under a session still using it. It gets its
+// own, far longer retention instead (see purgeExpiredAudioAssets).
+const audioDir = path.resolve(__dirname, '../audio');
 
 /**
  * Cleans up all files generated for a specific job session.
@@ -73,6 +80,8 @@ export function runPeriodicCleanup() {
   const now = Date.now();
   const dirs = [uploadsDir, outputDir, transcriptsDir, subtitlesDir];
 
+  purgeExpiredAudioAssets(now);
+
   dirs.forEach(dir => {
     if (!fs.existsSync(dir)) return;
 
@@ -116,6 +125,49 @@ export function runPeriodicCleanup() {
               console.log(`[Cleanup Daemon] Purged idle orphaned file: ${file} (Age: ${Math.round(age / 1000)}s)`);
             }
           });
+        });
+      });
+    });
+  });
+}
+
+/**
+ * Sweeps user-imported audio tracks that have gone stale.
+ *
+ * Separate from the sweep above, with a much longer default retention (24h vs
+ * 30 minutes), because these files have a fundamentally different lifetime: a
+ * render intermediate is dead the moment its job finishes, whereas an imported
+ * music bed stays referenced by the editor's timeline for the whole editing
+ * session and has to survive every re-render in between. Deleting one early
+ * doesn't produce an error — it produces an export that is quietly missing its
+ * music, which is exactly the failure this feature has to avoid.
+ *
+ * There is no server-side record of which tracks are still on someone's
+ * timeline (the project lives in the browser), so age is the only signal
+ * available; AUDIO_RETENTION_MS makes it tunable for longer editing sessions.
+ */
+export function purgeExpiredAudioAssets(now = Date.now()) {
+  const retentionMs = parseInt(process.env.AUDIO_RETENTION_MS || '86400000', 10); // 24 hours
+  if (!fs.existsSync(audioDir)) return;
+
+  fs.readdir(audioDir, (err, files) => {
+    if (err) {
+      console.error(`[Cleanup Daemon] Error reading audio directory ${audioDir}:`, err.message);
+      return;
+    }
+
+    files.forEach((file) => {
+      if (file.startsWith('.')) return;
+      const filePath = path.join(audioDir, file);
+      fs.stat(filePath, (statErr, stats) => {
+        if (statErr || !stats.isFile()) return;
+        if (now - stats.mtimeMs <= retentionMs) return;
+        fs.unlink(filePath, (unlinkErr) => {
+          if (unlinkErr) {
+            console.error(`[Cleanup Daemon] Failed to delete expired audio asset ${file}:`, unlinkErr.message);
+          } else {
+            console.log(`[Cleanup Daemon] Purged expired audio asset: ${file}`);
+          }
         });
       });
     });

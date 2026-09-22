@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import ffmpegPath from 'ffmpeg-static';
+import { buildAudioMixGraph } from './audioMixFilter.js';
 
 /**
  * Format bytes into MB.
@@ -197,6 +198,29 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {})
     // Set up filter argument with fontsdir to point libass at our bundled font library
     const assFilter = `ass='${relativeAssPath}':fontsdir='${relativeFontsDir}'`;
 
+    // The audio timeline, mixed here TOO — not only in the graphics
+    // compositor. Any export silently degrades to this ASS/libass path
+    // whenever the graphics renderer is out of scope or throws (see
+    // graphicsExport.js's tryRenderCaptionsWithGraphics), and if only that
+    // path mixed audio, such a fallback would produce a file whose sound
+    // effects had vanished with nothing anywhere reporting it. Same builder,
+    // same data, same timing on both paths.
+    //
+    // `-i` indexing: this command has exactly one input (the video) before the
+    // mix's own, so the mix numbers from 1.
+    const audioMix = (options.audio && options.duration)
+      ? buildAudioMixGraph(options.audio, {
+        duration: options.duration,
+        hasSourceAudio: options.hasSourceAudio !== false,
+        firstInputIndex: 1
+      })
+      : null;
+
+    const audioInputArgs = audioMix ? audioMix.inputArgs : [];
+    const audioOutputArgs = audioMix
+      ? ['-map', audioMix.outputLabel, '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
+      : ['-map', '0:a?', '-c:a', 'copy'];
+
     let args;
 
     if (options.shadowAssPath) {
@@ -239,19 +263,38 @@ export function burnSubtitles(inputVideoPath, assPath, outputPath, options = {})
         `[shadow_text]boxblur=luma_radius='h/960*${blurAss}':luma_power=1:chroma_radius='h/960*${blurAss}':chroma_power=1:alpha_radius='h/960*${blurAss}':alpha_power=1[shadow_blurred]`,
         `[shadow_blurred]scale=iw*2:ih*2[shadow_scaled]`,
         `[0:v][shadow_scaled]overlay=x='main_w/1080*${offsetXAss}':y='main_h/1920*${offsetYAss}':format=yuv420[with_shadow]`,
-        `[with_shadow]${assFilter}[outv]`
+        `[with_shadow]${assFilter}[outv]`,
+        ...(audioMix ? audioMix.filterStages : [])
       ].join(';');
 
       args = [
         '-y',
         '-i', inputVideoPath,
+        ...audioInputArgs,
         '-filter_complex', filterComplex,
         '-map', '[outv]',
-        '-map', '0:a?',
+        ...audioOutputArgs,
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-crf', '23',
-        '-c:a', 'copy',
+        outputPath
+      ];
+    } else if (audioMix) {
+      // Same burn as the plain `-vf` branch below, expressed as a
+      // filter_complex because `-vf` and `-filter_complex` cannot both drive
+      // the same output — and the audio mix requires filter_complex. The
+      // VIDEO filtering is character-for-character the same `ass=` filter, so
+      // the picture is identical to what the branch below would produce.
+      args = [
+        '-y',
+        '-i', inputVideoPath,
+        ...audioInputArgs,
+        '-filter_complex', [`[0:v]${assFilter}[outv]`, ...audioMix.filterStages].join(';'),
+        '-map', '[outv]',
+        ...audioOutputArgs,
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
         outputPath
       ];
     } else {

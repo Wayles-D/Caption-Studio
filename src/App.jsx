@@ -20,10 +20,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { appState, updateState, DEFAULT_DEMO_VIDEO_URL, getStyleParams } from './js/state.js';
 import { fetchJson, describeFetchError } from './js/utils/apiRequest.js';
 import { collectEditedWords } from './js/components/transcriptEditorState.js';
+import { applySemanticEvents } from './js/components/audioTimeline.js';
+import * as audioTimelineApi from './js/components/audioTimeline.js';
 import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
+import { AudioInspector } from './components/AudioInspector.jsx';
 import { TimelinePanel } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
@@ -72,6 +75,14 @@ const MOBILE_TOOLS = [
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /><circle cx="11" cy="11" r="2" /></svg>
   },
   {
+    // Sound effects + audio tracks. One tool, because they are one panel
+    // (see AudioInspector.jsx) — the two CONCEPTS stay separate everywhere it
+    // matters: separate lanes on the timeline, separate lists here, separate
+    // "+ Sound" / "+ Audio" actions.
+    key: 'audio', label: 'Audio', group: 'audio',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>
+  },
+  {
     key: 'video-info', label: 'Video', group: 'video',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="6" width="12" height="12" rx="2" /><path d="m15 10 6-3v10l-6-3" /></svg>
   },
@@ -101,7 +112,7 @@ const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript']);
 const DESKTOP_SIDE_PANEL_DEFAULT = 'video-info';
 
 const MOBILE_TOOLBAR_HEIGHT = 80; // px — kept in sync with the `h-20` toolbar below
-const TIMELINE_HEIGHT = 232; // px — kept in sync with TimelinePanel.jsx's `h-[232px]`
+const TIMELINE_HEIGHT = 272; // px — kept in sync with TimelinePanel.jsx's `h-[272px]` (grew to fit the SFX + Audio lanes)
 const DESKTOP_BREAKPOINT_QUERY = '(min-width: 1024px)'; // Tailwind's `lg`
 
 export function App() {
@@ -207,6 +218,14 @@ export function App() {
     if (import.meta.env.DEV) {
       window.__appState = appState;
       window.__updateState = updateState;
+      // The audio timeline's own write API (see
+      // src/js/components/audioTimeline.js), so e2e tests can drive the
+      // semantic-event -> sound mapping without a live backend or a real
+      // model call — the same reason __updateState exists for transcripts.
+      window.__audioTimeline = audioTimelineApi;
+      // The exact snapshot the export is driven from — lets a test assert
+      // preview/export parity on the payload itself rather than inferring it.
+      window.__getStyleParams = getStyleParams;
     }
   }, []);
 
@@ -239,9 +258,14 @@ export function App() {
     const formData = new FormData();
     formData.append('video', file);
     Object.entries(getStyleParams()).forEach(([key, value]) => {
-      if (value !== null && value !== undefined) {
-        formData.append(key, value.toString());
-      }
+      if (value === null || value === undefined) return;
+      // Multipart form fields are strings, so a structured value (the audio
+      // timeline, caption transforms, the video transform) has to be JSON —
+      // `.toString()` on an object yields the literal "[object Object]", which
+      // the backend can only discard. The /regenerate path sends real JSON and
+      // is unaffected either way; this makes the two transports carry the same
+      // information instead of one silently losing it.
+      formData.append(key, typeof value === 'object' ? JSON.stringify(value) : value.toString());
     });
 
     try {
@@ -263,7 +287,19 @@ export function App() {
       setVideoSrc(URL.createObjectURL(file));
       setViewState('video');
 
-      showToast('Subtitles generated successfully!');
+      // The SAME analysis pass that tagged the keywords also reported what the
+      // speech is structurally doing (lists, reveals, transitions) and where a
+      // visual would help. Semantic events are handed to the editor's own
+      // mapping layer, which decides which sound — if any — each one means and
+      // places it at the transcript's own word timing. Honours the Auto Sound
+      // Effects switch: with it off, the analysis is still stored and
+      // browsable, nothing is placed.
+      updateState({ visualSuggestions: data.visualSuggestions || [] }, { recordHistory: false });
+      const placed = applySemanticEvents(data.contentEvents || []);
+
+      showToast(placed.length > 0
+        ? `Subtitles generated — and ${placed.length} sound effect${placed.length === 1 ? '' : 's'} placed from the transcript.`
+        : 'Subtitles generated successfully!');
       // Transcript chips rebuild reactively inside RightInspector's own
       // effect (keyed on the `words` field this updateState call just set).
     } catch (err) {
@@ -598,6 +634,10 @@ export function App() {
             <div className="overflow-y-auto flex-1 border-t border-[var(--border-color)]">
               {tool.group === 'caption' ? (
                 <SidebarInspector sectionFilter={tool.key} />
+              ) : tool.group === 'audio' ? (
+                <div className="p-4">
+                  <AudioInspector onNotify={showToast} />
+                </div>
               ) : (
                 <div className="p-4">
                   <RightInspector sectionFilter={tool.key} onRegenerateCaptions={() => triggerRegeneration()} />

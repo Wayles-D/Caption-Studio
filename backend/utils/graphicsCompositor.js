@@ -12,6 +12,7 @@ import path from 'path';
 import os from 'os';
 import ffmpegPath from 'ffmpeg-static';
 import { buildVideoTransformFilterChain } from './videoTransformFilter.js';
+import { buildAudioMixGraph } from './audioMixFilter.js';
 
 /**
  * Reads a video's DISPLAY-orientation pixel dimensions and duration from
@@ -81,7 +82,41 @@ export function getVideoInfo(inputVideoPath) {
       const [, hh, mm, ss, cs] = durationMatch;
       const duration = (parseInt(hh, 10) * 3600) + (parseInt(mm, 10) * 60) + parseInt(ss, 10) + (parseInt(cs, 10) / 100);
 
-      resolve({ width, height, duration });
+      // Whether the source has an audio stream at all. The audio mix (see
+      // backend/utils/audioMixFilter.js) has to know: referencing `[0:a]` in a
+      // filter graph for a silent input is a hard ffmpeg error, not a no-op,
+      // so this cannot be left to `0:a?`-style optional mapping the way a
+      // plain stream copy can.
+      const hasAudio = /Stream #\d+:\d+.*?: Audio:/.test(stderr);
+
+      resolve({ width, height, duration, hasAudio });
+    });
+  });
+}
+
+/**
+ * Duration (and whether an audio stream exists) for ANY media file, read from
+ * the same FFmpeg stderr banner getVideoInfo parses. Separate from
+ * getVideoInfo because that one rejects when it finds no video stream, which
+ * is the normal case for an imported music file — exactly the input this is
+ * for (see uploadController.js's uploadAudioAsset).
+ */
+export function getAudioInfo(inputPath) {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) return reject(new Error('FFmpeg static binary path could not be resolved.'));
+
+    const proc = spawn(ffmpegPath, ['-i', inputPath]);
+    let stderr = '';
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+    proc.on('error', reject);
+    proc.on('close', () => {
+      const durationMatch = stderr.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
+      if (!durationMatch) {
+        return reject(new Error(`Could not determine duration from FFmpeg output for: ${inputPath}`));
+      }
+      const [, hh, mm, ss, cs] = durationMatch;
+      const duration = (parseInt(hh, 10) * 3600) + (parseInt(mm, 10) * 60) + parseInt(ss, 10) + (parseInt(cs, 10) / 100);
+      resolve({ duration, hasAudio: /Stream #\d+:\d+.*?: Audio:/.test(stderr) });
     });
   });
 }
@@ -354,10 +389,24 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // alphamerge masking step to only affect glyph-covered pixels.
     const compositeStages = buildCaptionCompositeStages(baseVideoLabel, textBlendMode);
 
+    // The audio timeline (sound effects + imported tracks — see
+    // backend/utils/audioMixFilter.js). Its `-i` arguments are appended AFTER
+    // the two above, so it starts numbering at input index 2. When there is
+    // nothing to mix this is null and the output args below keep the original
+    // `-map 0:a? -c:a copy` passthrough exactly as it always was — an export
+    // with no audio edits is byte-identical to one from before this feature
+    // existed, including still being a stream copy rather than a re-encode.
+    const { audio, hasSourceAudio } = videoTransformOpts;
+    const audioMix = (audio && duration)
+      ? buildAudioMixGraph(audio, { duration, hasSourceAudio: hasSourceAudio !== false, firstInputIndex: 2 })
+      : null;
+    if (audioMix) inputArgs.push(...audioMix.inputArgs);
+
     const filterComplex = [
       ...(videoTransformChain ? [videoTransformChain.filterComplex] : []),
       captionTrackStage,
-      ...compositeStages
+      ...compositeStages,
+      ...(audioMix ? audioMix.filterStages : [])
     ].join(';');
 
     // The filter graph is written to a FILE and passed via
@@ -385,11 +434,16 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       ...inputArgs,
       '-filter_complex_script', filterScriptPath,
       '-map', '[outv]',
-      '-map', '0:a?',
+      // With an audio mix, the mixed stream replaces the source's own audio
+      // map and must be encoded (it is raw filter output, so there is nothing
+      // to copy). AAC 192k stereo is the safe, universally-playable choice for
+      // an MP4 and is well above transparent for speech plus effects.
+      ...(audioMix
+        ? ['-map', audioMix.outputLabel, '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
+        : ['-map', '0:a?', '-c:a', 'copy']),
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '23',
-      '-c:a', 'copy',
       outputPath
     ];
 

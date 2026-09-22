@@ -14,6 +14,7 @@
  */
 import { useEditorStore, STYLE_DEFAULTS, SESSION_DEFAULTS } from '../store/editorStore.js';
 import { useTransformStore, TRANSFORM_DEFAULTS } from '../store/transformStore.js';
+import { useAudioStore, AUDIO_DEFAULTS, AUDIO_DOCUMENT_KEYS } from '../store/audioStore.js';
 
 export const MOCK_SUBTITLES = [
   { start: 0.0, end: 2.2, text: "WELCOME TO BHYND." },
@@ -35,12 +36,31 @@ export const DEFAULT_DEMO_VIDEO_URL = "/demo-video.mp4";
 // actually lives in is an implementation detail entirely internal to this
 // file (see storeFor below).
 export const initialStyleState = { ...STYLE_DEFAULTS, ...TRANSFORM_DEFAULTS };
-const STYLE_KEYS = Object.keys(initialStyleState);
 
 const TRANSFORM_KEYS = new Set(Object.keys(TRANSFORM_DEFAULTS));
+const AUDIO_KEYS = new Set(Object.keys(AUDIO_DEFAULTS));
+
+/**
+ * What undo/redo snapshots: every caption/transform style field, PLUS the
+ * audio timeline's own document fields (see src/store/audioStore.js) — so
+ * placing, moving, retiming or deleting a sound effect or an audio track is
+ * undoable exactly like any other editor edit, through the same single
+ * history stack rather than a parallel one.
+ *
+ * Deliberately a SUPERSET of `initialStyleState`'s keys rather than the same
+ * list: resetStyles() below still resets only `initialStyleState`, so the
+ * toolbar's "Reset" restores caption STYLING without also deleting the user's
+ * placed sound effects and imported music — those are content, not styling.
+ * audioStore's `selectedAudioClipId` is excluded on both counts (a selection
+ * is editor UI, not a document edit, and undoing onto a stale selection would
+ * be surprising).
+ */
+const UNDO_TRACKED_KEYS = [...Object.keys(initialStyleState), ...AUDIO_DOCUMENT_KEYS];
 
 function storeFor(key) {
-  return TRANSFORM_KEYS.has(key) ? useTransformStore : useEditorStore;
+  if (TRANSFORM_KEYS.has(key)) return useTransformStore;
+  if (AUDIO_KEYS.has(key)) return useAudioStore;
+  return useEditorStore;
 }
 
 /**
@@ -61,7 +81,9 @@ export const appState = new Proxy({}, {
     return true;
   },
   has(_target, prop) {
-    return prop in useEditorStore.getState() || prop in useTransformStore.getState();
+    return prop in useEditorStore.getState()
+      || prop in useTransformStore.getState()
+      || prop in useAudioStore.getState();
   }
 });
 
@@ -107,7 +129,7 @@ export function notify(key, value) {
  */
 function pushHistorySnapshot() {
   const snapshot = {};
-  STYLE_KEYS.forEach(k => {
+  UNDO_TRACKED_KEYS.forEach(k => {
     snapshot[k] = appState[k];
   });
 
@@ -148,7 +170,7 @@ export function undo() {
   if (historyStack.length === 0) return;
 
   const currentSnapshot = {};
-  STYLE_KEYS.forEach(k => {
+  UNDO_TRACKED_KEYS.forEach(k => {
     currentSnapshot[k] = appState[k];
   });
   redoStack.push(currentSnapshot);
@@ -170,7 +192,7 @@ export function redo() {
   if (redoStack.length === 0) return;
 
   const currentSnapshot = {};
-  STYLE_KEYS.forEach(k => {
+  UNDO_TRACKED_KEYS.forEach(k => {
     currentSnapshot[k] = appState[k];
   });
   historyStack.push(currentSnapshot);
@@ -262,6 +284,19 @@ export function getStyleParams() {
     keywordOutlineEnabled: appState.keywordOutlineEnabled,
     keywordOpacity: appState.keywordOpacity,
     enableActiveHighlight: appState.enableActiveHighlight,
-    textBlendMode: appState.textBlendMode
+    textBlendMode: appState.textBlendMode,
+    // The audio timeline (sound effects + imported audio tracks — see
+    // shared/audioTimeline.js). Carried in the SAME canonical snapshot the
+    // live preview renders from and the export pipeline is driven by, exactly
+    // like captionTransforms/videoTransform above, so an exported file's audio
+    // can never be resolved from different data than the preview's.
+    audio: {
+      soundEvents: appState.soundEvents,
+      audioTracks: appState.audioTracks,
+      // The source video's own soundtrack level — the third voice in the mix
+      // (see shared/audioTimeline.js's VIDEO_AUDIO_DEFAULTS). Carried here so
+      // the exporter applies the SAME level the preview is playing at.
+      video: { volume: appState.videoVolume, muted: appState.videoMuted }
+    }
   };
 }

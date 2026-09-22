@@ -52,7 +52,7 @@ export function TimelinePanel({
   return (
     <div
       id="timeline-panel-container"
-      className="w-full h-[232px] bg-[var(--bg-sidebar)] border-t border-[var(--border-color)] flex-shrink-0"
+      className="w-full h-[272px] bg-[var(--bg-sidebar)] border-t border-[var(--border-color)] flex-shrink-0"
       ref={containerRef}
     />
   );

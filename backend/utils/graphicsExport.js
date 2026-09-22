@@ -77,7 +77,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   if (!phrases.length) return recordFailure('no-phrases', 'Word list produced no renderable phrases.');
 
   try {
-    const { width, height, duration } = await getVideoInfo(videoPath);
+    const { width, height, duration, hasAudio } = await getVideoInfo(videoPath);
     const segments = buildFullTimelineSegments(phrases, params, width, height, duration, framesDir);
     // The VIDEO's own keyframed transform (see shared/videoTransform.js) —
     // passed through so the exported file reproduces the same zoom/pan/
@@ -91,7 +91,13 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       duration,
       canvasWidth: width,
       canvasHeight: height,
-      textBlendMode: getASSStyleFromConfig(params).textBlendMode
+      textBlendMode: getASSStyleFromConfig(params).textBlendMode,
+      // The audio timeline (sound effects + imported audio tracks — see
+      // shared/audioTimeline.js). Passed through the same way videoTransform
+      // above is, so the exported file's audio is resolved from the exact
+      // data the live preview schedules its playback from.
+      audio: params.audio,
+      hasSourceAudio: hasAudio
     });
     console.log(`[GraphicsExport] Rendered ${segments.length} segments via the graphics pipeline (preset: ${params.preset || 'default'}).`);
     return true;

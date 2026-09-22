@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'path';
-import { uploadVideo } from '../utils/multerConfig.js';
-import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions } from '../controllers/uploadController.js';
+import { uploadVideo, uploadAudio } from '../utils/multerConfig.js';
+import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent } from '../controllers/uploadController.js';
 
 const router = Router();
 
@@ -45,6 +45,28 @@ router.post('/cleanup', workspaceCleanup);
  * @access  Public
  */
 router.post('/regenerate', regenerateCaptions);
+
+/**
+ * @route   POST /api/upload/audio
+ * @desc    Upload one audio file (MP3/WAV/M4A/AAC/OGG/FLAC; max 100MB) for the
+ *          timeline's Audio lane, returning the assetId the export pipeline
+ *          resolves it by. Required for a track to reach the exported video at
+ *          all — the preview can play a local blob URL, the server-side mix
+ *          cannot (see the controller's own doc comment).
+ * @access  Public
+ */
+router.post('/audio', uploadAudio.single('audio'), uploadAudioAsset);
+
+/**
+ * @route   POST /api/upload/analyze-content
+ * @desc    Re-run the transcript content analysis (the SAME single pass the
+ *          upload pipeline runs) on demand, returning keyword tags, semantic
+ *          events and visual suggestions. Lets a user ask for automatic sound
+ *          effects on a project where the analysis had not run or had failed,
+ *          without re-uploading the video.
+ * @access  Public
+ */
+router.post('/analyze-content', analyzeContent);
 
 export default router;
 

@@ -60,3 +60,60 @@ export const uploadVideo = multer({
   fileFilter: fileFilter,
   limits: limits
 });
+
+// --- Imported audio tracks --------------------------------------------------
+// Music/ambience/voiceover files the user drops onto the Audio lane. Stored in
+// their own directory rather than alongside uploaded videos so the cleanup
+// daemon's video-job sweep (which keys off a job's baseName — see
+// backend/utils/cleanup.js) can never mistake one for an orphaned render
+// intermediate and delete a track that is still on the timeline.
+const audioDir = path.join(__dirname, '../audio');
+if (!fs.existsSync(audioDir)) {
+  fs.mkdirSync(audioDir, { recursive: true });
+}
+
+const audioStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, audioDir),
+  filename: (req, file, cb) => {
+    // A UUID name, never the user's own: the stored name is what the export
+    // pipeline later resolves to a path (see audioMixFilter.js's
+    // resolveAudioAssetPath), so it must not be attacker-influenced, and
+    // uploading two files called "music.mp3" must not clobber the first.
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${uuidv4()}${ext}`);
+  }
+});
+
+// Kept in sync with the client's own file-picker filter (see
+// src/js/components/audioImport.js's AUDIO_ACCEPT).
+const allowedAudioExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.oga', '.webm', '.flac'];
+
+const audioFileFilter = (req, file, cb) => {
+  const fileExt = path.extname(file.originalname).toLowerCase();
+  const fileMime = (file.mimetype || '').toLowerCase();
+
+  // Extension AND a plausible audio mimetype. Browsers are inconsistent about
+  // the mimetype they attach to .m4a/.aac in particular (several report
+  // `application/octet-stream`), so the extension is the load-bearing check
+  // and the mimetype only has to not contradict it.
+  const isExtensionValid = allowedAudioExtensions.includes(fileExt);
+  const isMimePlausible = fileMime.startsWith('audio/')
+    || fileMime === 'application/octet-stream'
+    || fileMime === 'video/webm' // how some browsers label .webm audio
+    || fileMime === '';
+
+  if (isExtensionValid && isMimePlausible) {
+    cb(null, true);
+  } else {
+    cb(new Error(`Invalid file type. Supported audio formats: ${allowedAudioExtensions.join(', ')}. Received: extension "${fileExt}", mimetype "${fileMime}"`), false);
+  }
+};
+
+export const uploadAudio = multer({
+  storage: audioStorage,
+  fileFilter: audioFileFilter,
+  // 100MB — far more than any realistic music bed or voiceover for short-form
+  // video, and a fifth of the video limit so a stray large file can't fill the
+  // disk as easily.
+  limits: { fileSize: 100 * 1024 * 1024 }
+});

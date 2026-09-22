@@ -918,25 +918,11 @@ body.light-theme {
   border-radius: 4px;
 }
 
-/* The unified keyframe lane (see timelinePanel.js's buildDom) is the ONLY
-   row with a visible/interactive track now — one ◆ per keyframe entry,
-   whatever properties it holds, instead of four separate per-property
-   tracks. The Position/Scale/Rotation/Opacity rows below it still exist
-   for VALUE EDITING (the Advanced numeric fields) but no longer show a
-   track of their own. */
-.timeline-keyframe-lane {
-  border-bottom: 1px solid var(--border-color);
-  padding-bottom: 6px;
-  margin-bottom: 2px;
-}
-
-.timeline-keyframe-lane .timeline-lane-label {
-  color: var(--text-secondary);
-  width: auto;
-  margin-right: 4px;
-}
-
-.timeline-lane:not(.timeline-keyframe-lane) .timeline-lane-track {
+/* The Position/Scale/Rotation/Opacity rows exist for VALUE EDITING only (the
+   Advanced numeric fields) — keyframe markers now sit on the video row itself
+   (.timeline-keyframe-overlay below) and the audio lanes own the only other
+   interactive tracks, so these rows show no track at all. */
+.timeline-property-lane .timeline-lane-track {
   display: none;
 }
 
@@ -1067,6 +1053,41 @@ body.light-theme {
   text-overflow: ellipsis;
 }
 
+/* Holds the filmstrip and the keyframe-marker overlay in one shared
+   coordinate space. The strip itself must keep overflow:hidden (that is what
+   gives the row its clean rounded edge and keeps tiles butted together), so a
+   marker drawn inside it at t=0 or t=duration would be sliced in half —
+   hence markers live in a sibling layer over the top instead. */
+.timeline-filmstrip-stack {
+  position: relative;
+  min-width: 0;
+}
+
+/* Keyframe markers, CapCut-style: on the video clip they animate rather than
+   in a lane of their own. Transparent to the pointer so clicking between
+   markers still scrubs the filmstrip underneath; each marker re-enables
+   pointer events for itself. */
+.timeline-keyframe-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.timeline-keyframe-overlay .timeline-marker {
+  pointer-events: auto;
+  /* Pinned to the bottom edge of the frame strip — legible against the video
+     thumbnails without covering their centre. */
+  top: auto;
+  bottom: 3px;
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
+}
+
+.timeline-keyframe-overlay .timeline-marker.selected {
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55), 0 0 0 4px var(--accent-glow);
+}
+
 .timeline-filmstrip-track {
   position: relative;
   display: flex;
@@ -1134,4 +1155,322 @@ body.light-theme {
      filmstrip must stay on that same grid or its tiles stop lining up with the
      ruler ticks and the shared playhead. */
   .timeline-filmstrip-track { height: 36px; }
+}
+
+/* --- Audio lanes: sound effects + audio tracks ------------------------------
+   Two lanes, never one. "+ Sound" places a short effect at a single instant
+   (tick/pop/whoosh); "+ Audio" lays an imported file — music, ambience, a
+   voiceover — across a span that can be moved and trimmed. They are different
+   editing gestures, so they get different lanes and visibly different clip
+   shapes: a compact pill anchored at a point vs. a bar covering a range.
+
+   Both sit on the SAME 168px-gutter grid as the ruler, the filmstrip and the
+   property lanes, so a clip's position lines up exactly with the ruler ticks,
+   the keyframe markers on the video row, and the shared playhead. */
+.timeline-audio-lane {
+  min-height: 34px;
+}
+
+.timeline-audio-lane .timeline-lane-label {
+  width: auto;
+  min-width: 34px;
+  color: var(--text-secondary);
+}
+
+.timeline-audio-lane .timeline-lane-gutter {
+  position: relative; /* anchors the sound picker popover */
+}
+
+/* The in-strip "+". It lives inside the track it adds to — the strip is where
+   the content goes, so that is where the control to add content belongs —
+   pinned to the strip's left edge and subdued until hovered, because it
+   shares space with real clips and must not compete with them. */
+.timeline-add-clip-btn {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px dashed var(--border-color-hover, var(--border-color));
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: color 150ms, border-color 150ms, background-color 150ms, opacity 150ms;
+}
+
+.timeline-add-clip-btn:hover {
+  opacity: 1;
+  color: var(--text-on-accent);
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  border-style: solid;
+}
+
+/* An OCCUPIED audio lane hides its "+" until the lane is hovered: the button
+   sits at the strip's left edge, which is exactly where a clip starting at
+   0:00 sits too (a music bed almost always does), and a permanently-visible
+   button would cover that clip's own label. An EMPTY lane keeps it plainly
+   visible — that is the case where discoverability actually matters. The
+   video strip is exempt: it is never "empty" in this sense, and its button
+   carries its own solid backing (below) to stay legible over frames. */
+.timeline-audio-track:not(.is-empty) .timeline-add-clip-btn {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.timeline-audio-track:not(.is-empty):hover .timeline-add-clip-btn,
+.timeline-audio-track:not(.is-empty) .timeline-add-clip-btn:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* On the video row the button sits over real frames rather than an empty
+   track, so it needs a solid backing to stay legible against any thumbnail. */
+#timeline-add-video-btn {
+  background: rgba(0, 0, 0, 0.72);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+}
+
+#timeline-add-video-btn:hover {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--text-on-accent);
+}
+
+.timeline-audio-track {
+  height: 24px;
+  overflow: visible; /* a clip's trim handles sit flush to its edges */
+}
+
+/* The Audio lane is taller than the SFX lane because its clips carry a real
+   waveform (see audioWaveform.js) and a waveform needs vertical room to say
+   anything — at the SFX lane's 24px, everything below roughly -12dBFS renders
+   as a flat line. SFX clips are point markers with nothing to plot, so they
+   keep the compact height. */
+.timeline-lane[data-lane="audio"] {
+  min-height: 48px;
+}
+
+.timeline-lane[data-lane="audio"] .timeline-audio-track {
+  height: 42px;
+}
+
+/* --- Sound effect clip --- */
+.timeline-sfx-clip {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: -5px; /* centres the dot on the clip's actual start time */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px 0 4px;
+  border-radius: 9px;
+  border: 1px solid var(--accent-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: grab;
+  user-select: none;
+  z-index: 2;
+}
+
+.timeline-sfx-clip:hover,
+.timeline-sfx-clip.selected {
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  z-index: 3;
+}
+
+.timeline-sfx-clip.selected {
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Automatically placed from the transcript analysis — dashed, so it is
+   obvious at a glance which beats the editor suggested and which the user
+   placed by hand. Editing one in any way does not change this: provenance is
+   information, not a lock. */
+.timeline-sfx-clip.auto {
+  border-style: dashed;
+}
+
+.timeline-sfx-clip.disabled {
+  opacity: 0.4;
+  border-style: dotted;
+}
+
+.timeline-sfx-clip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  flex-shrink: 0;
+}
+
+.timeline-sfx-clip:hover .timeline-sfx-clip-dot,
+.timeline-sfx-clip.selected .timeline-sfx-clip-dot {
+  background: var(--text-on-accent);
+}
+
+.timeline-sfx-clip-label {
+  /* Effects cluster tightly on a busy edit; the label is the first thing that
+     can go, since the dot still marks the exact instant. */
+  max-width: 54px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Audio track clip --- */
+.timeline-audio-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  display: flex;
+  align-items: center;
+  min-width: 14px;
+  padding: 0 8px;
+  border-radius: 4px;
+  border: 1px solid var(--keyframe-end-color, var(--accent-color));
+  /* Flat backing — the REAL waveform is drawn on a canvas child (see
+     audioWaveform.js). This used to be a repeating-gradient fake, which was
+     identical for every clip and so conveyed nothing about the audio. */
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 9px;
+  font-weight: 700;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+}
+
+.timeline-audio-clip.selected {
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.timeline-audio-clip.disabled {
+  opacity: 0.4;
+  border-style: dotted;
+}
+
+/* The waveform canvas fills the clip, behind the label. Sized in CSS and
+   rasterised at devicePixelRatio by drawWaveform(); pointer-events off so it
+   never intercepts a drag or a trim on the clip it sits inside. */
+.timeline-audio-clip-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.timeline-audio-clip-label {
+  position: relative; /* above the waveform canvas */
+  z-index: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Readable over a dense waveform without needing an opaque plate behind it. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.9);
+  pointer-events: none; /* the label must never swallow a drag on the clip */
+}
+
+.timeline-audio-clip-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  background: var(--keyframe-end-color, var(--accent-color));
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.timeline-audio-clip:hover .timeline-audio-clip-handle,
+.timeline-audio-clip.selected .timeline-audio-clip-handle {
+  opacity: 0.8;
+}
+
+.timeline-audio-clip-handle.start { left: 0; }
+.timeline-audio-clip-handle.end { right: 0; }
+
+/* --- "+ Sound" picker popover --- */
+/* Fixed-positioned and appended to <body> (see timelinePanel.js's
+   positionSoundPicker): anchored inside the lane gutter it would be clipped by
+   the timeline's own scroll container AND painted under the preview above it —
+   visible but unclickable. */
+.timeline-sound-picker {
+  position: fixed;
+  z-index: 1100;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-md);
+}
+
+.timeline-sound-picker-heading {
+  padding: 4px 6px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.timeline-sound-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.timeline-sound-picker-play {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.timeline-sound-picker-play:hover {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.timeline-sound-picker-name {
+  flex: 1;
+  text-align: left;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-main);
+  cursor: pointer;
+}
+
+.timeline-sound-picker-name:hover {
+  background: var(--bg-input);
+  color: var(--accent-color);
 }

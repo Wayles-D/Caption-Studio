@@ -15,8 +15,14 @@
  * container; rebuilds its own children imperatively.
  */
 import * as keyframeEngine from './keyframeEngine.js';
-import { undo, redo, getHistoryState } from '../state.js';
+import { undo, redo, getHistoryState, appState } from '../state.js';
 import { getFilmstrip, computeTileCount, FILMSTRIP_TILE_HEIGHT_PX, FILMSTRIP_COUNT_CHANGE_THRESHOLD } from './filmstrip.js';
+import * as audioTimeline from './audioTimeline.js';
+import { previewSound } from './audioEngine.js';
+import { promptForAudioFile } from './audioImport.js';
+import { listSounds, getSoundDefinition } from '../../../shared/soundRegistry.js';
+import { getAudioTrackDuration } from '../../../shared/audioTimeline.js';
+import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 
 const LANES = [
   { key: 'position', label: 'Position', properties: [
@@ -328,40 +334,60 @@ function buildDom(container, options) {
   const filmstripGutter = document.createElement('div');
   filmstripGutter.className = 'timeline-filmstrip-gutter';
   filmstripGutter.textContent = 'Video';
+  // The filmstrip track itself clips its tiles (overflow:hidden gives the
+  // strip its rounded outer edge), so keyframe markers can't live INSIDE it —
+  // one at t=0 or t=duration would be sliced in half by that clip. This
+  // positioned wrapper holds both the strip and the marker overlay as
+  // siblings sharing one coordinate space, so markers sit ON the video row
+  // (CapCut-style: keyframes belong to the clip they animate, not to a lane
+  // of their own) without being subject to the strip's clipping.
+  const filmstripStack = document.createElement('div');
+  filmstripStack.className = 'timeline-filmstrip-stack';
   const filmstripTrack = document.createElement('div');
   filmstripTrack.className = 'timeline-filmstrip-track';
   filmstripTrack.id = 'timeline-filmstrip-track';
+  // THE keyframe track — one ◆ per keyframe ENTRY (whatever properties it
+  // holds), not four per-property tracks. The Position/Scale/Rotation/Opacity
+  // rows below still exist for VALUE EDITING (the Advanced numeric fields —
+  // see relocatePrecisionFields) but host no markers. `pointer-events` is off
+  // on the overlay itself and back on for each marker (see style.css), so
+  // clicking the empty space between markers still scrubs the filmstrip
+  // underneath exactly as it did before the markers moved here.
+  const keyframeTrack = document.createElement('div');
+  keyframeTrack.className = 'timeline-keyframe-overlay';
+  keyframeTrack.id = 'timeline-keyframe-overlay';
+  filmstripStack.appendChild(filmstripTrack);
+  filmstripStack.appendChild(keyframeTrack);
+  // The video strip gets the same in-strip "+" as the audio lanes, so "add
+  // content to this track" is one consistent gesture across every row. Added
+  // to the STACK rather than inside the strip itself, which clips its own
+  // children (that clipping is what gives the filmstrip its rounded edge).
+  const addVideoBtn = buildAddButton('timeline-add-video-btn', 'Upload a video');
+  filmstripStack.appendChild(addVideoBtn);
   filmstripRow.appendChild(filmstripGutter);
-  filmstripRow.appendChild(filmstripTrack);
+  filmstripRow.appendChild(filmstripStack);
   scroll.appendChild(filmstripRow);
 
   const lanesEl = document.createElement('div');
   lanesEl.id = 'timeline-lanes';
   laneEls = {};
 
-  // ONE unified keyframe lane — CapCut-style: a single ◆ per keyframe ENTRY
-  // (whatever properties it happens to hold), not four separate per-
-  // property tracks. The 4 property rows below still exist for VALUE
-  // EDITING (the Advanced numeric fields — see relocatePrecisionFields) but
-  // no longer host their own markers; this is the only clickable/
-  // draggable/deletable keyframe track now (see refreshLanes below).
-  const keyframeLaneRow = document.createElement('div');
-  keyframeLaneRow.className = 'timeline-lane timeline-keyframe-lane';
-  const keyframeLaneGutter = document.createElement('div');
-  keyframeLaneGutter.className = 'timeline-lane-gutter';
-  const keyframeLaneLabel = document.createElement('span');
-  keyframeLaneLabel.className = 'timeline-lane-label';
-  keyframeLaneLabel.textContent = 'Keyframes';
-  keyframeLaneGutter.appendChild(keyframeLaneLabel);
-  const keyframeTrack = document.createElement('div');
-  keyframeTrack.className = 'timeline-lane-track';
-  keyframeLaneRow.appendChild(keyframeLaneGutter);
-  keyframeLaneRow.appendChild(keyframeTrack);
-  lanesEl.appendChild(keyframeLaneRow);
+  // The two AUDIO lanes, directly under the video row — see buildAudioLane.
+  // Two separate lanes, never one: "+ Sound" places a short effect at an
+  // instant, "+ Audio" lays a long imported track across a span. They are
+  // different editing gestures and are kept visually and structurally
+  // distinct for that reason.
+  const sfxLane = buildAudioLane('sfx', 'SFX', 'Add a sound effect at the playhead');
+  const audioLane = buildAudioLane('audio', 'Audio', 'Import a music, ambience or voiceover file');
+  lanesEl.appendChild(sfxLane.row);
+  lanesEl.appendChild(audioLane.row);
 
   LANES.forEach((lane) => {
     const row = document.createElement('div');
-    row.className = 'timeline-lane';
+    // `timeline-property-lane` is what hides this row's (unused) track — the
+    // markers live on the filmstrip now, and the audio lanes above are the
+    // only other rows with a real, interactive track.
+    row.className = 'timeline-lane timeline-property-lane';
     row.dataset.lane = lane.key;
 
     const gutter = document.createElement('div');
@@ -436,7 +462,66 @@ function buildDom(container, options) {
 
   container.appendChild(scroll);
 
-  return { header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip, addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack };
+  return {
+    header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip,
+    addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack,
+    sfxTrack: sfxLane.track, audioTrack: audioLane.track,
+    addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addVideoBtn
+  };
+}
+
+/**
+ * One audio lane row: a gutter with its name and its own "+" action, and a
+ * full-width track the clips are drawn into. Identical structure for both
+ * lanes so they read as one system; only the label, the button and what the
+ * button does differ.
+ */
+function buildAudioLane(key, label, addTitle) {
+  const row = document.createElement('div');
+  row.className = 'timeline-lane timeline-audio-lane';
+  row.dataset.lane = key;
+
+  const gutter = document.createElement('div');
+  gutter.className = 'timeline-lane-gutter';
+  const labelEl = document.createElement('span');
+  labelEl.className = 'timeline-lane-label';
+  labelEl.textContent = label;
+  gutter.appendChild(labelEl);
+
+  const track = document.createElement('div');
+  track.className = 'timeline-lane-track timeline-audio-track';
+  track.id = `timeline-${key}-track`;
+
+  // The add control lives INSIDE the strip, not out in the gutter — the strip
+  // is the thing the content goes into, so that is where the affordance to
+  // add content belongs (and it keeps the gutter to just a name, so every
+  // lane's label column stays the same narrow, scannable width).
+  track.appendChild(buildAddButton(`timeline-add-${key}-btn`, addTitle));
+
+  row.appendChild(gutter);
+  row.appendChild(track);
+  return { row, track, addBtn: track.querySelector('.timeline-add-clip-btn'), gutter };
+}
+
+/**
+ * The in-strip "+" control. Pinned to the strip's left edge and deliberately
+ * subdued until hovered: it sits in the same space clips occupy, so it has to
+ * read as an affordance rather than compete with the content. It is above the
+ * clips in z-order and stops its own pointer events, so clicking it never
+ * also scrubs the timeline or starts a clip drag underneath.
+ */
+function buildAddButton(id, title) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'timeline-add-clip-btn';
+  btn.id = id;
+  btn.title = title;
+  btn.setAttribute('aria-label', title);
+  btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>';
+  // pointerdown (not just click) — the lane tracks and the filmstrip both
+  // scrub on pointerdown, which would otherwise fire underneath this button.
+  btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  return btn;
 }
 
 function timeToX(time, trackWidth, duration) {
@@ -561,7 +646,20 @@ function buildMarker(entry, duration, role) {
 }
 
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedMarkerTime != null && document.activeElement?.tagName !== 'INPUT') {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (document.activeElement?.tagName === 'INPUT') return;
+
+  // A selected AUDIO clip takes precedence over a selected keyframe: selecting
+  // a clip is the more recent, more specific intent, and the two selections
+  // are independent (a keyframe can stay selected on a caption while the user
+  // goes and clicks a sound effect). Without this ordering, Delete would
+  // silently remove a keyframe the user had stopped thinking about.
+  if (appState.selectedAudioClipId) {
+    audioTimeline.removeSelectedClip();
+    return;
+  }
+
+  if (selectedMarkerTime != null) {
     keyframeEngine.deleteKeyframeAt(selectedMarkerTime);
     selectedMarkerTime = null;
   }
@@ -611,6 +709,339 @@ function refreshLanes(duration) {
       input.dataset.lastCommitted = formatted;
     });
   });
+}
+
+// --- Audio lanes (sound effects + audio tracks) ----------------------------
+// Same rebuild discipline as the keyframe markers above, for the same reason:
+// a clip element destroyed and recreated mid-gesture cannot be clicked,
+// dragged or deleted reliably. Clips are rebuilt only when the underlying
+// audio DATA (or the selection highlight) actually changes, and never while a
+// clip is being dragged or trimmed — so scrubbing and playback never disturb
+// an in-progress interaction.
+let lastAudioSignature = null;
+let dragClip = null; // { id, kind, mode: 'move'|'trim-start'|'trim-end', startClientX, moved, grabOffsetSeconds }
+
+const CLIP_DRAG_THRESHOLD_PX = 3;
+
+/** Removes every clip from a lane track, leaving its in-strip "+" button in place. */
+function clearClips(track) {
+  track.querySelectorAll('.timeline-sfx-clip, .timeline-audio-clip').forEach((el) => el.remove());
+}
+
+/** Seconds -> percentage across a lane track, clamped so a clip can't render outside its own lane. */
+function timeToPercent(time, duration) {
+  if (!duration || duration <= 0) return 0;
+  return Math.max(0, Math.min(100, (time / duration) * 100));
+}
+
+/**
+ * Shared pointer wiring for both clip kinds. `mode` decides what a drag
+ * MEANS (move the whole clip, or pull one of its edges), but the
+ * click-vs-drag discrimination, the live-preview-then-commit split, and the
+ * select-and-seek click behavior are identical for all of them — and
+ * identical to how the keyframe markers above already behave, so clips and
+ * keyframes feel like the same timeline rather than two different ones.
+ */
+function attachClipPointerHandlers(el, clip, kind, mode) {
+  el.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    el.setPointerCapture(e.pointerId);
+    audioTimeline.selectClip(clip.id);
+    const rect = el.parentElement.getBoundingClientRect();
+    const duration = getVideo()?.duration || 0;
+    const pointerTime = xToTime(e.clientX - rect.left, rect.width, duration);
+    dragClip = {
+      id: clip.id,
+      kind,
+      mode,
+      startClientX: e.clientX,
+      moved: false,
+      // Where inside the clip the user grabbed it, so a move keeps that point
+      // under the cursor instead of snapping the clip's head to the pointer.
+      grabOffsetSeconds: mode === 'move' ? pointerTime - clip.startTime : 0
+    };
+  });
+
+  el.addEventListener('pointermove', (e) => {
+    if (!dragClip || dragClip.id !== clip.id) return;
+    if (!dragClip.moved && Math.abs(e.clientX - dragClip.startClientX) < CLIP_DRAG_THRESHOLD_PX) return;
+    dragClip.moved = true;
+    applyClipDrag(e.clientX, el, { recordHistory: false });
+  });
+
+  const endDrag = (e) => {
+    if (!dragClip || dragClip.id !== clip.id) return;
+    // The final position is committed as ONE history entry; every intermediate
+    // move during the drag was recorded with recordHistory:false, so undo
+    // steps back over the whole gesture rather than one pointermove of it.
+    if (dragClip.moved) applyClipDrag(e.clientX, el, { recordHistory: true });
+    dragClip = null;
+  };
+  el.addEventListener('pointerup', endDrag);
+  el.addEventListener('pointercancel', endDrag);
+
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    // A plain click (no drag) selects and moves the playhead to the clip, so
+    // pressing play immediately auditions it in context. Matches what
+    // clicking a keyframe marker already does.
+    if (dragClip?.moved) return;
+    const video = getVideo();
+    if (video && mode === 'move') video.currentTime = clip.startTime;
+  });
+}
+
+/** Translates the pointer's X into the timeline edit this drag represents. */
+function applyClipDrag(clientX, el, options) {
+  const track = el.closest('.timeline-lane-track');
+  if (!track) return;
+  const rect = track.getBoundingClientRect();
+  const duration = getVideo()?.duration || 0;
+  if (!rect.width || duration <= 0) return;
+  const pointerTime = xToTime(Math.max(0, Math.min(rect.width, clientX - rect.left)), rect.width, duration);
+
+  if (dragClip.mode === 'move') {
+    const nextStart = pointerTime - dragClip.grabOffsetSeconds;
+    if (dragClip.kind === 'sound') audioTimeline.moveSoundEvent(dragClip.id, nextStart, options);
+    else audioTimeline.moveAudioTrack(dragClip.id, nextStart, options);
+    return;
+  }
+
+  audioTimeline.trimAudioTrack(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
+}
+
+function buildSoundClip(event, duration, isSelected) {
+  const el = document.createElement('div');
+  el.className = 'timeline-sfx-clip';
+  if (isSelected) el.classList.add('selected');
+  if (!event.enabled) el.classList.add('disabled');
+  // An automatically-placed effect is marked so the user can tell at a glance
+  // what came from the transcript analysis and what they placed themselves.
+  if (event.source === 'ai') el.classList.add('auto');
+  el.style.left = `${timeToPercent(event.startTime, duration)}%`;
+  el.dataset.clipId = event.id;
+
+  const definition = getSoundDefinition(event.soundId);
+  el.title = `${definition.label} @ ${event.startTime.toFixed(2)}s${event.source === 'ai' ? ' (auto)' : ''} — drag to retime, click to jump, Delete to remove`;
+  el.tabIndex = 0;
+
+  const dot = document.createElement('span');
+  dot.className = 'timeline-sfx-clip-dot';
+  const label = document.createElement('span');
+  label.className = 'timeline-sfx-clip-label';
+  label.textContent = definition.label;
+  el.appendChild(dot);
+  el.appendChild(label);
+
+  attachClipPointerHandlers(el, event, 'sound', 'move');
+  el.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    previewSound(event.soundId, event.volume);
+  });
+  return el;
+}
+
+/**
+ * Loads (once, cached) and paints this clip's waveform, then keeps it correct
+ * as the clip's on-screen width changes.
+ *
+ * A ResizeObserver rather than a one-off draw: the clip's pixel width changes
+ * both from window resizes AND from trimming, and a canvas whose backing store
+ * no longer matches its box gets stretched by the browser into a blurry,
+ * misaligned trace. Observing the element itself covers every cause without
+ * the timeline needing to know what they are.
+ */
+function paintClipWaveform(canvas, track) {
+  if (!track.url) return;
+
+  const sourceDuration = track.sourceDuration;
+  const draw = (peaks) => {
+    if (!peaks || !canvas.isConnected) return;
+    // Fractions of the SOURCE file, so the drawn shape always corresponds to
+    // the audio this clip actually plays (see drawWaveform's own note).
+    const total = sourceDuration || 0;
+    const startFraction = total > 0 ? Math.min(1, track.trimStart / total) : 0;
+    const endFraction = total > 0 && track.trimEnd != null ? Math.min(1, track.trimEnd / total) : 1;
+    drawWaveform(canvas, peaks, {
+      startFraction,
+      endFraction: Math.max(startFraction + 1e-6, endFraction),
+      color: 'rgba(255, 255, 255, 0.55)'
+    });
+  };
+
+  getWaveformPeaks(track.url).then((peaks) => {
+    if (!peaks) return;
+    draw(peaks);
+    // The clip is rebuilt (and this observer replaced) whenever the underlying
+    // data changes, so the observer only has to outlive resizes of THIS
+    // element — it is disconnected automatically when the element is GC'd.
+    const observer = new ResizeObserver(() => draw(peaks));
+    observer.observe(canvas);
+  });
+}
+
+function buildAudioClip(track, duration, isSelected) {
+  const el = document.createElement('div');
+  el.className = 'timeline-audio-clip';
+  if (isSelected) el.classList.add('selected');
+  if (!track.enabled) el.classList.add('disabled');
+  el.style.left = `${timeToPercent(track.startTime, duration)}%`;
+
+  // A clip whose source length isn't known yet (metadata still decoding) gets
+  // a minimum visible width rather than a zero-width, unclickable sliver.
+  const clipDuration = getAudioTrackDuration(track);
+  const widthPct = clipDuration == null
+    ? 8
+    : Math.max(1, timeToPercent(track.startTime + clipDuration, duration) - timeToPercent(track.startTime, duration));
+  el.style.width = `${widthPct}%`;
+  el.dataset.clipId = track.id;
+  el.title = `${track.name} @ ${track.startTime.toFixed(2)}s — drag to move, drag an edge to trim, Delete to remove`;
+  el.tabIndex = 0;
+
+  // The real waveform of whatever part of the file this clip actually plays.
+  // Drawn behind the label so the name stays readable over it.
+  const wave = document.createElement('canvas');
+  wave.className = 'timeline-audio-clip-wave';
+  el.appendChild(wave);
+  paintClipWaveform(wave, track);
+
+  const label = document.createElement('span');
+  label.className = 'timeline-audio-clip-label';
+  label.textContent = track.name;
+  el.appendChild(label);
+
+  attachClipPointerHandlers(el, track, 'audio', 'move');
+
+  // Trim handles are their own elements with their own pointer wiring so a
+  // grab on an edge never also registers as a move of the whole clip.
+  ['start', 'end'].forEach((edge) => {
+    const handle = document.createElement('div');
+    handle.className = `timeline-audio-clip-handle ${edge}`;
+    handle.title = edge === 'start' ? 'Trim the start' : 'Trim the end';
+    attachClipPointerHandlers(handle, track, 'audio', edge === 'start' ? 'trim-start' : 'trim-end');
+    el.appendChild(handle);
+  });
+
+  return el;
+}
+
+function refreshAudioLanes(duration) {
+  const soundEvents = appState.soundEvents || [];
+  const audioTracks = appState.audioTracks || [];
+  const selectedId = appState.selectedAudioClipId;
+  const signature = JSON.stringify({ soundEvents, audioTracks, selectedId, duration });
+  if (signature === lastAudioSignature || dragClip) return;
+  lastAudioSignature = signature;
+
+  // Only the CLIPS are cleared, never the whole track: the in-strip "+" button
+  // is a child of the track too (that is the point of it being in the strip),
+  // and replaceChildren() would delete it on the first rebuild — leaving a
+  // lane with no way to add anything to it.
+  clearClips(els.sfxTrack);
+  clearClips(els.audioTrack);
+  if (!(duration > 0)) return;
+
+  soundEvents.forEach((event) => {
+    els.sfxTrack.appendChild(buildSoundClip(event, duration, event.id === selectedId));
+  });
+  audioTracks.forEach((track) => {
+    els.audioTrack.appendChild(buildAudioClip(track, duration, track.id === selectedId));
+  });
+
+  // The in-strip "+" sits at the strip's left edge, which is exactly where a
+  // clip starting at 0:00 also sits (a music bed almost always does). Rather
+  // than let it cover that clip's own label permanently, an occupied lane
+  // reveals its "+" on hover instead; an EMPTY lane keeps it plainly visible,
+  // which is the case where discoverability actually matters.
+  els.sfxTrack.classList.toggle('is-empty', soundEvents.length === 0);
+  els.audioTrack.classList.toggle('is-empty', audioTracks.length === 0);
+}
+
+// --- "+ Sound" picker ------------------------------------------------------
+
+let soundPickerEl = null;
+
+function closeSoundPicker() {
+  if (soundPickerEl) {
+    soundPickerEl.remove();
+    soundPickerEl = null;
+  }
+}
+
+/**
+ * Positions the picker just above its button, in VIEWPORT coordinates.
+ *
+ * It is appended to <body> and fixed-positioned rather than anchored inside
+ * the lane gutter, because the gutter lives inside `.timeline-scroll`
+ * (overflow-y:auto) inside a short, fixed-height panel: a popover opening
+ * upward from there is both clipped by that scroll container and painted
+ * underneath the preview `<main>` above it — visible in a screenshot,
+ * completely unclickable in practice (confirmed by the e2e suite, whose click
+ * on a picker row was intercepted by <main> until this was changed).
+ */
+function positionSoundPicker(picker, anchorBtn) {
+  const rect = anchorBtn.getBoundingClientRect();
+  picker.style.left = `${Math.max(8, rect.left)}px`;
+  // Flip below the button if there genuinely isn't room above it.
+  const height = picker.offsetHeight;
+  const above = rect.top - height - 6;
+  picker.style.top = above >= 8 ? `${above}px` : `${rect.bottom + 6}px`;
+}
+
+/**
+ * A small popover listing every registered sound. Each row auditions on its
+ * own ▶ button and places the effect at the playhead when the row is clicked
+ * — so a user can hear a sound before committing to it, which is the whole
+ * difference between picking a sound and guessing one.
+ *
+ * Built from shared/soundRegistry.js's listing rather than a hard-coded set,
+ * so adding a sound to the registry adds it here with no change to this file.
+ */
+function openSoundPicker(anchorBtn) {
+  if (soundPickerEl) {
+    closeSoundPicker();
+    return;
+  }
+
+  const picker = document.createElement('div');
+  picker.className = 'timeline-sound-picker';
+
+  const heading = document.createElement('div');
+  heading.className = 'timeline-sound-picker-heading';
+  heading.textContent = 'Add sound at playhead';
+  picker.appendChild(heading);
+
+  listSounds().forEach((sound) => {
+    const row = document.createElement('div');
+    row.className = 'timeline-sound-picker-row';
+
+    const play = document.createElement('button');
+    play.type = 'button';
+    play.className = 'timeline-sound-picker-play';
+    play.setAttribute('aria-label', `Preview ${sound.label}`);
+    play.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg>';
+    play.addEventListener('click', (e) => {
+      e.stopPropagation();
+      previewSound(sound.id, sound.defaultVolume);
+    });
+
+    const name = document.createElement('button');
+    name.type = 'button';
+    name.className = 'timeline-sound-picker-name';
+    name.textContent = sound.label;
+    name.addEventListener('click', () => {
+      audioTimeline.addSoundEvent(sound.id);
+      closeSoundPicker();
+    });
+
+    row.appendChild(play);
+    row.appendChild(name);
+    picker.appendChild(row);
+  });
+
+  document.body.appendChild(picker);
+  positionSoundPicker(picker, anchorBtn);
+  soundPickerEl = picker;
 }
 
 function refreshRangesForTarget(kind) {
@@ -742,6 +1173,11 @@ function tick() {
   // Same cadence as the ruler/playhead, and equally cheap: this only rebuilds
   // when the video or the ideal tile count actually changed.
   syncFilmstrip(duration);
+  // Audio clips are independent of the keyframe TARGET (a sound effect exists
+  // whether or not a caption happens to be selected), so this refreshes on
+  // every tick rather than inside the `hasTarget` branch below — and, like
+  // the filmstrip, it only does real work when the data actually changed.
+  refreshAudioLanes(duration);
   if (els.timeReadout) els.timeReadout.textContent = formatTime(currentTime);
 
   const paused = video?.paused ?? true;
@@ -820,6 +1256,10 @@ export function initTimelinePanel(container, options = {}) {
   advancedExpanded = false;
   lastPrecisionTarget = undefined;
   lastPlaybackTarget = undefined;
+  // buildDom() just replaced every clip element, so the cached signature would
+  // otherwise match and the (now empty) lanes would never be repopulated.
+  lastAudioSignature = null;
+  dragClip = null;
   applyAdvancedState();
 
   const scrub = (clientX) => {
@@ -856,15 +1296,64 @@ export function initTimelinePanel(container, options = {}) {
   els.filmstripTrack.addEventListener('pointerdown', (e) => {
     filmstripScrubbing = true;
     els.filmstripTrack.setPointerCapture(e.pointerId);
+    // Touching the video strip selects the video as the keyframe/properties
+    // target — the strip IS the video clip, so clicking it should select it
+    // the same way clicking a caption on the canvas selects that caption.
+    // The "Video" chip in the header still works and stays in sync (both
+    // route through the same keyframeEngine selection), it is just no longer
+    // the only way in.
+    keyframeEngine.selectVideoTarget();
+    // Clicking the video row is also a different selection intent from having
+    // an audio clip selected, so the audio selection is cleared — otherwise
+    // the Delete key would still be aimed at a clip the user has moved on from.
+    audioTimeline.selectClip(null);
     scrubFilmstrip(e.clientX);
   });
   els.filmstripTrack.addEventListener('pointermove', (e) => { if (filmstripScrubbing) scrubFilmstrip(e.clientX); });
   els.filmstripTrack.addEventListener('pointerup', () => { filmstripScrubbing = false; });
 
   els.scroll.addEventListener('pointerdown', (e) => {
-    // Clicking empty lane space (not a marker) clears the "selected keyframe" (Delete-key target).
-    if (e.target === els.scroll || e.target.classList?.contains('timeline-lane-track')) selectedMarkerTime = null;
+    // Clicking empty lane space (not a marker/clip) clears BOTH selections —
+    // the "selected keyframe" and the selected audio clip — so the Delete key
+    // has no stale target left over from an earlier selection.
+    if (e.target === els.scroll || e.target.classList?.contains('timeline-lane-track')) {
+      selectedMarkerTime = null;
+      audioTimeline.selectClip(null);
+    }
   });
+
+  // "+ Sound" opens the sound picker (audition, then place at the playhead);
+  // "+ Audio" goes straight to the OS file picker, since choosing a file IS
+  // the choice — there is nothing to preview first.
+  els.addSoundBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openSoundPicker(els.addSoundBtn);
+  });
+  els.addAudioBtn.addEventListener('click', () => {
+    promptForAudioFile(
+      undefined,
+      (err) => { console.error('[Timeline] Audio import failed:', err.message); }
+    );
+  });
+
+  // The video strip's "+" reuses App.jsx's own hidden file input rather than
+  // opening a second one of its own, so uploading from here goes through the
+  // exact same transcription/processing pipeline as the upload dropzone —
+  // one upload path, not two that can drift.
+  els.addVideoBtn.addEventListener('click', () => {
+    document.getElementById('video-file-input')?.click();
+  });
+
+  // Same dismiss-on-outside-tap behavior as every other transient surface in
+  // the app (see the target-info popover below).
+  const dismissSoundPickerOnOutsideClick = (e) => {
+    // `contains`, not identity: the button's own child SVG is what a click
+    // actually lands on, so an identity check would dismiss the picker on
+    // pointerdown and let the following click immediately reopen it — making
+    // the button impossible to toggle closed.
+    if (soundPickerEl && !soundPickerEl.contains(e.target) && !els.addSoundBtn.contains(e.target)) closeSoundPicker();
+  };
+  document.addEventListener('pointerdown', dismissSoundPickerOnOutsideClick);
 
   // Dismiss the mobile/tablet target-info popover (see buildDom's
   // targetInfo/targetInfoBtn) on any tap outside it, matching every other
@@ -882,5 +1371,7 @@ export function initTimelinePanel(container, options = {}) {
   return () => {
     if (rafId) cancelAnimationFrame(rafId);
     document.removeEventListener('pointerdown', dismissTargetInfoOnOutsideClick);
+    document.removeEventListener('pointerdown', dismissSoundPickerOnOutsideClick);
+    closeSoundPicker();
   };
 }
