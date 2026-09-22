@@ -8,7 +8,7 @@ import { resolveASSStyle } from '../utils/assWriter.js';
 import { analyzeKeywords } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
-import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor } from '../utils/graphicsExport.js';
+import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor, getLastGraphicsFailure } from '../utils/graphicsExport.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -257,7 +257,10 @@ export async function uploadAndExtractAudio(req, res, next) {
       // tryRenderCaptionsWithGraphics's own doc comment); the ASS/libass
       // fallback it swaps to on any failure renders plain, un-transformed
       // captions with no way to tell from the video alone that it happened.
-      renderedWithEffects: usedGraphicsRenderer
+      renderedWithEffects: usedGraphicsRenderer,
+      // When the graphics renderer bailed, WHY — see graphicsExport.js's
+      // recordFailure: the real cause used to reach the server console only.
+      graphicsFailureReason: usedGraphicsRenderer ? null : getLastGraphicsFailure()
     };
 
     console.log(`[Pipeline] [${baseName}] Returning response payload keys:`, Object.keys(responsePayload));
@@ -413,7 +416,10 @@ export async function regenerateCaptions(req, res, next) {
       // See the matching field on the initial-upload response above —
       // false means caption transform keyframes/blend mode were silently
       // dropped this render (ASS fallback).
-      renderedWithEffects: usedGraphicsRenderer
+      renderedWithEffects: usedGraphicsRenderer,
+      // When the graphics renderer bailed, WHY — see graphicsExport.js's
+      // recordFailure: the real cause used to reach the server console only.
+      graphicsFailureReason: usedGraphicsRenderer ? null : getLastGraphicsFailure()
     };
 
     console.log(`[Regenerate] [${baseName}] Returning response payload keys:`, Object.keys(responsePayload));

@@ -21,6 +21,33 @@ import { groupWordsToPhrases, sanitizePhraseTimings } from './phraseGrouper.js';
 import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
 
 /**
+ * WHY this exists: every failure in this module degrades the job to the ASS
+ * renderer, which silently drops video transforms AND caption transform
+ * keyframes. The user only ever saw "the advanced renderer couldn't run this
+ * time" while the actual cause — an ffmpeg filter-graph error, carrying the
+ * real reason in its stderr tail — stayed buried in the server console. That
+ * made a reproducible user-side failure effectively undiagnosable remotely.
+ *
+ * The reason is now recorded here and surfaced in the API response
+ * (see uploadController.js's `graphicsFailureReason`) so a failing export
+ * reports what actually broke instead of only that something did.
+ */
+let lastGraphicsFailure = null;
+
+function recordFailure(stage, message, stack) {
+  lastGraphicsFailure = { stage, message, stack: stack || null, at: new Date().toISOString() };
+  return false;
+}
+
+/**
+ * The reason the last `tryRenderCaptionsWithGraphics` call fell back, or null
+ * if it succeeded. Read once per job by the controllers, right after the call.
+ */
+export function getLastGraphicsFailure() {
+  return lastGraphicsFailure;
+}
+
+/**
  * Attempts to render captions for `videoPath` via the graphics pipeline.
  *
  * @param {string} videoPath - Absolute path to the source video.
@@ -32,17 +59,22 @@ import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
  */
 export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, outputVideoPath, framesDir) {
   const params = styles || {};
-  if (!canGenerateGraphicsFrames(params)) return false;
-  if (!Array.isArray(words) || words.length === 0) return false;
+  lastGraphicsFailure = null;
+  if (!canGenerateGraphicsFrames(params)) {
+    return recordFailure('unsupported-scope', `Preset/mode outside the graphics renderer's scope (captionMode='${params.captionMode}', preset='${params.preset || params.currentPreset}').`);
+  }
+  if (!Array.isArray(words) || words.length === 0) {
+    return recordFailure('no-words', 'No words supplied to render.');
+  }
 
   let phrases;
   try {
     phrases = sanitizePhraseTimings(groupWordsToPhrases({ words }));
   } catch (err) {
     console.error(`[GraphicsExport] Failed to group words into phrases, falling back to ASS: ${err.message}`, err.stack);
-    return false;
+    return recordFailure('phrase-grouping', err.message, err.stack);
   }
-  if (!phrases.length) return false;
+  if (!phrases.length) return recordFailure('no-phrases', 'Word list produced no renderable phrases.');
 
   try {
     const { width, height, duration } = await getVideoInfo(videoPath);
@@ -72,7 +104,9 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // without it a real bug here is unfindable from logs alone.
     console.error(`[GraphicsExport] Graphics render failed, falling back to ASS: ${err.message}`);
     console.error(err.stack);
-    return false;
+    // Also reported back to the client — see recordFailure's doc comment on why
+    // console-only was not enough to diagnose this remotely.
+    return recordFailure('render', err.message, err.stack);
   } finally {
     try {
       fs.rmSync(framesDir, { recursive: true, force: true });

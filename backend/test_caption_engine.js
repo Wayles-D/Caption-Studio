@@ -459,5 +459,44 @@ assert.ok(
 assert.ok(kept < synthetic.length, 'Sub-frame segments must be dropped rather than inflated to a full frame');
 console.log(`✓ ${synthetic.length} segments (${synthetic.length - kept} sub-frame) quantize to exactly ${total.toFixed(3)}s with zero accumulated drift`);
 
+// 14. Rotation's pad must never be able to be smaller than its input
+console.log('\n[Test 14] Rotation Pad Defers To The Real Stream Dimensions');
+// pad/rotate sizes used to be plain JS-computed literals derived from the
+// dimensions getVideoInfo probed out of ffmpeg's stderr banner. That made the
+// probe a SECOND source of truth about frame size, and `pad` fails outright the
+// moment it disagrees with the frames ffmpeg actually decodes:
+//   [Parsed_pad] Padded dimensions cannot be smaller than input dimensions.
+//   [fc#0] Error reinitializing filters!
+// ffmpeg then exits non-zero, compositeGraphicsCaptionTrack rejects,
+// graphicsExport.js's catch swallows it, and the whole job silently degrades to
+// the ASS renderer (no video transform, no caption transform keyframes) with
+// renderedWithEffects:false — the user-visible "the advanced renderer couldn't
+// run this time".
+//
+// `pad` exists ONLY when rotation is used, so a probe disagreement stays
+// invisible until rotation is switched on and then breaks the export every
+// single time. Reproduced directly with deliberately disagreeing dimensions:
+// rotation OFF rendered fine, rotation ON failed with the error above; after
+// deferring to iw/ih both pass, and output is bit-identical (PSNR inf, SSIM
+// 1.000000) whenever the probe agrees.
+const rotChain = buildVideoTransformFilterChain(
+  { offsetXPct: 0, offsetYPct: 0, scale: 1, rotation: 12, opacity: 100 }, 4, 1080, 1920
+);
+const padStage = rotChain.filterComplex.split(';').find((s) => s.includes('pad='));
+const rotStage = rotChain.filterComplex.split(';').find((s) => s.includes('rotate='));
+assert.ok(padStage, 'A rotating transform must emit a pad stage');
+assert.ok(
+  /pad='max\(\d+\\,iw\)':'max\(\d+\\,ih\)'/.test(padStage),
+  `pad must floor its size at the REAL stream size (iw/ih), not a probed literal — got: ${padStage}`
+);
+assert.ok(
+  /out_w='max\(\d+\\,iw\)':out_h='max\(\d+\\,ih\)'/.test(rotStage),
+  'rotate must resolve the SAME floor as pad so its output matches the padded canvas exactly'
+);
+// The comma inside max() must stay escaped, or the filtergraph parser reads it
+// as a filter separator and the entire graph fails to parse.
+assert.ok(!/max\(\d+,i[wh]\)/.test(rotChain.filterComplex), 'The comma inside max() must be escaped as \\, for the filtergraph parser');
+console.log('✓ pad/rotate size from the real stream (iw/ih), so a probe disagreement can no longer fail the render');
+
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');
 

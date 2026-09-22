@@ -352,7 +352,13 @@ export function App() {
       }, { recordHistory: false });
 
       setViewState('video');
-      return { ok: true, renderedWithEffects: result.renderedWithEffects !== false };
+      if (result.renderedWithEffects === false) {
+        // The backend now reports WHY it fell back (see graphicsExport.js's
+        // recordFailure). Logged in full because this is the one place the
+        // real cause is visible without server console access.
+        console.error('[Export] Advanced renderer fell back to ASS:', result.graphicsFailureReason);
+      }
+      return { ok: true, renderedWithEffects: result.renderedWithEffects !== false, graphicsFailureReason: result.graphicsFailureReason || null };
     } catch (err) {
       console.error("Regeneration Error:", err);
       setViewState('video');
@@ -364,11 +370,11 @@ export function App() {
 
   const triggerRegeneration = useCallback(async () => {
     showToast("Re-rendering captioned video...");
-    const { ok, renderedWithEffects } = await renderCurrentEditsToServer();
+    const { ok, renderedWithEffects, graphicsFailureReason } = await renderCurrentEditsToServer();
     if (ok) {
       showToast(renderedWithEffects
         ? "Render complete! Ready to download."
-        : "Rendered, but without some caption effects (position/rotation/blend) — the advanced renderer couldn't run this time.");
+        : `Rendered, but without some caption effects (position/rotation/blend) — the advanced renderer couldn't run this time.${graphicsFailureReason ? ` Reason: ${graphicsFailureReason.stage} — ${graphicsFailureReason.message}` : ""}`);
     }
   }, [renderCurrentEditsToServer, showToast]);
 
@@ -407,7 +413,7 @@ export function App() {
     }
 
     showToast("Rendering your latest edits before download...");
-    const { ok, renderedWithEffects } = await renderCurrentEditsToServer();
+    const { ok, renderedWithEffects, graphicsFailureReason } = await renderCurrentEditsToServer();
     if (!ok || !appState.renderedVideoPath) return;
 
     // Cache-bust: the backend writes every regenerate to the SAME
@@ -429,7 +435,7 @@ export function App() {
     document.body.removeChild(dlLink);
     showToast(renderedWithEffects
       ? "Download started!"
-      : "Download started — but without some caption effects (position/rotation/blend); the advanced renderer couldn't run this time.");
+      : `Download started — but without some caption effects (position/rotation/blend); the advanced renderer couldn't run this time.${graphicsFailureReason ? ` Reason: ${graphicsFailureReason.stage} — ${graphicsFailureReason.message}` : ""}`);
   }, [renderCurrentEditsToServer, videoSrc, showToast]);
 
   return (

@@ -367,8 +367,39 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
 
   let afterGeometry = 'vt_scaled';
   if (everRotates) {
-    activeStages.push(`[vt_scaled]pad=${padW}:${padH}:(ow-iw)/2:(oh-ih)/2:color=black@0${sizeEval}[vt_padded]`);
-    activeStages.push(`[vt_padded]rotate=angle='(${rotationExpr})*PI/180':fillcolor=black@0:out_w=${padW}:out_h=${padH}[vt_rotated]`);
+    // `max(...,iw)` / `max(...,ih)` is a HARD SAFETY FLOOR, not an optimization.
+    //
+    // padW/padH above are computed in JavaScript from the dimensions
+    // getVideoInfo probed out of ffmpeg's stderr banner. That makes the probe a
+    // SECOND source of truth about frame size, and `pad` fails outright the
+    // moment it disagrees with the frames ffmpeg actually decodes:
+    //
+    //   [Parsed_pad] Padded dimensions cannot be smaller than input dimensions.
+    //   [Parsed_pad] Failed to configure input pad on Parsed_pad
+    //   [fc#0] Error reinitializing filters!
+    //
+    // That non-zero exit propagates as a rejection out of
+    // compositeGraphicsCaptionTrack, is swallowed by graphicsExport.js's catch,
+    // and silently degrades the whole job to the ASS renderer — which supports
+    // neither video transforms nor caption transform keyframes, and reports
+    // `renderedWithEffects: false` ("the advanced renderer couldn't run this
+    // time"). Crucially `pad` exists ONLY when rotation is used, so a probe
+    // disagreement is invisible until rotation is switched on and then breaks
+    // the export every time — reproduced directly: with dims deliberately
+    // disagreeing, rotation OFF renders fine and rotation ON fails with the
+    // error above.
+    //
+    // Deferring to `iw`/`ih` means the padded size is taken from the stream
+    // ffmpeg is really carrying, so it is arithmetically incapable of being
+    // smaller than its own input regardless of what the probe said. When the
+    // probe agrees (the normal case) padW/padH already exceed the scaled input,
+    // so max() selects them and the emitted geometry is unchanged.
+    const padWExpr = `max(${padW}\\,iw)`;
+    const padHExpr = `max(${padH}\\,ih)`;
+    activeStages.push(`[vt_scaled]pad='${padWExpr}':'${padHExpr}':(ow-iw)/2:(oh-ih)/2:color=black@0${sizeEval}[vt_padded]`);
+    // rotate's output must match the padded canvas exactly, so it resolves the
+    // same floor from its own input rather than re-deriving it from the probe.
+    activeStages.push(`[vt_padded]rotate=angle='(${rotationExpr})*PI/180':fillcolor=black@0:out_w='max(${padW}\\,iw)':out_h='max(${padH}\\,ih)'[vt_rotated]`);
     afterGeometry = 'vt_rotated';
   }
 
