@@ -63,11 +63,25 @@ export function createClipId(prefix) {
  * requirement is that `startTime` means exactly the same instant to the
  * preview and to the exporter.
  *
- * `source` records whether the user placed this or the transcript analysis
- * did ('manual' | 'ai'), and `eventType` records which semantic moment an
- * AI-placed one came from — together they let the UI show provenance and let
- * "regenerate automatic effects" replace only the automatic ones, never
- * something the user placed or hand-adjusted.
+ * PROVENANCE — three states, not two, because "who placed this" and "has the
+ * creator since touched it" are different questions and reconciliation needs
+ * both:
+ *   source 'manual'                     -> the creator placed it
+ *   source 'ai', userModified false     -> an untouched suggestion; a re-run
+ *                                          may freely replace it
+ *   source 'ai', userModified true      -> the creator moved/re-sounded/
+ *                                          re-levelled a suggestion. It keeps
+ *                                          its AI origin for display, but
+ *                                          reconciliation must treat it as
+ *                                          the creator's, not regenerable.
+ *
+ * `eventType` records which semantic moment an AI-placed one came from, and
+ * `eventKey` is that moment's STABLE identity (type + resolved timestamp — the
+ * same key the analysis de-duplicates on). Identity has to survive a re-run,
+ * because the clip's own `id` is regenerated each time: the key is what lets
+ * reconciliation recognise "this suggestion is already on the timeline" and
+ * what a tombstone refers to when the creator deletes one and does not want
+ * it resurrected.
  */
 export function createSoundEvent(soundId, startTime, overrides = {}) {
   const safeId = isKnownSoundId(soundId) ? soundId : FALLBACK_SOUND_ID;
@@ -84,6 +98,8 @@ export function createSoundEvent(soundId, startTime, overrides = {}) {
     enabled: true,
     source: 'manual',
     eventType: null,
+    eventKey: null,
+    userModified: false,
     // Set when this effect exists BECAUSE of another timeline object (an
     // image's entrance, a caption reveal). Purely a back-reference for the
     // UI and for cascade-delete — timing still comes from `startTime` on this
@@ -111,6 +127,8 @@ export function normalizeSoundEvent(raw) {
     enabled: raw.enabled !== false,
     source: raw.source === 'ai' ? 'ai' : 'manual',
     eventType: typeof raw.eventType === 'string' ? raw.eventType : null,
+    eventKey: typeof raw.eventKey === 'string' && raw.eventKey ? raw.eventKey : null,
+    userModified: raw.userModified === true,
     attachedTo: raw.attachedTo && typeof raw.attachedTo === 'object' ? raw.attachedTo : null
   };
 }

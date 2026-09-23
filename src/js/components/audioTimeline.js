@@ -23,7 +23,7 @@ import {
   normalizeAudioTrack,
   getAudioTrackDuration
 } from '../../../shared/audioTimeline.js';
-import { resolveSoundMapping, isKnownSemanticEventType } from '../../../shared/soundProfiles.js';
+import { resolveSoundMapping, isKnownSemanticEventType , getSemanticEventKey } from '../../../shared/soundProfiles.js';
 import { getSoundDefinition } from '../../../shared/soundRegistry.js';
 
 /** The playhead — the same `#preview-video` element every other part of the editor treats as the single source of time. */
@@ -73,13 +73,34 @@ export function addSoundEvent(soundId, startTime = getPlayheadTime(), overrides 
  * Patches one effect. `recordHistory` is false during a live drag (so a drag
  * doesn't push 60 history entries) and true on the commit — the same
  * drag/commit split preview.js's manual caption drag already uses.
+ *
+ * Editing an AI-placed effect PROMOTES it: it keeps its `source: 'ai'` origin
+ * (so the UI can still say where it came from) but is flagged `userModified`,
+ * which takes it out of the regenerable pool for good — see
+ * applySemanticEvents. Without this, moving an automatic tick and then
+ * re-analyzing would silently snap it back to where the model put it.
+ *
+ * Only real edits promote. `enabled` is included deliberately — muting a
+ * suggestion is a decision about it — but a patch that changes nothing (or
+ * only internal bookkeeping) leaves the flag alone, so merely re-writing a
+ * clip doesn't make it un-regenerable.
  */
+const PROMOTING_FIELDS = ['startTime', 'soundId', 'volume', 'fadeIn', 'fadeOut', 'playbackRate', 'duration', 'enabled'];
+
 export function updateSoundEvent(id, patch, { recordHistory = true } = {}) {
   const events = getSoundEvents();
   const idx = events.findIndex((e) => e.id === id);
   if (idx === -1) return null;
+  const current = events[idx];
+  const touchesValue = PROMOTING_FIELDS.some(
+    (field) => Object.hasOwn(patch || {}, field) && patch[field] !== current[field]
+  );
   const next = events.slice();
-  next[idx] = normalizeSoundEvent({ ...events[idx], ...patch });
+  next[idx] = normalizeSoundEvent({
+    ...current,
+    ...patch,
+    userModified: current.userModified || (current.source === 'ai' && touchesValue)
+  });
   writeSoundEvents(next, recordHistory);
   return next[idx];
 }
@@ -88,11 +109,40 @@ export function moveSoundEvent(id, startTime, options) {
   return updateSoundEvent(id, { startTime: clampToTimeline(startTime) }, options);
 }
 
+/**
+ * Deleting an AI-placed effect TOMBSTONES the moment it came from, so a later
+ * re-analysis does not hand it back. "I don't want a sound here" has to be a
+ * decision the system remembers; without it, every re-run would quietly undo
+ * the deletion.
+ *
+ * The underlying semantic event is deliberately NOT removed — the moment is
+ * still a real thing that happened in the speech, so it stays listed and the
+ * creator can place something there by hand later. This is "remove the SFX
+ * while keeping the event", not "pretend the moment never existed".
+ */
 export function removeSoundEvent(id) {
-  const next = getSoundEvents().filter((e) => e.id !== id);
-  if (next.length === getSoundEvents().length) return;
-  writeSoundEvents(next);
+  const events = getSoundEvents();
+  const target = events.find((e) => e.id === id);
+  if (!target) return;
+
+  if (target.source === 'ai' && target.eventKey) {
+    const dismissed = new Set(appState.dismissedEventKeys || []);
+    dismissed.add(target.eventKey);
+    updateState({ dismissedEventKeys: [...dismissed] }, { recordHistory: false });
+  }
+
+  writeSoundEvents(events.filter((e) => e.id !== id));
   if (appState.selectedAudioClipId === id) selectClip(null);
+}
+
+/**
+ * Forgets every "I deleted this suggestion" tombstone, so the next run may
+ * place those moments again — the undo for a deletion the creator has changed
+ * their mind about.
+ */
+export function restoreDismissedEvents() {
+  updateState({ dismissedEventKeys: [] }, { recordHistory: true });
+  if (appState.autoSoundEffects) regenerateAutoSoundEffects();
 }
 
 export function setSoundEventEnabled(id, enabled) {
@@ -247,11 +297,22 @@ export function removeSelectedClip() {
  * effect per event, using whichever sound the current profile says that event
  * type means.
  *
- * Only AUTOMATIC effects are replaced: every existing event with
- * `source === 'ai'` is cleared first, while anything the user placed or
- * adjusted by hand is left exactly where it is. That is what makes this safe
- * to re-run after switching sound profile, re-enabling Auto Sound Effects, or
- * re-analyzing — it can never quietly undo the user's own work.
+ * RECONCILED, not replaced. The AI's output is a suggestion; the timeline
+ * belongs to the creator. So a re-run may only ever replace effects that are
+ * still untouched suggestions, and three things survive it verbatim:
+ *
+ *   - anything hand-placed (`source === 'manual'`)
+ *   - a suggestion the creator has since MOVED, re-sounded, re-levelled or
+ *     disabled (`userModified`) — it keeps its own timestamp/sound/volume and
+ *     is not regenerated from the analysis
+ *   - a suggestion the creator DELETED, which stays deleted: its key is
+ *     tombstoned in `dismissedEventKeys` so re-analysis cannot resurrect it
+ *
+ * Identity is the moment's own key (type + resolved timestamp — see
+ * getSemanticEventKey), never the clip id, because both the analysis objects
+ * and the placed clips are recreated on every run. That is also what makes
+ * this idempotent: re-running with the same speech re-derives the same keys,
+ * finds them already handled, and places nothing new.
  *
  * A no-op when Auto Sound Effects is off: the semantic events are still
  * stored (the suggestions stay browsable, and the user can place any of them
@@ -268,21 +329,33 @@ export function applySemanticEvents(semanticEvents, { force = false } = {}) {
   }
 
   const mapping = resolveSoundMapping(appState.soundProfileId, appState.soundEventMapping);
-  const manual = getSoundEvents().filter((e) => e.source !== 'ai');
+  const existing = getSoundEvents();
+
+  // Everything the creator owns: their own placements, plus any suggestion
+  // they have since edited. Kept exactly as-is.
+  const kept = existing.filter((e) => e.source !== 'ai' || e.userModified);
+
+  // A moment is already handled if the creator is holding a clip for it, or
+  // if they deleted that clip and do not want it back.
+  const dismissed = new Set(appState.dismissedEventKeys || []);
+  const claimed = new Set(kept.map((e) => e.eventKey).filter(Boolean));
 
   const generated = stored
     .map((event) => {
+      const key = getSemanticEventKey(event);
+      if (!key || dismissed.has(key) || claimed.has(key)) return null;
       const soundId = mapping[event.type];
       if (!soundId) return null; // this event type is mapped to silence
       return createSoundEvent(soundId, event.timestamp, {
         source: 'ai',
-        eventType: event.type
+        eventType: event.type,
+        eventKey: key
       });
     })
     .filter(Boolean);
 
   updateState({ semanticEvents: stored }, { recordHistory: false });
-  writeSoundEvents([...manual, ...generated]);
+  writeSoundEvents([...kept, ...generated]);
   return generated;
 }
 

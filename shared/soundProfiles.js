@@ -58,6 +58,24 @@ export function isKnownSemanticEventType(type) {
 }
 
 /**
+ * A semantic moment's STABLE identity: its type plus its resolved timestamp.
+ *
+ * Deliberately derived rather than random, because the analysis produces a
+ * fresh object on every run and the placed effect gets a fresh clip id — so
+ * neither can be used to recognise "this is the same moment I already saw".
+ * The same moment in the same speech resolves to the same word and therefore
+ * the same key, which is what lets a re-run tell an already-handled
+ * suggestion from a genuinely new one.
+ *
+ * Matches the key keywordAnalysisService.js already de-duplicates on, so the
+ * two cannot disagree about what counts as "the same event".
+ */
+export function getSemanticEventKey(event) {
+  if (!event || !isKnownSemanticEventType(event.type) || !Number.isFinite(event.timestamp)) return null;
+  return `${event.type}@${event.timestamp.toFixed(3)}`;
+}
+
+/**
  * Sound profiles. `mapping` maps a semantic event type to a sound ID, or to
  * `null` for "this event type produces no sound by default" — an event with a
  * null mapping still appears in the editor as a recognized moment (so the

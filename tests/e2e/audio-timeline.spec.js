@@ -403,3 +403,95 @@ test('audio edits are undoable through the editor\'s single history stack', asyn
   await page.locator('#btn-toolbar-reset').click();
   await expect(page.locator(SFX_CLIP)).toHaveCount(1);
 });
+
+/**
+ * Re-run reconciliation. The AI's output is a suggestion; the timeline belongs
+ * to the creator. These cover the three ways a re-analysis could silently undo
+ * the creator's work — the existing coverage only proved hand-placed effects
+ * survive, not that EDITED or DELETED suggestions do.
+ */
+test('re-analysis preserves a moved AI effect instead of snapping it back', async ({ page }) => {
+  await loadDemoVideo(page);
+
+  const result = await page.evaluate(() => {
+    const analysis = [
+      { type: 'list_item', index: 1, timestamp: 1.0 },
+      { type: 'list_item', index: 2, timestamp: 2.0 }
+    ];
+    window.__audioTimeline.applySemanticEvents(analysis);
+
+    // The creator moves the first tick and re-levels it.
+    const first = window.__appState.soundEvents.find((e) => e.startTime === 1.0);
+    window.__audioTimeline.moveSoundEvent(first.id, 1.75);
+    window.__audioTimeline.updateSoundEvent(first.id, { volume: 0.9 });
+
+    // Re-running must not reclaim it.
+    window.__audioTimeline.applySemanticEvents(analysis);
+
+    const events = window.__appState.soundEvents.map((e) => ({
+      startTime: +e.startTime.toFixed(3), volume: +e.volume.toFixed(2), userModified: e.userModified
+    })).sort((a, b) => a.startTime - b.startTime);
+    return { events, count: window.__appState.soundEvents.length };
+  });
+
+  // The moved effect kept its new time AND volume, and was not duplicated
+  // back at 1.0 — two effects total, not three.
+  expect(result.count).toBe(2);
+  expect(result.events).toEqual([
+    { startTime: 2.0, volume: 0.7, userModified: false },
+    { startTime: 1.75, volume: 0.9, userModified: true }
+  ].sort((a, b) => a.startTime - b.startTime));
+});
+
+test('a deleted AI effect is not resurrected by re-analysis', async ({ page }) => {
+  await loadDemoVideo(page);
+
+  const result = await page.evaluate(() => {
+    const analysis = [
+      { type: 'list_item', index: 1, timestamp: 1.0 },
+      { type: 'list_item', index: 2, timestamp: 2.0 }
+    ];
+    window.__audioTimeline.applySemanticEvents(analysis);
+
+    // The creator decides this moment should be silent.
+    const first = window.__appState.soundEvents.find((e) => e.startTime === 1.0);
+    window.__audioTimeline.removeSoundEvent(first.id);
+
+    window.__audioTimeline.applySemanticEvents(analysis);
+    const afterRerun = window.__appState.soundEvents.map((e) => e.startTime);
+
+    // The MOMENT itself is still known — only the sound was removed — so the
+    // creator can still place something there by hand.
+    const momentsStillListed = window.__appState.semanticEvents.length;
+
+    // And they can change their mind.
+    window.__audioTimeline.restoreDismissedEvents();
+    const afterRestore = window.__appState.soundEvents.map((e) => e.startTime).sort((a, b) => a - b);
+
+    return { afterRerun, momentsStillListed, afterRestore };
+  });
+
+  expect(result.afterRerun).toEqual([2.0]);
+  expect(result.momentsStillListed).toBe(2);
+  expect(result.afterRestore).toEqual([1.0, 2.0]);
+});
+
+test('re-analysis is idempotent and never duplicates a handled moment', async ({ page }) => {
+  await loadDemoVideo(page);
+
+  const counts = await page.evaluate(() => {
+    const analysis = [
+      { type: 'list_item', index: 1, timestamp: 1.0 },
+      { type: 'list_item', index: 2, timestamp: 2.0 },
+      { type: 'emphasis', timestamp: 3.0 }
+    ];
+    const seen = [];
+    for (let i = 0; i < 4; i++) {
+      window.__audioTimeline.applySemanticEvents(analysis);
+      seen.push(window.__appState.soundEvents.length);
+    }
+    return seen;
+  });
+
+  expect(counts).toEqual([3, 3, 3, 3]);
+});

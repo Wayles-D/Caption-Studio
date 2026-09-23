@@ -51,6 +51,9 @@ export const AUDIO_DEFAULTS = {
   // durable record the sound mapping is re-derived from, so changing profile
   // or re-enabling auto effects never needs another model call.
   semanticEvents: [],
+  // Keys of AI-suggested moments the creator deleted. Tombstones, so a
+  // re-analysis cannot resurrect a sound they deliberately removed.
+  dismissedEventKeys: [],
 
   // Moments the analysis thinks would carry a visual, for the user to fill
   // themselves. Deliberately NOT auto-populated with anything — see the
@@ -72,6 +75,7 @@ export const AUDIO_DOCUMENT_KEYS = [
   'soundEventMapping',
   'autoSoundEffects',
   'semanticEvents',
+  'dismissedEventKeys',
   'visualSuggestions'
 ];
 
