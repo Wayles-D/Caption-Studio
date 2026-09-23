@@ -13,7 +13,7 @@ const TRACK = '#timeline-filmstrip-track';
 const TILE = '.timeline-filmstrip-tile';
 
 async function loadDemo(page) {
-  await page.goto('http://localhost:5173');
+  await page.goto('/');
   await page.getByText('Try Demo Video').click();
   await page.waitForFunction(() => {
     const v = document.getElementById('preview-video');
