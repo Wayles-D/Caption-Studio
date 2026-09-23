@@ -169,6 +169,29 @@ export function App() {
   // whenever either changes.
   const isDesktopRef = useRef(isDesktop);
   useEffect(() => { isDesktopRef.current = isDesktop; }, [isDesktop]);
+
+  // Stray file drops must never navigate the page away.
+  //
+  // A browser's DEFAULT action for a file dropped on a document is to OPEN
+  // that file, replacing the SPA — which reads as "the whole app restarted and
+  // everything got deleted". The upload dropzone (PreviewStage.jsx) does call
+  // preventDefault, but it lives inside `.view-state`, which is
+  // `display: none` once a video is loaded. So in the editor there was no
+  // guard at all: importing audio via the file picker worked, while DRAGGING
+  // the same file in destroyed the session — the same action with two
+  // completely different outcomes, which is why it looked intermittent.
+  //
+  // This only suppresses the navigation. It does not stop propagation, so the
+  // real dropzone still receives and handles its own drops exactly as before.
+  useEffect(() => {
+    const swallowStrayDrop = (e) => e.preventDefault();
+    window.addEventListener("dragover", swallowStrayDrop);
+    window.addEventListener("drop", swallowStrayDrop);
+    return () => {
+      window.removeEventListener("dragover", swallowStrayDrop);
+      window.removeEventListener("drop", swallowStrayDrop);
+    };
+  }, []);
   const desktopSidePanelRef = useRef(desktopSidePanel);
   useEffect(() => { desktopSidePanelRef.current = desktopSidePanel; }, [desktopSidePanel]);
 
