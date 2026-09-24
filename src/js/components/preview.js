@@ -70,6 +70,43 @@ function loadKeywordDrivenFontFaces(cssConfig) {
 }
 
 /**
+ * Registers AND awaits the face every PER-WORD style override needs (see
+ * shared/captionTransform.js's resolveWordStyleOverride), redrawing once a
+ * face actually finishes loading.
+ *
+ * Both halves matter. Registering the @font-face alone is not enough: the
+ * canvas paints synchronously with `ctx.font`, and a family the browser
+ * hasn't finished loading silently falls back to a default face instead of
+ * erroring — so a word given its own font renders correctly in the export
+ * (the server registers every bundled face up front) while looking
+ * completely unchanged in the preview. And because the browser only
+ * repaints the caption canvas when something asks it to, a PAUSED video
+ * would keep showing that fallback indefinitely; hence the syncVideoSubtitles()
+ * on first load, mirroring exactly what prepareGraphicsCanvas already does
+ * for the caption's base font.
+ */
+function ensureWordStyleFontsReady(fontSizePx) {
+  const overrides = appState.captionTransforms;
+  if (!overrides) return;
+  Object.keys(overrides).forEach((key) => {
+    if (!key.startsWith('w')) return;
+    const style = overrides[key]?.style;
+    if (!style) return;
+    const family = style.fontFamily || appState.fontFamily;
+    if (!family) return;
+    // A word asking for italic needs the italic FILE when its family ships
+    // one; for a family that doesn't, resolveFontFace returns the regular
+    // face and paintText draws the synthetic slant instead, so requesting
+    // 'italic' here is correct either way.
+    const faceKey = style.italic ? 'italic' : 'regular';
+    const resolved = resolveFontFace(family, faceKey);
+    loadLocalFontFace(family, faceKey);
+    ensureCanvasFontReady(resolved.familyName, style.fontWeight || '400', fontSizePx, resolved.italic)
+      .then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
+  });
+}
+
+/**
  * Shared-graphics-renderer preview path (shared/captionGraphics.js). Live for
  * every mode/preset canDrawCaptionFrame() accepts (== isGraphicsRendererDefault,
  * see that function's doc comment) — the SAME renderer backend/utils/
@@ -82,10 +119,14 @@ function loadKeywordDrivenFontFaces(cssConfig) {
  */
 const canvasFontsReadyCache = new Set();
 
-function ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx) {
-  const key = `${fontFamily}::${fontWeight}`;
+// `italic` is part of the key, not just family+weight: a per-word style
+// override can ask for the italic face of a family whose regular face is
+// already cached, and without the style component that would report "ready"
+// for a face the browser has never actually loaded.
+function ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx, italic = false) {
+  const key = `${fontFamily}::${fontWeight}::${italic ? 'italic' : 'normal'}`;
   if (canvasFontsReadyCache.has(key)) return Promise.resolve(false);
-  const fontStr = `${fontWeight || '400'} ${fontSizePx}px '${fontFamily}'`;
+  const fontStr = `${italic ? 'italic ' : ''}${fontWeight || '400'} ${fontSizePx}px '${fontFamily}'`;
   return document.fonts.load(fontStr).then(() => {
     canvasFontsReadyCache.add(key);
     return true;
@@ -122,6 +163,9 @@ function prepareGraphicsCanvas(canvas, fontFamily, fontWeight, fontSizePx) {
   ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx).then((justLoaded) => {
     if (justLoaded) syncVideoSubtitles();
   });
+  // Any font a single word asked for itself needs the same load-then-redraw
+  // treatment as the caption's own base font above.
+  ensureWordStyleFontsReady(fontSizePx);
 
   return { ctx: canvas.getContext('2d'), targetW, targetH, cssPixelWidth: rect.width };
 }

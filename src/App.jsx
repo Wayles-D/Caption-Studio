@@ -27,6 +27,7 @@ import { SidebarInspector } from './components/SidebarInspector.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
+import { WordInspector } from './components/WordInspector.jsx';
 import { TimelinePanel } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
@@ -69,6 +70,12 @@ const MOBILE_TOOLS = [
   {
     key: 'ai-keywords', label: 'Keywords', group: 'caption',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" className="w-5 h-5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+  },
+  {
+    // Per-word styling — the one tool whose panel edits a single selected
+    // word rather than the caption as a whole (see WordInspector.jsx).
+    key: 'word-style', label: 'Word', group: 'word',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M6 20h12" /><path d="M9 4h6" /><path d="M12 4v11" /><rect x="3" y="15" width="7" height="5" rx="1" /></svg>
   },
   {
     key: 'keyword-style', label: 'Kw Style', group: 'caption',
@@ -732,6 +739,10 @@ export function App() {
               ) : tool.group === 'audio' ? (
                 <div className="p-4">
                   <AudioInspector onNotify={showToast} />
+                </div>
+              ) : tool.group === 'word' ? (
+                <div className="p-4">
+                  <WordInspector />
                 </div>
               ) : (
                 <div className="p-4">

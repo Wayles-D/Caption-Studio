@@ -1419,6 +1419,8 @@ export function updateCanvasTransformOverlay(box, phrase, mode) {
   } else if (!drag) {
     boxEl.hidden = true;
   }
+
+  notifySelectionChangedIfNeeded();
 }
 
 /**
@@ -2257,6 +2259,108 @@ export function getKeyframeTarget() {
     return { kind: 'group', wordIndexes: members, phrase: currentBox.phrase || null };
   }
   return null;
+}
+
+/* =========================================================================
+ * Per-word STYLE (font / colour / outline / shadow / italic / underline).
+ *
+ * Deliberately separate from the transform writers above: a transform field
+ * can be keyframed and is routed through routeFieldsThroughKeyframes, while
+ * a style field is static by design (a font family or a colour has no
+ * meaningful value halfway between two keyframes), so it is written as a
+ * plain nested `style` object on the SAME per-word override entry. See
+ * shared/captionTransform.js's resolveWordStyleOverride for the contract and
+ * shared/captionGraphics.js's applyWordStyleOverride for how it's painted.
+ * ====================================================================== */
+
+/**
+ * The word the per-word style panel should be editing, or null when the
+ * current selection isn't a single word. Keywords count: a keyword is still
+ * one specific word occurrence, and styling it individually must beat the
+ * keyword tier for that one instance.
+ *
+ * @returns {{wordIndex:number, text:string, isKeyword:boolean, style:object}|null}
+ */
+export function getSelectedWordStyleTarget() {
+  if (!selected || selectedWordIndex == null) return null;
+  const sourceWord = (appState.words || [])[selectedWordIndex];
+  return {
+    wordIndex: selectedWordIndex,
+    text: sourceWord ? (sourceWord.word || sourceWord.text || '') : '',
+    isKeyword: isKeywordIndex(selectedWordIndex),
+    style: (appState.captionTransforms[getWordTransformKey(selectedWordIndex)] || {}).style || {}
+  };
+}
+
+/**
+ * Merges style fields onto one word's override. The merge is NESTED — the
+ * generic transform writer does a shallow spread, which would replace the
+ * whole style object and silently wipe every other styled property each time
+ * a single control moved.
+ *
+ * A field set to null is DELETED rather than stored, so "inherit" is
+ * represented by absence — that's what lets resolveWordStyleOverride report
+ * an emptied-out style as "no override at all" and keep the renderers on
+ * their original fast paths.
+ */
+export function applyWordStyleFields(wordIndex, styleFields, { recordHistory = true } = {}) {
+  if (wordIndex == null) return;
+  const key = getWordTransformKey(wordIndex);
+  const existing = appState.captionTransforms[key] || {};
+  const nextStyle = { ...(existing.style || {}) };
+  Object.entries(styleFields).forEach(([field, value]) => {
+    if (value == null) delete nextStyle[field];
+    else nextStyle[field] = value;
+  });
+  const nextEntry = { ...existing, style: nextStyle };
+  updateState({ captionTransforms: { ...appState.captionTransforms, [key]: nextEntry } }, { recordHistory });
+}
+
+/**
+ * Drops a word's style override entirely, returning it to whatever the
+ * preset/keyword tier/global controls say — without touching that same
+ * word's position/scale/rotation/animation, which live on the same entry.
+ */
+export function resetWordStyle(wordIndex) {
+  if (wordIndex == null) return;
+  const key = getWordTransformKey(wordIndex);
+  const existing = appState.captionTransforms[key];
+  if (!existing || !existing.style) return;
+  const { style, ...rest } = existing;
+  const nextMap = { ...appState.captionTransforms };
+  // An entry that was ONLY a style override is removed outright rather than
+  // left behind as an empty object.
+  if (Object.keys(rest).length) nextMap[key] = rest;
+  else delete nextMap[key];
+  updateState({ captionTransforms: nextMap }, { recordHistory: true });
+}
+
+// --- Selection change notification (for React surfaces) ---------------------
+//
+// selectedWordIndex/selectedGroupId are assigned from a dozen different
+// handlers, so rather than instrument every assignment (and inevitably miss
+// one), the descriptor is diffed once per overlay sync — the same tick that
+// already repositions the box and refreshes the scope buttons. One hook, no
+// way for a selection change to escape it.
+const selectionListeners = [];
+let lastSelectionSignature = null;
+
+export function onSelectionChange(cb) {
+  selectionListeners.push(cb);
+  return () => {
+    const idx = selectionListeners.indexOf(cb);
+    if (idx !== -1) selectionListeners.splice(idx, 1);
+  };
+}
+
+function notifySelectionChangedIfNeeded() {
+  const target = getKeyframeTarget();
+  const signature = target ? `${target.kind}:${(target.wordIndexes || []).join(',')}` : 'none';
+  if (signature === lastSelectionSignature) return;
+  lastSelectionSignature = signature;
+  selectionListeners.forEach((cb) => {
+    try { cb(); } catch (err) { console.error('[canvasTransform] selection listener failed:', err); }
+  });
 }
 
 const WORD_STATIC_FIELD_BY_PROPERTY = { positionX: 'offsetXPx', positionY: 'offsetYPx', rotation: 'rotationDeg', scale: 'fontScale', opacity: 'opacity' };

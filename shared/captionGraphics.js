@@ -56,7 +56,7 @@ import {
 import { resolveFontFace } from './fontRegistry.js';
 import { chunkRawText } from './rollingStack.js';
 import { getAnimationTransform } from './captionAnimation.js';
-import { resolveWordOverride, resolveWordOverrideAtTime } from './captionTransform.js';
+import { resolveWordOverride, resolveWordOverrideAtTime, resolveWordStyleOverride, hasWordOverride } from './captionTransform.js';
 
 /**
  * Whether the graphics engine currently knows how to render this resolved
@@ -136,6 +136,83 @@ function buildFontString({ fontFamily, fontWeight, italic, fontSizePx }) {
   const weight = fontWeight || '400';
   const style = italic ? 'italic ' : '';
   return `${style}${weight} ${fontSizePx}px '${fontFamily}'`;
+}
+
+/**
+ * Applies ONE word's own style override (see shared/captionTransform.js's
+ * resolveWordStyleOverride) on top of the word unit the normal style
+ * resolution already produced.
+ *
+ * This is deliberately the LAST step, applied to the finished unit rather
+ * than inside resolveWordStyleMetadata: only keyword-driven presets go
+ * through that function at all (computeSentenceLines takes the plain
+ * resolveWordDrawSpec branch otherwise), so merging there would make
+ * per-word styling silently do nothing on most presets. Merging on the unit
+ * covers every preset, and — because a word unit is what the rolling-stack
+ * path builds too — every caption mode, from one place.
+ *
+ * Precedence: an explicit per-word override always wins. It is the most
+ * specific thing the user authored, so it outranks the keyword tier, the
+ * active-highlight colour and the preset/global style alike. Fields left
+ * unset fall through untouched, so styling one property of a word never
+ * disturbs the others.
+ *
+ * @param {object} unit - The word unit from computeSentenceLines / a rolling-stack line spec.
+ * @param {object|null} style - resolveWordStyleOverride's result for this word.
+ * @param {object} geometry - resolveGeometry's result (supplies pxScale + the frame-level fallbacks).
+ * @param {number} baseFontSizePx - The size this word would render at with no override.
+ * @returns {object} A NEW unit; `unit` itself is never mutated.
+ */
+function applyWordStyleOverride(unit, style, geometry, baseFontSizePx) {
+  if (!style) return unit;
+
+  const next = { ...unit };
+  // Authored in the same slider units as the caption-level controls, so they
+  // convert to px through the identical maths resolveGeometry uses.
+  const toPxFromAuthored = (v) => (v / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
+
+  const fontSizePx = unit.ownFontSizePx ?? baseFontSizePx;
+
+  if (style.fontFamily || style.fontWeight != null || style.italic != null) {
+    // Resolving through the registry (rather than trusting the family name)
+    // is what makes "is there a real italic/bold file for this?" answerable,
+    // which in turn decides synthetic slant/weight below.
+    const wantsItalic = !!style.italic;
+    const requestedFamily = style.fontFamily || unit.baseFontDisplayName || null;
+    const face = resolveFontFace(requestedFamily, wantsItalic ? 'italic' : 'regular');
+    const weight = style.fontWeight != null ? String(style.fontWeight) : (unit.baseFontWeight ?? null);
+
+    next.font = buildFontString({
+      fontFamily: face.familyName,
+      fontWeight: weight || undefined,
+      // Only claim italic in the font string when a REAL italic face backs
+      // it; otherwise the slant is drawn by paintText instead.
+      italic: wantsItalic && face.italic,
+      fontSizePx
+    });
+    next.syntheticItalic = wantsItalic && !face.italic;
+    next.syntheticBold = needsSyntheticBold(face.displayName, parseInt(weight, 10) || 0);
+    next.ownFontSizePx = fontSizePx;
+  }
+
+  if (style.underline != null) next.underline = !!style.underline;
+  if (style.color) next.color = style.color;
+
+  if (style.outlineSize != null) {
+    next.outlineWidthPx = toPxFromAuthored(style.outlineSize);
+    // An outline of zero must actually REMOVE the caption-level outline for
+    // this word, not fall back to it through paintSentenceComposite's `??`.
+    if (style.outlineSize === 0) next.outlineWidthPx = 0;
+  }
+  if (style.outlineColor) next.outlineColor = style.outlineColor;
+
+  if (style.shadowEnabled != null) next.hasShadow = !!style.shadowEnabled;
+  if (style.shadowSize != null) next.shadowBlurPx = toPxFromAuthored(style.shadowSize);
+  if (style.shadowOffsetX != null) next.shadowOffsetXPx = toPxFromAuthored(style.shadowOffsetX);
+  if (style.shadowOffsetY != null) next.shadowOffsetYPx = toPxFromAuthored(style.shadowOffsetY);
+  if (style.shadowColor) next.shadowColor = style.shadowColor;
+
+  return next;
 }
 
 // The preview's #subtitles-overlay element carries a base `padding: 0 20px`
@@ -456,6 +533,10 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
   const wordUnits = activePhrase.words.map((w, idx) => {
     const caseForWord = resolveWordTextCase(!!w.isKeyword, keywordsEnabled, params.textCase, cssConfig.keywordTextCase);
     const text = applyCaseTransform(w.word || w.text || '', caseForWord, idx === 0);
+    // This word's own style override, applied to whichever unit the two
+    // branches below produce — see applyWordStyleOverride for why the merge
+    // happens on the finished unit rather than inside the style resolution.
+    const styleOverride = resolveWordStyleOverride(params, w.wordIndex);
 
     // Keyword-driven presets (e.g. WAYLES) derive a word's ENTIRE appearance
     // (font/weight/italic/scale/color/shadow/outline) from
@@ -494,13 +575,21 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
       const emphasisOffsetPx = (KEYWORD_EMPHASIS_ASS_DEPTH / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
       const useEmphasisOutline = !!metadata.outline;
       const useEmphasisShadow = !!metadata.shadow;
-      return {
+      return applyWordStyleOverride({
         originalIndex: idx,
         text,
         visible: true,
         color: applyOpacityToColor(metadata.colorHex, opacity),
         scale: 1,
         ownFontSizePx,
+        // The DISPLAY name (what shared/fontRegistry.js looks fonts up by),
+        // kept alongside the resolved family so a partial per-word override
+        // — italic on, family untouched — still resolves against the font
+        // this word was actually using.
+        baseFontDisplayName: metadata.isKeyword
+          ? (params.keywordFont || profile.keywordStyle?.fontFamily || params.fontFamily)
+          : params.fontFamily,
+        baseFontWeight: wordFontWeight,
         syntheticBold: needsSyntheticBold(wordFontFamily, parseInt(wordFontWeight, 10) || 0),
         font: buildFontString({ fontFamily: wordFontFamily, fontWeight: wordFontWeight, italic: metadata.italic, fontSizePx: ownFontSizePx }),
         outlineWidthPx: useEmphasisOutline ? emphasisOffsetPx : undefined,
@@ -510,19 +599,21 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
         shadowOffsetXPx: useEmphasisShadow ? emphasisOffsetPx : undefined,
         shadowOffsetYPx: useEmphasisShadow ? emphasisOffsetPx : undefined,
         shadowColor: useEmphasisShadow ? KEYWORD_EMPHASIS_SHADOW_COLOR : undefined
-      };
+      }, styleOverride, geometry, ownFontSizePx);
     }
 
     const spec = resolveWordDrawSpec(w, drawCtx);
-    return {
+    return applyWordStyleOverride({
       originalIndex: idx,
       text,
       visible: spec.visible,
       color: spec.color,
       scale: spec.scale,
+      baseFontDisplayName: params.fontFamily,
+      baseFontWeight: spec.fontWeight,
       syntheticBold: needsSyntheticBold(params.fontFamily, parseInt(spec.fontWeight, 10) || 0),
       font: buildFontString({ fontFamily: resolvedFontFamily, fontWeight: spec.fontWeight, italic: cssConfig.text.fontStyle === 'italic', fontSizePx })
-    };
+    }, styleOverride, geometry, fontSizePx);
   });
 
   ctx.textBaseline = 'alphabetic';
@@ -657,6 +748,11 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
         color: word.color,
         scale: word.scale,
         syntheticBold: word.syntheticBold,
+        // Both set only by a per-word style override (see
+        // applyWordStyleOverride) — absent on every other word, so this is a
+        // no-op for any caption nobody has styled word-by-word.
+        syntheticItalic: word.syntheticItalic,
+        underline: word.underline,
         fontSizePx: word.ownFontSizePx ?? fontSizePx,
         outlineWidthPx: word.outlineWidthPx ?? outlineWidthPx,
         outlineColor: word.outlineColor ?? outlineColor,
@@ -853,9 +949,19 @@ export function measureSentenceFrame(ctx, opts) {
  * @param {number} y - Baseline y.
  * @param {object} style - { font, color, scale, syntheticBold, fontSizePx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, textAlign? }
  */
+// Synthetic oblique slant, as a canvas horizontal-skew factor (~12deg).
+// Negative because canvas y grows DOWNWARD: a glyph's top sits at a smaller
+// y than its baseline, so a negative skew is what pushes that top to the
+// RIGHT, producing a forward lean rather than a backward one.
+const SYNTHETIC_ITALIC_SKEW = -0.21;
+// Underline geometry, both as a fraction of the glyph's own font size so an
+// underline scales with the word rather than needing its own control.
+const UNDERLINE_THICKNESS_RATIO = 0.06;
+const UNDERLINE_GAP_RATIO = 0.14;
+
 function paintText(ctx, text, x, y, style) {
   const {
-    font, color, scale = 1, syntheticBold, fontSizePx,
+    font, color, scale = 1, syntheticBold, syntheticItalic, underline, fontSizePx,
     outlineWidthPx = 0, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor,
     textAlign = 'center'
   } = style;
@@ -867,6 +973,17 @@ function paintText(ctx, text, x, y, style) {
   if (scale !== 1) {
     ctx.translate(x, y);
     ctx.scale(scale, scale);
+    ctx.translate(-x, -y);
+  }
+
+  // Stand-in italic for a font with no real italic face bundled (see
+  // resolveFontFace / shared/fontRegistry.js) — the same "synthesize what the
+  // family doesn't ship" approach syntheticBold already takes below, skewed
+  // around this word's own baseline anchor so it leans in place instead of
+  // drifting sideways.
+  if (syntheticItalic) {
+    ctx.translate(x, y);
+    ctx.transform(1, 0, SYNTHETIC_ITALIC_SKEW, 1, 0, 0);
     ctx.translate(-x, -y);
   }
 
@@ -884,11 +1001,25 @@ function paintText(ctx, text, x, y, style) {
   // rather than distort it, same technique browsers use internally.
   const emboldenWidthPx = syntheticBold ? fontSizePx * 0.04 : 0;
 
+  // Canvas2D has no text-decoration, so an underline is a drawn bar. It is
+  // painted inside the SAME transform (and the same outline/shadow passes)
+  // as the glyphs, so it inherits this word's scale, rotation and slant
+  // automatically instead of needing its own geometry.
+  const underlineRect = () => {
+    const width = ctx.measureText(text).width;
+    const left = textAlign === 'left' ? x : textAlign === 'right' ? x - width : x - width / 2;
+    return { left, top: y + fontSizePx * UNDERLINE_GAP_RATIO, width, height: Math.max(1, fontSizePx * UNDERLINE_THICKNESS_RATIO) };
+  };
+
   if (outlineWidthPx > 0) {
     applyShadow();
     ctx.lineWidth = outlineWidthPx;
     ctx.strokeStyle = outlineColor;
     ctx.strokeText(text, x, y);
+    if (underline) {
+      const r = underlineRect();
+      ctx.strokeRect(r.left, r.top, r.width, r.height);
+    }
     clearShadow();
     if (emboldenWidthPx > 0) {
       ctx.lineWidth = emboldenWidthPx;
@@ -897,6 +1028,10 @@ function paintText(ctx, text, x, y, style) {
     }
     ctx.fillStyle = color;
     ctx.fillText(text, x, y);
+    if (underline) {
+      const r = underlineRect();
+      ctx.fillRect(r.left, r.top, r.width, r.height);
+    }
   } else {
     applyShadow();
     if (emboldenWidthPx > 0) {
@@ -907,6 +1042,10 @@ function paintText(ctx, text, x, y, style) {
     }
     ctx.fillStyle = color;
     ctx.fillText(text, x, y);
+    if (underline) {
+      const r = underlineRect();
+      ctx.fillRect(r.left, r.top, r.width, r.height);
+    }
     clearShadow();
   }
 
@@ -1064,6 +1203,13 @@ function resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geome
     fontSizePx,
     font: buildFontString({ fontFamily, fontWeight, italic: metadata.italic, fontSizePx }),
     color: applyOpacityToColor(metadata.colorHex, opacity),
+    // Registry DISPLAY name + weight this chunk resolved to, so a per-word
+    // style override that only changes (say) italic still resolves against
+    // the font the chunk was already using — see applyWordStyleOverride.
+    baseFontDisplayName: metadata.isKeyword
+      ? (params.keywordFont || profile.keywordStyle?.fontFamily || params.fontFamily)
+      : params.fontFamily,
+    baseFontWeight: fontWeight,
     syntheticBold: needsSyntheticBold(fontFamily, parseInt(fontWeight, 10) || 0),
     outlineWidthPx: useEmphasisOutline ? emphasisOffsetPx : geometry.outlineWidthPx,
     outlineColor: useEmphasisOutline ? KEYWORD_EMPHASIS_OUTLINE_COLOR : geometry.outlineColor,
@@ -1081,6 +1227,47 @@ function resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geome
 }
 
 /**
+ * Resolves each word of a chunk to its OWN paint spec, for the case where
+ * some word in that chunk carries a per-word style override.
+ *
+ * A Rolling Stack chunk joins consecutive same-kind words into one painted
+ * line sharing one style (see buildRollingStackChunks). That's still the
+ * right LAYOUT unit — a chunk is one line in the stack — but it stops being
+ * the right STYLE unit the moment a single word inside it is restyled, since
+ * a differently-sized or differently-fonted word changes how wide the line
+ * is and where every word after it sits.
+ *
+ * Returns `null` when no word in the chunk has a style override, so the
+ * overwhelmingly common case keeps taking the original single-measure,
+ * single-fillText path and is byte-for-byte unchanged by this feature.
+ *
+ * @returns {{units: object[], totalWidth: number}|null}
+ */
+function buildChunkWordStyleUnits(ctx, spec, chunk, params, geometry) {
+  const rawWords = chunk?.words || [];
+  if (!rawWords.length) return null;
+  if (!rawWords.some((w) => resolveWordStyleOverride(params, w.wordIndex))) return null;
+
+  // spec.text is the chunk's already case-transformed joined text, always
+  // joined with a single space (chunkRawText), so splitting recovers each
+  // word's on-screen form without re-deriving the case transform.
+  const displayWords = spec.text.split(' ');
+
+  const units = rawWords.map((w, i) => {
+    const text = displayWords[i] ?? (w.word || w.text || '').trim();
+    const style = applyWordStyleOverride(spec, resolveWordStyleOverride(params, w.wordIndex), geometry, spec.fontSizePx);
+    ctx.font = style.font;
+    return { wordIndex: w.wordIndex, text, style, width: ctx.measureText(text).width };
+  });
+
+  ctx.font = spec.font;
+  const spaceWidth = ctx.measureText(' ').width;
+  const totalWidth = units.reduce((sum, u) => sum + u.width, 0) + spaceWidth * Math.max(0, units.length - 1);
+
+  return { units, totalWidth };
+}
+
+/**
  * Computes layout (line widths/heights, container size, per-line x/y) for a
  * window of chunks — pure math, no drawing, shared by both the direct-paint
  * path (None/Individual shadow mode) and the offscreen-composite path
@@ -1095,10 +1282,22 @@ function layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry,
   const lines = windowChunks.map((chunk, idx) => {
     const isCurrent = idx === windowChunks.length - 1;
     const spec = resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geometry);
-    ctx.font = spec.font;
-    const width = ctx.measureText(spec.text).width;
+    // Per-word styling (if any word in this chunk has been restyled) has to
+    // be resolved HERE, before the width is taken: a restyled word can be a
+    // different size or font, so the line's own width — which drives the
+    // shared container width and therefore every line's x anchor — must be
+    // the sum of the real per-word widths, not one measure of the chunk in
+    // a single font.
+    const styleUnits = buildChunkWordStyleUnits(ctx, spec, chunk, params, geometry);
+    let width;
+    if (styleUnits) {
+      width = styleUnits.totalWidth;
+    } else {
+      ctx.font = spec.font;
+      width = ctx.measureText(spec.text).width;
+    }
     const lineHeightPx = spec.fontSizePx * (parseFloat(cssConfig.profile.lineSpacing) || 1.25);
-    return { ...spec, width, lineHeightPx, chunk };
+    return { ...spec, width, lineHeightPx, chunk, styleUnits };
   });
 
   const containerWidth = Math.max(...lines.map((l) => l.width));
@@ -1157,9 +1356,15 @@ function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
   ctx.font = line.font;
   const displayWords = line.text.split(' ');
   const spaceWidth = ctx.measureText(' ').width;
-  const widths = rawWords.map((w, i) =>
-    ctx.measureText(displayWords[i] ?? (w.word || w.text || '').trim()).width
-  );
+  // When a word in this chunk carries its own style, its width was already
+  // measured in ITS OWN font by buildChunkWordStyleUnits — reuse those rather
+  // than re-measuring everything in the chunk's font, which would misplace
+  // every word after a restyled one.
+  const widths = line.styleUnits
+    ? line.styleUnits.units.map((u) => u.width)
+    : rawWords.map((w, i) =>
+      ctx.measureText(displayWords[i] ?? (w.word || w.text || '').trim()).width
+    );
 
   let cursor;
   if (textAlign === 'left') cursor = lineX;
@@ -1169,6 +1374,9 @@ function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
   return rawWords.map((w, i) => {
     const rect = {
       wordIndex: w.wordIndex,
+      // This word's own resolved paint spec, when it has been individually
+      // styled — read by paintRollingStackLines instead of the chunk's.
+      styleUnit: line.styleUnits ? line.styleUnits.units[i] : null,
       // isKeyword/start/end: needed by the on-canvas selection layer (keyword
       // scope UI, see src/js/components/canvasTransform.js) and by this
       // word's own per-word animation window (see paintRollingStackLines) —
@@ -1190,13 +1398,16 @@ function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
 function paintRollingStackLines(ctx, positionedLines, params, currentTime, canvasWidth, canvasHeight) {
   positionedLines.forEach((line) => {
     const words = line.words || [];
-    const hasWordOverride = words.some((w) => resolveWordOverride(params, w.wordIndex));
+    // Style overrides count here too, not just transform ones: a word whose
+    // only override is a different colour/font still needs its own paint
+    // pass rather than the chunk's single shared one.
+    const anyWordOverride = words.some((w) => hasWordOverride(params, w.wordIndex));
 
     // Fast path: identical to the original single fillText call whenever no
     // word in this line has an active override, so ordinary Rolling Stack
     // output (the overwhelming majority of frames, including single-word
     // chunks with no override) is byte-for-byte unchanged by this feature.
-    if (!hasWordOverride || !words.length) {
+    if (!anyWordOverride || !words.length) {
       paintText(ctx, line.text, line.x, line.y, line);
       return;
     }
@@ -1241,8 +1452,13 @@ function paintRollingStackLines(ctx, positionedLines, params, currentTime, canva
       }
       // Same baseline y (line.y) every word in the line shared before this
       // split — only the per-word x anchor (now the word's own center,
-      // textAlign forced to 'center' to match) changes.
-      paintText(ctx, word.text, pivotX, line.y, { ...line, textAlign: 'center' });
+      // textAlign forced to 'center' to match) changes. A word that has been
+      // individually styled paints with its OWN resolved spec (font, colour,
+      // outline, shadow, slant, underline) instead of the chunk's.
+      paintText(ctx, word.text, pivotX, line.y, {
+        ...(word.styleUnit ? word.styleUnit.style : line),
+        textAlign: 'center'
+      });
       if (override) ctx.restore();
     });
   });
