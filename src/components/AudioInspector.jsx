@@ -66,6 +66,16 @@ const TrashIcon = () => (
     <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
   </svg>
 );
+// "Apply to All": one source spreading out to several identical copies —
+// distinct from the Trash/Play glyphs already used in these rows.
+const ApplyAllIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="5" r="2.2" />
+    <path d="M12 7.2V12M12 12L5 17M12 12l7 5" />
+    <circle cx="5" cy="19" r="2.2" />
+    <circle cx="19" cy="19" r="2.2" />
+  </svg>
+);
 
 /** One row of the Sound Effects list. */
 function SoundEventRow({ event, isSelected }) {
@@ -131,6 +141,10 @@ function SoundEventRow({ event, isSelected }) {
         <span className="text-[10px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
           {Math.round(event.volume * 100)}%
         </span>
+        <button
+          type="button" className={ICON_BTN} title="Apply this volume to all Sound Effects"
+          onClick={(e) => { e.stopPropagation(); audio.applySoundEventVolumeToAll(event.id); }}
+        ><ApplyAllIcon /></button>
       </div>
 
       {/* Provenance, shown only when there is something to say: which spoken
@@ -188,6 +202,10 @@ function AudioTrackRow({ track, isSelected }) {
         <span className="text-[10px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
           {Math.round(track.volume * 100)}%
         </span>
+        <button
+          type="button" className={ICON_BTN} title="Apply this volume to all Audio/Music tracks"
+          onClick={(e) => { e.stopPropagation(); audio.applyAudioTrackVolumeToAll(track.id); }}
+        ><ApplyAllIcon /></button>
       </div>
 
       {/* Numeric trim, alongside the timeline's own drag handles. Typing an

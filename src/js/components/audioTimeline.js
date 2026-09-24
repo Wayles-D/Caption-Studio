@@ -105,6 +105,38 @@ export function updateSoundEvent(id, patch, { recordHistory = true } = {}) {
   return next[idx];
 }
 
+/**
+ * Copies ONE sound effect's current volume onto every OTHER sound effect —
+ * "Apply to All" for SFX. One write, one history entry, regardless of how
+ * many effects exist (not a loop of individual updateSoundEvent calls, which
+ * would push one history entry per effect). Only `volume` changes; every
+ * other field (which sound, timing, enabled state, provenance) is untouched
+ * on every effect, including the source one. A single (or already-uniform)
+ * effect list is a harmless no-op — nothing to copy onto.
+ *
+ * @param {string} sourceId - The effect whose CURRENT volume should become every other effect's volume.
+ */
+export function applySoundEventVolumeToAll(sourceId) {
+  const events = getSoundEvents();
+  const source = events.find((e) => e.id === sourceId);
+  if (!source) return events;
+  const volume = source.volume;
+  let changed = false;
+  const next = events.map((e) => {
+    if (e.id === sourceId || e.volume === volume) return e;
+    changed = true;
+    return normalizeSoundEvent({
+      ...e,
+      volume,
+      userModified: e.userModified || e.source === 'ai'
+    });
+  });
+  // A single (or already-uniform) effect list has nothing to copy onto —
+  // skip the write entirely rather than pushing a no-op history entry.
+  if (changed) writeSoundEvents(next);
+  return next;
+}
+
 export function moveSoundEvent(id, startTime, options) {
   return updateSoundEvent(id, { startTime: clampToTimeline(startTime) }, options);
 }
@@ -175,9 +207,54 @@ export function getAudioTrack(id) {
   return getAudioTracks().find((t) => t.id === id) || null;
 }
 
-/** Adds an imported audio file as a track, defaulting to starting at the playhead. */
+/**
+ * Nudges `desiredStart` forward just far enough to clear every EXISTING
+ * track's own [start, end) window — the default "start at the playhead"
+ * placement otherwise stacks every import that happens without moving the
+ * playhead in between on top of the same span, since nothing previously
+ * checked for a collision at all. Only pushes forward (never back/never
+ * touches an existing track), and re-checks from the top after each push
+ * since clearing one track's end can land inside the NEXT one.
+ *
+ * `newDuration` unknown (still decoding) degrades to a minimal check — the
+ * new clip's START point must not fall inside an existing track's span —
+ * rather than skipping the check entirely.
+ */
+function findNonOverlappingAudioStart(desiredStart, newDuration) {
+  const tracks = getAudioTracks();
+  if (!tracks.length) return desiredStart;
+  const dur = newDuration != null ? Math.max(0, newDuration) : 0;
+  let start = desiredStart;
+  let moved = true;
+  while (moved) {
+    moved = false;
+    for (const t of tracks) {
+      const tEnd = t.startTime + (getAudioTrackDuration(t) ?? 0);
+      const overlaps = start < tEnd && start + dur > t.startTime;
+      if (overlaps && tEnd > start) {
+        start = tEnd;
+        moved = true;
+      }
+    }
+  }
+  return start;
+}
+
+/**
+ * Adds an imported audio file as a track. Defaults to starting at the
+ * playhead, same as before — but now only when that position is actually
+ * clear; if it would overlap an already-placed track, the new one is pushed
+ * to start right after the last conflicting track ends instead of landing
+ * on top of it (see findNonOverlappingAudioStart). An explicit
+ * `overrides.startTime` (a deliberate drop position, once a caller passes
+ * one) is trusted as-is and skips this check entirely — auto-avoidance is
+ * only for the "didn't say where" default.
+ */
 export function addAudioTrack(asset, overrides = {}) {
-  const track = createAudioTrack(asset, { startTime: clampToTimeline(getPlayheadTime()), ...overrides });
+  const startTime = overrides.startTime != null
+    ? clampToTimeline(overrides.startTime)
+    : clampToTimeline(findNonOverlappingAudioStart(getPlayheadTime(), asset?.duration ?? null));
+  const track = createAudioTrack(asset, { ...overrides, startTime });
   writeAudioTracks([...getAudioTracks(), track]);
   selectClip(track.id);
   return track;
@@ -195,6 +272,34 @@ export function updateAudioTrack(id, patch, { recordHistory = true } = {}) {
 
 export function moveAudioTrack(id, startTime, options) {
   return updateAudioTrack(id, { startTime: clampToTimeline(startTime) }, options);
+}
+
+/**
+ * Copies ONE audio/music track's current volume onto every OTHER track —
+ * "Apply to All" for Audio, mirroring applySoundEventVolumeToAll above (SFX
+ * and audio tracks are separate arrays/media types — this never touches
+ * soundEvents, and applySoundEventVolumeToAll never touches audioTracks).
+ * One write, one history entry. Only `volume` changes — position, trim,
+ * fades, source, enabled state are untouched on every track, including the
+ * source one.
+ *
+ * @param {string} sourceId - The track whose CURRENT volume should become every other track's volume.
+ */
+export function applyAudioTrackVolumeToAll(sourceId) {
+  const tracks = getAudioTracks();
+  const source = tracks.find((t) => t.id === sourceId);
+  if (!source) return tracks;
+  const volume = source.volume;
+  let changed = false;
+  const next = tracks.map((t) => {
+    if (t.id === sourceId || t.volume === volume) return t;
+    changed = true;
+    return normalizeAudioTrack({ ...t, volume });
+  });
+  // A single (or already-uniform) track list has nothing to copy onto —
+  // skip the write entirely rather than pushing a no-op history entry.
+  if (changed) writeAudioTracks(next);
+  return next;
 }
 
 /**
