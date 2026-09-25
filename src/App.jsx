@@ -22,11 +22,14 @@ import { fetchJson, describeFetchError } from './js/utils/apiRequest.js';
 import { collectEditedWords } from './js/components/transcriptEditorState.js';
 import { applySemanticEvents } from './js/components/audioTimeline.js';
 import * as audioTimelineApi from './js/components/audioTimeline.js';
+import * as textElementsApi from './js/components/textElements.js';
 import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
+import { WordInspector } from './components/WordInspector.jsx';
+import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
@@ -71,8 +74,22 @@ const MOBILE_TOOLS = [
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" className="w-5 h-5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
   },
   {
+    // Per-word styling — the one tool whose panel edits a single selected
+    // word rather than the caption as a whole (see WordInspector.jsx).
+    key: 'word-style', label: 'Word', group: 'word',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M6 20h12" /><path d="M9 4h6" /><path d="M12 4v11" /><rect x="3" y="15" width="7" height="5" rx="1" /></svg>
+  },
+  {
     key: 'keyword-style', label: 'Kw Style', group: 'caption',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /><circle cx="11" cy="11" r="2" /></svg>
+  },
+  {
+    // Independent text placed over the video — NOT captions/subtitles, and
+    // not tied to the transcript. Its own tool because it is its own kind of
+    // timeline object (see shared/textElement.js), even though it renders
+    // through the very same engine captions do.
+    key: 'text-overlay', label: 'Overlay', group: 'textel',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M8 10h8M8 14h5" /></svg>
   },
   {
     // Sound effects + audio tracks. One tool, because they are one panel
@@ -115,6 +132,22 @@ const MOBILE_TOOLBAR_HEIGHT = 80; // px — kept in sync with the `h-20` toolbar
 const TIMELINE_HEIGHT = 272; // px — kept in sync with TimelinePanel.jsx's `h-[272px]` (grew to fit the SFX + Audio lanes)
 const DESKTOP_BREAKPOINT_QUERY = '(min-width: 1024px)'; // Tailwind's `lg`
 
+// Bottom-sheet resize: the sheet used to always render at `max-h-[65vh]`
+// content-fit — fine for a short panel, but a content-heavy one (Audio, with
+// its own Sound Effects + Audio Tracks lists) reliably grows tall enough to
+// bury the preview behind it, with no way to see what you're editing while
+// the sheet is open. DEFAULT_HEIGHT_VH is deliberately smaller than the old
+// static cap so the preview stays visible OUT OF THE BOX; the grip handle
+// (previously a purely decorative pill — see the sheet JSX) is now a real
+// drag target between MIN_HEIGHT and MAX_HEIGHT_VH, and the dragged-to
+// height is kept in `sheetHeight` state (below) rather than reset back to
+// the default on every open/close or tool switch, so a size the user picks
+// "sticks" for the rest of the session, matching how a real native bottom
+// sheet's resize handle behaves.
+const SHEET_DEFAULT_HEIGHT_VH = 34;
+const SHEET_MIN_HEIGHT_PX = 160;
+const SHEET_MAX_HEIGHT_VH = 85;
+
 export function App() {
   const videoFileInputRef = useRef(null);
   // null = no sheet open (matches CapCut's default: full preview, nothing
@@ -133,6 +166,50 @@ export function App() {
   }, []);
 
   const closeMobilePanel = useCallback(() => setMobileActivePanel(null), []);
+
+  // Bottom-sheet height: lazy-initialized once from the viewport (a real
+  // `useState` initializer, not a render-time computation, so it isn't
+  // re-derived — and doesn't fight a user's own drag — on every re-render).
+  // Persists across different tools' sheets and across close/reopen, exactly
+  // like a native bottom sheet's own resize handle would, until the user
+  // drags it again.
+  const [sheetHeight, setSheetHeight] = useState(
+    () => Math.round(window.innerHeight * (SHEET_DEFAULT_HEIGHT_VH / 100))
+  );
+  const sheetDragRef = useRef(null); // { startY, startHeight } while a drag is in progress; null otherwise
+
+  const clampSheetHeight = useCallback((px) => {
+    const max = window.innerHeight * (SHEET_MAX_HEIGHT_VH / 100);
+    return Math.min(max, Math.max(SHEET_MIN_HEIGHT_PX, px));
+  }, []);
+
+  const handleSheetGripPointerMove = useCallback((e) => {
+    const drag = sheetDragRef.current;
+    if (!drag) return;
+    // Dragging the grip UP (smaller clientY) should grow the sheet — the
+    // sheet's own height grows opposite to pointer movement since it's
+    // anchored to the bottom of the screen, hence the negated delta.
+    setSheetHeight(clampSheetHeight(drag.startHeight + (drag.startY - e.clientY)));
+  }, [clampSheetHeight]);
+
+  const handleSheetGripPointerUp = useCallback((e) => {
+    sheetDragRef.current = null;
+    document.body.style.userSelect = '';
+    window.removeEventListener('pointermove', handleSheetGripPointerMove);
+    window.removeEventListener('pointerup', handleSheetGripPointerUp);
+  }, [handleSheetGripPointerMove]);
+
+  const handleSheetGripPointerDown = useCallback((e) => {
+    // Not draggable-until-registered as a real pointer capture: using plain
+    // window listeners (rather than setPointerCapture on the handle itself)
+    // so the drag keeps tracking correctly even if the pointer briefly
+    // leaves the small grip hit-area during a fast drag.
+    sheetDragRef.current = { startY: e.clientY, startHeight: sheetHeight };
+    document.body.style.userSelect = 'none'; // prevents text selection while dragging
+    window.addEventListener('pointermove', handleSheetGripPointerMove);
+    window.addEventListener('pointerup', handleSheetGripPointerUp);
+    e.preventDefault();
+  }, [sheetHeight, handleSheetGripPointerMove, handleSheetGripPointerUp]);
 
   useClickOutside(
     [mobileSheetRef, mobileToolbarRef],
@@ -249,6 +326,10 @@ export function App() {
       // The exact snapshot the export is driven from — lets a test assert
       // preview/export parity on the payload itself rather than inferring it.
       window.__getStyleParams = getStyleParams;
+      // Manual captions + text overlays (see shared/textElement.js), exposed
+      // for the same reason __audioTimeline is: e2e drives real clip
+      // create/move/trim without depending on pointer gymnastics.
+      window.__textElements = textElementsApi;
     }
   }, []);
 
@@ -623,7 +704,10 @@ export function App() {
       {/* Bottom sheet — slides up to sit directly above the fixed toolbar,
           centered and width-capped on wide screens rather than stretching
           edge to edge. Tapping the active tool's icon again (or the X here)
-          closes it. */}
+          closes it. Height is user-resizable (see sheetHeight/the grip
+          handle below) rather than a fixed content-fit max-height, so a
+          content-heavy panel (e.g. Audio) defaults to leaving the preview
+          visible instead of burying it. */}
       {mobileActivePanel && (() => {
         const tool = MOBILE_TOOLS.find((t) => t.key === mobileActivePanel);
         if (!tool) return null;
@@ -632,10 +716,19 @@ export function App() {
             ref={mobileSheetRef}
             className="flex flex-col fixed left-0 right-0 z-40 bg-[var(--bg-sidebar)]
               border-t border-[var(--border-color)] rounded-t-2xl shadow-[0_-8px_24px_rgba(0,0,0,0.45)]
-              max-h-[65vh] max-w-2xl mx-auto lg:border-x"
-            style={{ bottom: MOBILE_TOOLBAR_HEIGHT }}
+              max-w-2xl mx-auto lg:border-x overflow-hidden"
+            style={{ bottom: MOBILE_TOOLBAR_HEIGHT, height: sheetHeight }}
           >
-            <div className="flex items-center justify-center relative shrink-0 pt-2">
+            <div
+              onPointerDown={handleSheetGripPointerDown}
+              className="flex items-center justify-center relative shrink-0 pt-2 pb-1.5 cursor-ns-resize touch-none"
+              role="slider"
+              aria-label="Resize panel"
+              aria-orientation="vertical"
+              aria-valuenow={sheetHeight}
+              aria-valuemin={SHEET_MIN_HEIGHT_PX}
+              aria-valuemax={Math.round(window.innerHeight * (SHEET_MAX_HEIGHT_VH / 100))}
+            >
               <div className="w-9 h-1 rounded-full bg-[var(--border-color)]" />
             </div>
             <div className="flex items-center justify-between px-4 py-2.5 shrink-0">
@@ -654,12 +747,20 @@ export function App() {
                 </svg>
               </button>
             </div>
-            <div className="overflow-y-auto flex-1 border-t border-[var(--border-color)]">
+            <div className="overflow-y-auto flex-1 min-h-0 border-t border-[var(--border-color)]">
               {tool.group === 'caption' ? (
                 <SidebarInspector sectionFilter={tool.key} />
               ) : tool.group === 'audio' ? (
                 <div className="p-4">
                   <AudioInspector onNotify={showToast} />
+                </div>
+              ) : tool.group === 'textel' ? (
+                <div className="p-4">
+                  <TextInspector />
+                </div>
+              ) : tool.group === 'word' ? (
+                <div className="p-4">
+                  <WordInspector />
                 </div>
               ) : (
                 <div className="p-4">

@@ -15,6 +15,7 @@
 import { useEditorStore, STYLE_DEFAULTS, SESSION_DEFAULTS } from '../store/editorStore.js';
 import { useTransformStore, TRANSFORM_DEFAULTS } from '../store/transformStore.js';
 import { useAudioStore, AUDIO_DEFAULTS, AUDIO_DOCUMENT_KEYS } from '../store/audioStore.js';
+import { useTextElementStore, TEXT_ELEMENT_DEFAULTS, TEXT_ELEMENT_DOCUMENT_KEYS } from '../store/textElementStore.js';
 
 export const MOCK_SUBTITLES = [
   { start: 0.0, end: 2.2, text: "WELCOME TO BHYND." },
@@ -39,6 +40,7 @@ export const initialStyleState = { ...STYLE_DEFAULTS, ...TRANSFORM_DEFAULTS };
 
 const TRANSFORM_KEYS = new Set(Object.keys(TRANSFORM_DEFAULTS));
 const AUDIO_KEYS = new Set(Object.keys(AUDIO_DEFAULTS));
+const TEXT_ELEMENT_KEYS = new Set(Object.keys(TEXT_ELEMENT_DEFAULTS));
 
 /**
  * What undo/redo snapshots: every caption/transform style field, PLUS the
@@ -55,11 +57,20 @@ const AUDIO_KEYS = new Set(Object.keys(AUDIO_DEFAULTS));
  * is editor UI, not a document edit, and undoing onto a stale selection would
  * be surprising).
  */
-const UNDO_TRACKED_KEYS = [...Object.keys(initialStyleState), ...AUDIO_DOCUMENT_KEYS];
+const UNDO_TRACKED_KEYS = [
+  ...Object.keys(initialStyleState),
+  ...AUDIO_DOCUMENT_KEYS,
+  // Manually placed captions and text overlays are content on exactly the
+  // same footing as a placed sound effect: undoable, but NOT reset by the
+  // toolbar's "Reset Style" (see the superset note above), and their
+  // selection id is excluded for the same reason selectedAudioClipId is.
+  ...TEXT_ELEMENT_DOCUMENT_KEYS
+];
 
 function storeFor(key) {
   if (TRANSFORM_KEYS.has(key)) return useTransformStore;
   if (AUDIO_KEYS.has(key)) return useAudioStore;
+  if (TEXT_ELEMENT_KEYS.has(key)) return useTextElementStore;
   return useEditorStore;
 }
 
@@ -83,7 +94,8 @@ export const appState = new Proxy({}, {
   has(_target, prop) {
     return prop in useEditorStore.getState()
       || prop in useTransformStore.getState()
-      || prop in useAudioStore.getState();
+      || prop in useAudioStore.getState()
+      || prop in useTextElementStore.getState();
   }
 });
 
@@ -297,6 +309,11 @@ export function getStyleParams() {
       // (see shared/audioTimeline.js's VIDEO_AUDIO_DEFAULTS). Carried here so
       // the exporter applies the SAME level the preview is playing at.
       video: { volume: appState.videoVolume, muted: appState.videoMuted }
-    }
+    },
+    // Manually placed captions and text overlays (see shared/textElement.js).
+    // Rides in the same canonical snapshot for the same reason the audio
+    // timeline does: the exporter must resolve what text is on screen from
+    // exactly the data the preview drew it from, never a second source.
+    textElements: appState.textElements
   };
 }

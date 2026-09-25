@@ -56,6 +56,7 @@ import { appState, updateState } from '../state.js';
 import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
 import { setWordKeyword } from './transcriptEditorState.js';
 import { deselectVideoTarget } from './videoTransform.js';
+import { getTextElement, updateTextElement, updateTextElementStyle, setTextElementValues, selectTextElement } from './textElements.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../../../shared/captionGraphics.js';
 
@@ -102,6 +103,29 @@ let selected = false;
 // (canvas px per 330-box px) — see shared/captionGraphics.js's
 // resolveGeometry, which returns both under deliberately distinct names.
 let currentBox = null;
+
+// --- Text elements (manual captions + overlays) ---------------------------
+//
+// A text element is a WHOLE, independent object, not a piece of the
+// transcript — it has no wordIndex, no phrase key, and no group. So it gets
+// its own tiny selection state beside the caption machinery rather than
+// being squeezed through it: `selected` still means "something is
+// highlighted", and selectedTextElementId being set is what makes that
+// something a text element (selectedWordIndex/selectedGroupId are both null
+// in that case, which is precisely why currentSelectionTarget and
+// getKeyframeTarget need an explicit check for it rather than inferring
+// "caption" from two nulls).
+//
+// Everything downstream is shared: the same overlay DOM, the same box/handle
+// geometry, the same drag/resize/rotate gestures — only the WRITE target
+// differs (updateTextElementStyle instead of applyTransformFields).
+
+// This frame's on-screen boxes, in the same canvas backing-store px as
+// currentBox, pushed by preview.js's syncTextElementsCanvas — one per
+// element actually visible at the current time, in draw order (so the LAST
+// match under a click is the topmost one).
+let textElementBoxes = [];
+let selectedTextElementId = null;
 
 // The individual word currently selected within currentBox, or null when the
 // selection is at the whole-caption/group level. Independent of `selected`:
@@ -994,6 +1018,13 @@ function ensureMinimumGrabBox(box) {
  * what a drag/resize/rotate gesture computes.
  */
 function getDisplayBox() {
+  // Checked BEFORE currentBox: a text element is independent of the
+  // transcript, so it can be selected (and dragged) on a frame where no
+  // caption is on screen at all and currentBox is therefore null.
+  if (selectedTextElementId) {
+    const entry = textElementBoxes.find((b) => b.id === selectedTextElementId);
+    return entry ? ensureMinimumGrabBox(inflateBox(entry.box, CAPTION_SELECTION_PADDING_CSS_PX)) : null;
+  }
   if (!currentBox) return null;
   if (selectedWordIndex != null) {
     const word = getWordCandidates(currentBox).find((w) => w.wordIndex === selectedWordIndex);
@@ -1128,6 +1159,11 @@ function shouldPlaceControlsBelow() {
  * its real isKeyword data (never by appearance).
  */
 function currentSelectionTarget() {
+  // A text element is its own target kind — none of the caption/keyword/
+  // group scope buttons apply to it (there is no "all captions" for an
+  // object that exists exactly once), so classifying it here is what keeps
+  // every one of them hidden in updateScopeButtons.
+  if (selectedTextElementId) return 'text';
   if (selectedWordIndex == null) {
     // A partial/custom group (some caption words detached, or an explicitly
     // grouped subset) has no phrase-level field of its own — This Caption/
@@ -1419,6 +1455,8 @@ export function updateCanvasTransformOverlay(box, phrase, mode) {
   } else if (!drag) {
     boxEl.hidden = true;
   }
+
+  notifySelectionChangedIfNeeded();
 }
 
 /**
@@ -1438,13 +1476,343 @@ export function updateCanvasTransformOverlay(box, phrase, mode) {
  */
 export function hideCanvasTransformOverlay() {
   currentBox = null;
-  if (overlayEl) overlayEl.classList.remove('active');
-  if (boxEl) boxEl.hidden = true;
+  // Text elements live on their own layer with their own selection, so a
+  // frame with no CAPTION on it must not tear down the overlay they're
+  // also using — that would make an on-screen overlay unclickable (the
+  // overlay is `display: none` without `.active`) and hide its handles.
+  // Reads last frame's box list, since this runs at the top of the tick
+  // before syncTextElementsCanvas republishes; one frame of lag at the
+  // moment the last element scrolls off is harmless.
+  const keepForText = textElementBoxes.length > 0;
+  if (overlayEl && !keepForText) overlayEl.classList.remove('active');
+  if (boxEl && !selectedTextElementId) boxEl.hidden = true;
 }
 
 function clientToCssPoint(clientX, clientY) {
   const rect = getCanvasContentRect();
   return { x: clientX - rect.left, y: clientY - rect.top, rect };
+}
+
+/**
+ * Publishes this frame's visible text-element boxes — called once per tick
+ * by preview.js's syncTextElementsCanvas, from the SAME measure pass that
+ * just drew them, so the box and the pixels can't disagree.
+ *
+ * Also re-shows/repositions the selection box itself, because a text
+ * element's overlay can't ride along with the caption's: syncVideoSubtitles
+ * calls hideCanvasTransformOverlay() at the top of EVERY tick, and the
+ * updateCanvasTransformOverlay call that would normally undo that lives
+ * behind several early returns (demo fallback, Word Mode, no active phrase)
+ * that a text element is by definition independent of.
+ */
+export function setTextElementBoxes(boxes) {
+  textElementBoxes = Array.isArray(boxes) ? boxes : [];
+
+  // Selection can also originate from the TIMELINE (clicking the clip) or be
+  // dropped by a delete, so appState — not this module — owns which element
+  // is selected; the overlay just follows it.
+  const stateId = appState.selectedTextElementId || null;
+  if (stateId !== selectedTextElementId) {
+    if (stateId) selectTextElementTarget(stateId);
+    else clearTextElementSelection();
+  }
+
+  if (!overlayEl || !boxEl) return;
+
+  // The overlay is `display: none` until `.active`, and its hit area is the
+  // only thing that receives clicks — so it has to be live whenever ANY
+  // text element is on screen, not merely once one is already selected.
+  // Without this, the very first click on an overlay would never reach a
+  // handler at all.
+  if (textElementBoxes.length) {
+    overlayEl.classList.add('active');
+    syncOverlayToContentRect(overlayEl);
+  }
+
+  if (inlineEditingId) {
+    // The element can still move under the caret (playback, a keyframe), so
+    // the field follows it rather than being placed once.
+    positionInlineEditor();
+    return;
+  }
+
+  if (!selectedTextElementId) return;
+
+  // Selected but not visible right now (the playhead moved outside the
+  // element's own [start, end)) — hide the handles without DROPPING the
+  // selection, exactly as the caption path does for a stale word: the
+  // element still exists, it simply isn't on screen this instant.
+  if (!textElementBoxes.some((b) => b.id === selectedTextElementId)) {
+    if (!drag) boxEl.hidden = true;
+    return;
+  }
+
+  if (!drag) {
+    boxEl.hidden = false;
+    positionBoxElement();
+  }
+}
+
+// --- Inline text editing on the canvas -------------------------------------
+//
+// Double-click a text overlay on the video to type straight into it. The
+// Overlay panel's Content field still works and stays the fuller surface;
+// this exists because going to a side panel to fix a word you can see in
+// front of you is exactly the kind of detour a caption editor shouldn't ask
+// for.
+//
+// A real <textarea> laid over the element's own measured box, not a
+// contenteditable canvas trick: it gets caret handling, selection, IME,
+// undo-in-field and mobile keyboards for free, and it keeps the text a plain
+// string rather than DOM that has to be parsed back.
+
+let inlineEditorEl = null;
+let inlineEditingId = null;
+
+/** Positions the editor over the element's current on-screen box. */
+function positionInlineEditor() {
+  if (!inlineEditorEl || !inlineEditingId) return;
+  const entry = textElementBoxes.find((b) => b.id === inlineEditingId);
+  if (!entry) return;
+  const scale = entry.box.cssPxScale || 1;
+  const minWidth = 140;
+  const width = Math.max(minWidth, entry.box.width / scale + 24);
+  const height = Math.max(34, entry.box.height / scale + 16);
+  inlineEditorEl.style.left = `${entry.box.centerX / scale - width / 2}px`;
+  inlineEditorEl.style.top = `${entry.box.centerY / scale - height / 2}px`;
+  inlineEditorEl.style.width = `${width}px`;
+  inlineEditorEl.style.height = `${height}px`;
+}
+
+function startInlineEdit(id) {
+  const element = getTextElement(id);
+  if (!element || !inlineEditorEl) return;
+  inlineEditingId = id;
+  inlineEditorEl.value = element.text || '';
+  inlineEditorEl.hidden = false;
+  positionInlineEditor();
+  inlineEditorEl.focus();
+  inlineEditorEl.select();
+  // The handles would sit on top of the field and swallow clicks meant for
+  // the caret.
+  if (boxEl) boxEl.hidden = true;
+}
+
+/**
+ * Leaves edit mode. The live keystrokes were written with history off, so
+ * this commits the finished text as ONE undo step — the same split every
+ * gesture in this file uses.
+ */
+function endInlineEdit(commit = true) {
+  if (!inlineEditingId || !inlineEditorEl) return;
+  const id = inlineEditingId;
+  const value = inlineEditorEl.value;
+  inlineEditingId = null;
+  inlineEditorEl.hidden = true;
+  inlineEditorEl.blur();
+  if (commit) updateTextElement(id, { text: value }, { recordHistory: true });
+  if (boxEl && selectedTextElementId) {
+    boxEl.hidden = false;
+    positionBoxElement();
+  }
+}
+
+/** True while the canvas editor has the caret — used to hold off gestures. */
+export function isEditingTextElementInline() {
+  return !!inlineEditingId;
+}
+
+/** Topmost visible text element under a viewport point, or null. */
+function findTextElementAtClient(clientX, clientY) {
+  if (!textElementBoxes.length) return null;
+  const { x, y } = clientToCssPoint(clientX, clientY);
+  // Reverse order: elements are drawn in list order, so the LAST one drawn
+  // is the one visually on top and must win an overlapping hit.
+  for (let i = textElementBoxes.length - 1; i >= 0; i--) {
+    const { id, box } = textElementBoxes[i];
+    const scale = box.cssPxScale || 1;
+    const padded = ensureMinimumGrabBox(inflateBox(box, CAPTION_SELECTION_PADDING_CSS_PX));
+    const cssBox = {
+      centerX: padded.centerX / scale,
+      centerY: padded.centerY / scale,
+      width: padded.width / scale,
+      height: padded.height / scale,
+      rotationDeg: padded.rotationDeg
+    };
+    if (pointInRotatedBox(x, y, cssBox)) return { id, box };
+  }
+  return null;
+}
+
+/**
+ * Makes a text element THE canvas selection, tearing down any caption-side
+ * selection first — the overlay shows exactly one target at a time, and the
+ * caption toolbar's scope/animation/keyword controls mean nothing for an
+ * object that exists once and has no transcript behind it.
+ */
+function selectTextElementTarget(id) {
+  resetKeywordScopeState();
+  selected = true;
+  selectedWordIndex = null;
+  selectedGroupId = null;
+  explicitCaptionSelectionKey = null;
+  selectedTextElementId = id;
+  if (toolbarEl) toolbarEl.hidden = true;
+  selectTextElement(id);
+  notifySelectionChangedIfNeeded();
+}
+
+function clearTextElementSelection() {
+  if (inlineEditingId) endInlineEdit(true);
+  if (!selectedTextElementId) return;
+  selectedTextElementId = null;
+  // `selected` is only ever true-because-of-a-text-element here (a text
+  // selection zeroes selectedWordIndex/selectedGroupId), so dropping it is
+  // dropping the whole selection — leaving it set would keep a box on
+  // screen that getDisplayBox can no longer resolve.
+  selected = false;
+  if (toolbarEl) toolbarEl.hidden = false;
+  if (boxEl) boxEl.hidden = true;
+  selectTextElement(null);
+}
+
+/**
+ * The element's currently-effective value for one style field — its own
+ * override if it has one, else whatever the caption look it inherits from
+ * supplies (see textElements.js: an empty style bag means "inherit"). Used
+ * as the BASELINE a gesture composes onto, so a first drag on an untouched
+ * element doesn't snap it away from where it's actually drawn.
+ */
+function effectiveTextElementValue(id, field, fallback) {
+  const value = getTextElement(id)?.style?.[field];
+  return value == null ? fallback : value;
+}
+
+/**
+ * The element's complete pre-gesture state — its whole style bag AND its
+ * keyframe list, not a handful of named fields.
+ *
+ * Whole-element on purpose: a gesture on a KEYFRAMED element writes into the
+ * keyframe track rather than the static field (see
+ * textElements.js's setTextElementValues), so a rewind that only restored
+ * named style keys would leave the mutated keyframe behind. See endTextDrag
+ * for why a gesture has to be able to rewind itself at all.
+ */
+function textElementSnapshot(id) {
+  const element = getTextElement(id);
+  if (!element) return null;
+  return { style: { ...(element.style || {}) }, keyframes: element.keyframes || [] };
+}
+
+function beginTextMove(e) {
+  const box = getDisplayBox();
+  if (!box) return;
+  const { x, y, rect } = clientToCssPoint(e.clientX, e.clientY);
+  const scale = box.cssPxScale || 1;
+  drag = {
+    kind: 'move',
+    pointerId: e.pointerId,
+    textElementId: selectedTextElementId,
+    startStyle: textElementSnapshot(selectedTextElementId),
+    // Delta-based, for the same reason the whole-caption move is (see
+    // onPointerMove): the element is grabbed wherever the user clicked, not
+    // at its center, so snapping its anchor to the cursor would jump it by
+    // the click-point-to-center distance on the first pixel of movement.
+    startPointerXPct: (x / rect.width) * 100,
+    startPointerYPct: (y / rect.height) * 100,
+    // Read from the box the renderer just produced, NOT from the stored
+    // style: an element that has never been dragged may have no
+    // customPosX/Y of its own yet, and starting from a default of 0 would
+    // fling it into the frame's top-left corner.
+    startPosXPct: ((box.centerX / scale) / rect.width) * 100,
+    startPosYPct: ((box.centerY / scale) / rect.height) * 100
+  };
+  hitAreaEl.setPointerCapture(e.pointerId);
+}
+
+function beginTextResize(e, corner) {
+  const box = getDisplayBox();
+  if (!box) return;
+  const { x, y } = clientToCssPoint(e.clientX, e.clientY);
+  const scale = box.cssPxScale || 1;
+  drag = {
+    kind: 'resize',
+    pointerId: e.pointerId,
+    textElementId: selectedTextElementId,
+    corner,
+    startStyle: textElementSnapshot(selectedTextElementId),
+    startDist: Math.hypot(x - box.centerX / scale, y - box.centerY / scale) || 1,
+    startFontSize: effectiveTextElementValue(selectedTextElementId, 'fontSize', appState.fontSize)
+  };
+  e.target.setPointerCapture(e.pointerId);
+}
+
+function beginTextRotate(e) {
+  drag = {
+    kind: 'rotate', pointerId: e.pointerId, textElementId: selectedTextElementId,
+    startStyle: textElementSnapshot(selectedTextElementId)
+  };
+  e.target.setPointerCapture(e.pointerId);
+}
+
+/**
+ * Live gesture updates, all with recordHistory:false — endDrag commits the
+ * finished gesture as ONE undo step (the same split every other drag in this
+ * file and in audioTimeline.js uses).
+ */
+function onTextPointerMove(e) {
+  const box = getDisplayBox();
+  if (!box) return;
+  const id = drag.textElementId;
+  const { x, y, rect } = clientToCssPoint(e.clientX, e.clientY);
+  const scale = box.cssPxScale || 1;
+  const centerX = box.centerX / scale;
+  const centerY = box.centerY / scale;
+
+  if (drag.kind === 'move') {
+    const xPct = (x / rect.width) * 100;
+    const yPct = (y / rect.height) * 100;
+    // Through setTextElementValues, not a raw style write: on a keyframed
+    // element this updates the keyframe AT the playhead instead of the
+    // static base underneath it (which the keyframe track would win over,
+    // making the drag look like it did nothing). It also stamps
+    // position:'manual' — an element inheriting an ANCHORED position has
+    // nowhere to put a dragged coordinate.
+    setTextElementValues({
+      positionX: Math.max(0, Math.min(100, drag.startPosXPct + (xPct - drag.startPointerXPct))),
+      positionY: Math.max(0, Math.min(100, drag.startPosYPct + (yPct - drag.startPointerYPct)))
+    }, { recordHistory: false });
+  } else if (drag.kind === 'resize') {
+    // fontSize is a plain style field, not one of the five animatable
+    // properties (scale is captionScaleMultiplier) — exactly as a caption's
+    // own corner-resize writes fontSize rather than keyframing scale.
+    const ratio = (Math.hypot(x - centerX, y - centerY) || 1) / drag.startDist;
+    updateTextElementStyle(id, {
+      fontSize: Math.max(6, Math.min(150, Math.round(drag.startFontSize * ratio)))
+    }, { recordHistory: false });
+  } else if (drag.kind === 'rotate') {
+    const angleDeg = (Math.atan2(y - centerY, x - centerX) * 180) / Math.PI;
+    setTextElementValues({ rotation: Math.round(angleDeg + 90) }, { recordHistory: false });
+  }
+}
+
+/**
+ * Commits a finished gesture as exactly ONE undo step.
+ *
+ * Rewinds to the pre-gesture values first, with history OFF, then re-applies
+ * the final ones with history ON. That looks redundant but isn't:
+ * state.js's pushHistorySnapshot snapshots the CURRENT state at the moment
+ * of the recording write, and the live drag has already written its result
+ * into that state with recordHistory:false — so committing straight away
+ * would push a snapshot identical to the outcome and make undo a no-op
+ * (confirmed: the first version of this did exactly that).
+ */
+function endTextDrag(d) {
+  const id = d.textElementId;
+  const final = textElementSnapshot(id);
+  if (!final) return;
+  if (d.startStyle) updateTextElement(id, d.startStyle, { recordHistory: false });
+  updateTextElement(id, final, { recordHistory: true });
 }
 
 /**
@@ -1576,6 +1944,9 @@ function beginRotate(e) {
 }
 
 function onPointerMove(e) {
+  // Checked before the currentBox guard: a text element can be dragged on a
+  // frame with no caption on screen, where currentBox is null.
+  if (drag && drag.textElementId) { onTextPointerMove(e); return; }
   if (!drag || !currentBox) return;
   const box = getDisplayBox();
   const { x, y } = clientToCssPoint(e.clientX, e.clientY);
@@ -1691,8 +2062,14 @@ function onPointerMove(e) {
 
 function endDrag() {
   if (!drag) return;
-  const { kind, phrase, wordIndex, groupMembers } = drag;
+  const finished = drag;
+  const { kind, phrase, wordIndex, groupMembers, textElementId } = drag;
   drag = null;
+
+  if (textElementId) {
+    endTextDrag(finished);
+    return;
+  }
 
   if (groupMembers) {
     // Commit each member's just-set field as its own undo step, re-reading
@@ -1769,6 +2146,15 @@ function endDrag() {
 // coordinates. Never included in a production build (see App.jsx's own
 // identical guard).
 if (import.meta.env.DEV) {
+  // Text elements' on-screen CSS rects (relative to the canvas content
+  // rect), so a test can click the exact right spot instead of assuming
+  // where a percentage-positioned overlay landed.
+  window.__debugTextElementRects = () => textElementBoxes.map(({ id, box }) => {
+    const s = box.cssPxScale || 1;
+    return { id, centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s };
+  });
+  window.__debugSelectedTextElementId = () => selectedTextElementId;
+
   window.__debugWordScreenRect = (wordIndex) => {
     if (!currentBox) return null;
     const word = getWordCandidates(currentBox).find((w) => w.wordIndex === wordIndex);
@@ -1848,9 +2234,47 @@ export function initCanvasTransform() {
   groupStartBtn = document.getElementById('btn-transform-group-start');
   groupConfirmBtn = document.getElementById('btn-transform-group-confirm');
   groupMultiSelectLabelEl = document.getElementById('caption-transform-group-multiselect-label');
+  inlineEditorEl = document.getElementById('text-element-inline-editor');
   if (!overlayEl || !hitAreaEl || !boxEl) return;
 
   updateScopeButtons();
+
+  if (inlineEditorEl) {
+    // Live keystrokes with history OFF; endInlineEdit commits the finished
+    // text as one undo step.
+    inlineEditorEl.addEventListener('input', () => {
+      if (inlineEditingId) {
+        updateTextElement(inlineEditingId, { text: inlineEditorEl.value }, { recordHistory: false });
+      }
+    });
+    inlineEditorEl.addEventListener('blur', () => endInlineEdit(true));
+    inlineEditorEl.addEventListener('keydown', (e) => {
+      // Escape leaves without committing; the live writes are already in
+      // state, so "cancel" here just means "stop editing" — Undo is the way
+      // back, exactly as it is for every other edit.
+      if (e.key === 'Escape') { e.stopPropagation(); endInlineEdit(true); return; }
+      // Enter finishes; Shift+Enter is a real newline, since a text overlay
+      // can legitimately be more than one line.
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); endInlineEdit(true); return; }
+      // Every other key (Backspace included) belongs to the field. Stopping
+      // propagation keeps the timeline's own Delete/Backspace shortcut from
+      // seeing it at all.
+      e.stopPropagation();
+    });
+    // The overlay's own pointer handlers would otherwise start a drag or
+    // deselect the element the moment the user clicks to place a caret.
+    inlineEditorEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+  }
+
+  // Double-click a text overlay to edit it in place.
+  hitAreaEl.addEventListener('dblclick', (e) => {
+    const hit = findTextElementAtClient(e.clientX, e.clientY);
+    if (hit) startInlineEdit(hit.id);
+  });
+  boxEl.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
+    if (selectedTextElementId) startInlineEdit(selectedTextElementId);
+  });
 
   // The overlay is `position: fixed` (see style.css's doc comment on
   // .caption-transform-overlay) precisely so .phone-frame's overflow:hidden
@@ -1865,7 +2289,38 @@ export function initCanvasTransform() {
   window.addEventListener('resize', () => syncOverlayToContentRect(overlayEl));
 
   hitAreaEl.addEventListener('pointerdown', (e) => {
-    if (!currentBox) return;
+    // TEXT ELEMENTS FIRST, and before the currentBox guard. They render on
+    // their own layer ABOVE the caption canvas, so a click that lands on
+    // one must resolve to it rather than to whatever caption happens to be
+    // underneath — and they exist independently of the transcript, so a
+    // click on one must work on frames where there's no caption at all.
+    // A press that lands while the inline editor is open is the user
+    // clicking AWAY from it — finish that edit first, then treat the press
+    // normally.
+    if (inlineEditingId) endInlineEdit(true);
+
+    const textHit = findTextElementAtClient(e.clientX, e.clientY);
+    if (textHit) {
+      deselectVideoTarget();
+      if (selectedTextElementId !== textHit.id) selectTextElementTarget(textHit.id);
+      boxEl.hidden = false;
+      positionBoxElement();
+      updateScopeButtons();
+      // Move on THIS press rather than only selecting — same reason the
+      // caption branch below does it: press-hold-drag has to work on the
+      // first gesture, not only after a select-then-press-again.
+      beginTextMove(e);
+      return;
+    }
+    // Clicked away from every text element — release the text selection
+    // before the caption logic below claims the click.
+    clearTextElementSelection();
+
+    if (!currentBox) {
+      selected = false;
+      boxEl.hidden = true;
+      return;
+    }
     // A canvas selection and the Video target (see videoTransform.js) are
     // mutually exclusive — the timeline panel's property lanes always show
     // exactly ONE target. Interacting with a caption/word here always wins.
@@ -2013,6 +2468,11 @@ export function initCanvasTransform() {
   boxEl.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
 
+    // A selected text element's box sits on top of hitAreaEl, so this is
+    // where its own re-drag starts. No drill-in step: a text element has no
+    // words to descend into.
+    if (selectedTextElementId) { beginTextMove(e); return; }
+
     // While a GROUP is selected (selectedWordIndex null), this box spans the
     // whole group, so it's what actually receives a click meant to drill
     // into one specific word (see hitTestWordAtClient's doc comment above).
@@ -2056,14 +2516,16 @@ export function initCanvasTransform() {
   boxEl.querySelectorAll('.caption-transform-handle[data-handle]').forEach((handle) => {
     handle.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      beginResize(e, handle.dataset.handle);
+      if (selectedTextElementId) beginTextResize(e, handle.dataset.handle);
+      else beginResize(e, handle.dataset.handle);
     });
   });
 
   if (rotateHandleEl) {
     rotateHandleEl.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      beginRotate(e);
+      if (selectedTextElementId) beginTextRotate(e);
+      else beginRotate(e);
     });
   }
 
@@ -2077,6 +2539,7 @@ export function initCanvasTransform() {
       selectedWordIndex = null;
       selectedGroupId = null;
       explicitCaptionSelectionKey = null;
+      clearTextElementSelection();
       resetKeywordScopeState();
       if (isSelectingGroup) finishGroupSelection(false);
       boxEl.hidden = true;
@@ -2257,6 +2720,108 @@ export function getKeyframeTarget() {
     return { kind: 'group', wordIndexes: members, phrase: currentBox.phrase || null };
   }
   return null;
+}
+
+/* =========================================================================
+ * Per-word STYLE (font / colour / outline / shadow / italic / underline).
+ *
+ * Deliberately separate from the transform writers above: a transform field
+ * can be keyframed and is routed through routeFieldsThroughKeyframes, while
+ * a style field is static by design (a font family or a colour has no
+ * meaningful value halfway between two keyframes), so it is written as a
+ * plain nested `style` object on the SAME per-word override entry. See
+ * shared/captionTransform.js's resolveWordStyleOverride for the contract and
+ * shared/captionGraphics.js's applyWordStyleOverride for how it's painted.
+ * ====================================================================== */
+
+/**
+ * The word the per-word style panel should be editing, or null when the
+ * current selection isn't a single word. Keywords count: a keyword is still
+ * one specific word occurrence, and styling it individually must beat the
+ * keyword tier for that one instance.
+ *
+ * @returns {{wordIndex:number, text:string, isKeyword:boolean, style:object}|null}
+ */
+export function getSelectedWordStyleTarget() {
+  if (!selected || selectedWordIndex == null) return null;
+  const sourceWord = (appState.words || [])[selectedWordIndex];
+  return {
+    wordIndex: selectedWordIndex,
+    text: sourceWord ? (sourceWord.word || sourceWord.text || '') : '',
+    isKeyword: isKeywordIndex(selectedWordIndex),
+    style: (appState.captionTransforms[getWordTransformKey(selectedWordIndex)] || {}).style || {}
+  };
+}
+
+/**
+ * Merges style fields onto one word's override. The merge is NESTED — the
+ * generic transform writer does a shallow spread, which would replace the
+ * whole style object and silently wipe every other styled property each time
+ * a single control moved.
+ *
+ * A field set to null is DELETED rather than stored, so "inherit" is
+ * represented by absence — that's what lets resolveWordStyleOverride report
+ * an emptied-out style as "no override at all" and keep the renderers on
+ * their original fast paths.
+ */
+export function applyWordStyleFields(wordIndex, styleFields, { recordHistory = true } = {}) {
+  if (wordIndex == null) return;
+  const key = getWordTransformKey(wordIndex);
+  const existing = appState.captionTransforms[key] || {};
+  const nextStyle = { ...(existing.style || {}) };
+  Object.entries(styleFields).forEach(([field, value]) => {
+    if (value == null) delete nextStyle[field];
+    else nextStyle[field] = value;
+  });
+  const nextEntry = { ...existing, style: nextStyle };
+  updateState({ captionTransforms: { ...appState.captionTransforms, [key]: nextEntry } }, { recordHistory });
+}
+
+/**
+ * Drops a word's style override entirely, returning it to whatever the
+ * preset/keyword tier/global controls say — without touching that same
+ * word's position/scale/rotation/animation, which live on the same entry.
+ */
+export function resetWordStyle(wordIndex) {
+  if (wordIndex == null) return;
+  const key = getWordTransformKey(wordIndex);
+  const existing = appState.captionTransforms[key];
+  if (!existing || !existing.style) return;
+  const { style, ...rest } = existing;
+  const nextMap = { ...appState.captionTransforms };
+  // An entry that was ONLY a style override is removed outright rather than
+  // left behind as an empty object.
+  if (Object.keys(rest).length) nextMap[key] = rest;
+  else delete nextMap[key];
+  updateState({ captionTransforms: nextMap }, { recordHistory: true });
+}
+
+// --- Selection change notification (for React surfaces) ---------------------
+//
+// selectedWordIndex/selectedGroupId are assigned from a dozen different
+// handlers, so rather than instrument every assignment (and inevitably miss
+// one), the descriptor is diffed once per overlay sync — the same tick that
+// already repositions the box and refreshes the scope buttons. One hook, no
+// way for a selection change to escape it.
+const selectionListeners = [];
+let lastSelectionSignature = null;
+
+export function onSelectionChange(cb) {
+  selectionListeners.push(cb);
+  return () => {
+    const idx = selectionListeners.indexOf(cb);
+    if (idx !== -1) selectionListeners.splice(idx, 1);
+  };
+}
+
+function notifySelectionChangedIfNeeded() {
+  const target = getKeyframeTarget();
+  const signature = target ? `${target.kind}:${(target.wordIndexes || []).join(',')}` : 'none';
+  if (signature === lastSelectionSignature) return;
+  lastSelectionSignature = signature;
+  selectionListeners.forEach((cb) => {
+    try { cb(); } catch (err) { console.error('[canvasTransform] selection listener failed:', err); }
+  });
 }
 
 const WORD_STATIC_FIELD_BY_PROPERTY = { positionX: 'offsetXPx', positionY: 'offsetYPx', rotation: 'rotationDeg', scale: 'fontScale', opacity: 'opacity' };
@@ -2484,6 +3049,7 @@ export function deselectCanvasSelection() {
   selectedWordIndex = null;
   selectedGroupId = null;
   explicitCaptionSelectionKey = null;
+  clearTextElementSelection();
   resetKeywordScopeState();
   if (isSelectingGroup) finishGroupSelection(false);
   if (boxEl) boxEl.hidden = true;

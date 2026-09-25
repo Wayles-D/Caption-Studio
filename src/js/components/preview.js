@@ -6,8 +6,9 @@ import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, 
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
 import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolveRollingStackWindow } from '../../../shared/rollingStack.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame } from '../../../shared/captionGraphics.js';
-import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay } from './canvasTransform.js';
+import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay, setTextElementBoxes } from './canvasTransform.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
+import { getActiveTextElements, textElementToPhrase, resolveTextElementParams } from '../../../shared/textElement.js';
 import { initVideoCanvasControls } from './videoCanvasControls.js';
 import { initAudioEngine } from './audioEngine.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
@@ -70,6 +71,43 @@ function loadKeywordDrivenFontFaces(cssConfig) {
 }
 
 /**
+ * Registers AND awaits the face every PER-WORD style override needs (see
+ * shared/captionTransform.js's resolveWordStyleOverride), redrawing once a
+ * face actually finishes loading.
+ *
+ * Both halves matter. Registering the @font-face alone is not enough: the
+ * canvas paints synchronously with `ctx.font`, and a family the browser
+ * hasn't finished loading silently falls back to a default face instead of
+ * erroring — so a word given its own font renders correctly in the export
+ * (the server registers every bundled face up front) while looking
+ * completely unchanged in the preview. And because the browser only
+ * repaints the caption canvas when something asks it to, a PAUSED video
+ * would keep showing that fallback indefinitely; hence the syncVideoSubtitles()
+ * on first load, mirroring exactly what prepareGraphicsCanvas already does
+ * for the caption's base font.
+ */
+function ensureWordStyleFontsReady(fontSizePx) {
+  const overrides = appState.captionTransforms;
+  if (!overrides) return;
+  Object.keys(overrides).forEach((key) => {
+    if (!key.startsWith('w')) return;
+    const style = overrides[key]?.style;
+    if (!style) return;
+    const family = style.fontFamily || appState.fontFamily;
+    if (!family) return;
+    // A word asking for italic needs the italic FILE when its family ships
+    // one; for a family that doesn't, resolveFontFace returns the regular
+    // face and paintText draws the synthetic slant instead, so requesting
+    // 'italic' here is correct either way.
+    const faceKey = style.italic ? 'italic' : 'regular';
+    const resolved = resolveFontFace(family, faceKey);
+    loadLocalFontFace(family, faceKey);
+    ensureCanvasFontReady(resolved.familyName, style.fontWeight || '400', fontSizePx, resolved.italic)
+      .then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
+  });
+}
+
+/**
  * Shared-graphics-renderer preview path (shared/captionGraphics.js). Live for
  * every mode/preset canDrawCaptionFrame() accepts (== isGraphicsRendererDefault,
  * see that function's doc comment) — the SAME renderer backend/utils/
@@ -82,10 +120,14 @@ function loadKeywordDrivenFontFaces(cssConfig) {
  */
 const canvasFontsReadyCache = new Set();
 
-function ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx) {
-  const key = `${fontFamily}::${fontWeight}`;
+// `italic` is part of the key, not just family+weight: a per-word style
+// override can ask for the italic face of a family whose regular face is
+// already cached, and without the style component that would report "ready"
+// for a face the browser has never actually loaded.
+function ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx, italic = false) {
+  const key = `${fontFamily}::${fontWeight}::${italic ? 'italic' : 'normal'}`;
   if (canvasFontsReadyCache.has(key)) return Promise.resolve(false);
-  const fontStr = `${fontWeight || '400'} ${fontSizePx}px '${fontFamily}'`;
+  const fontStr = `${italic ? 'italic ' : ''}${fontWeight || '400'} ${fontSizePx}px '${fontFamily}'`;
   return document.fonts.load(fontStr).then(() => {
     canvasFontsReadyCache.add(key);
     return true;
@@ -122,8 +164,118 @@ function prepareGraphicsCanvas(canvas, fontFamily, fontWeight, fontSizePx) {
   ensureCanvasFontReady(fontFamily, fontWeight, fontSizePx).then((justLoaded) => {
     if (justLoaded) syncVideoSubtitles();
   });
+  // Any font a single word asked for itself needs the same load-then-redraw
+  // treatment as the caption's own base font above.
+  ensureWordStyleFontsReady(fontSizePx);
 
   return { ctx: canvas.getContext('2d'), targetW, targetH, cssPixelWidth: rect.width };
+}
+
+/**
+ * Paints every manually placed caption / text overlay that should be on
+ * screen right now (see shared/textElement.js) onto their own canvas layer.
+ *
+ * Uses the SAME drawCaptionFrame the transcript captions go through, with the
+ * same {params, cssConfig} contract — an element's own sparse `style` is
+ * merged over the global caption params, so "inherits the caption look until
+ * you change something" falls out for free and any styling feature captions
+ * gain later reaches these too, without being implemented twice.
+ *
+ * Several elements can be visible at once (they're allowed to overlap, and to
+ * overlap captions), so the layer is cleared ONCE here and each element is
+ * drawn with `clearCanvas: false` — the same compositing order the exporter
+ * uses.
+ */
+function syncTextElementsCanvas(currentTime, baseStyleParams) {
+  const canvas = document.getElementById('text-elements-canvas');
+  if (!canvas) return;
+
+  const active = getActiveTextElements(appState.textElements || [], currentTime);
+  if (!active.length) {
+    canvas.classList.remove('active');
+    // Must still publish the (empty) box list, or the transform layer keeps
+    // hit-testing against last frame's boxes and a click lands on text that
+    // isn't on screen any more.
+    setTextElementBoxes([]);
+    return;
+  }
+
+  const baseFontSizePx = parseFloat(baseStyleParams.fontSize) || 14;
+  const prepped = prepareGraphicsCanvas(
+    canvas,
+    (baseStyleParams.fontFamily || 'Montserrat'),
+    baseStyleParams.fontWeight,
+    baseFontSizePx
+  );
+  if (!prepped) return;
+
+  prepped.ctx.clearRect(0, 0, prepped.targetW, prepped.targetH);
+
+  // Each element's own on-screen box, handed to the transform layer so a
+  // click can resolve to the text under the cursor and the selection handles
+  // can wrap it — see canvasTransform.js's setTextElementBoxes.
+  const boxes = [];
+
+  active.forEach((element) => {
+    // The SAME resolver the exporter uses — style bag over caption params,
+    // then this element's own keyframes at this instant on top. Sharing it
+    // is what keeps preview and export from ever disagreeing about where an
+    // animated overlay is.
+    const params = resolveTextElementParams(baseStyleParams, element, currentTime);
+    const cssConfig = getCSSPreviewFromConfig(params);
+    // An element whose font differs from the caption's needs that face loaded
+    // before the canvas paints, or it silently falls back — the same trap
+    // per-word fonts hit (see ensureWordStyleFontsReady).
+    // Any of family/weight/italic changes WHICH font file has to be loaded
+    // before the canvas can paint it — a face the browser hasn't finished
+    // fetching falls back silently, permanently so on a paused video (the
+    // exact trap per-word fonts hit; see ensureWordStyleFontsReady).
+    if (element.style.fontFamily || element.style.fontWeight || element.style.italic) {
+      const family = element.style.fontFamily || params.fontFamily;
+      const faceKind = element.style.italic ? 'italic' : 'regular';
+      const face = resolveFontFace(family, faceKind);
+      loadLocalFontFace(family, faceKind);
+      ensureCanvasFontReady(
+        face.familyName,
+        params.fontWeight || '400',
+        parseFloat(params.fontSize) || baseFontSizePx,
+        !!element.style.italic
+      ).then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
+    }
+    drawCaptionFrame(prepped.ctx, {
+      canvasWidth: prepped.targetW,
+      canvasHeight: prepped.targetH,
+      cssPixelWidth: prepped.cssPixelWidth,
+      activePhrase: textElementToPhrase(element),
+      currentTime,
+      cssConfig,
+      params,
+      createOffscreenCanvas: (w, h) => {
+        const off = document.createElement('canvas');
+        off.width = w;
+        off.height = h;
+        return off;
+      },
+      clearCanvas: false
+    });
+
+    // Measured with the SAME ctx the element was just painted into, so the
+    // fonts are already loaded and measureText resolves identically — the
+    // box therefore matches the pixels rather than approximating them.
+    const box = measureSentenceFrame(prepped.ctx, {
+      canvasWidth: prepped.targetW,
+      canvasHeight: prepped.targetH,
+      cssPixelWidth: prepped.cssPixelWidth,
+      activePhrase: textElementToPhrase(element),
+      currentTime,
+      cssConfig,
+      params
+    });
+    if (box) boxes.push({ id: element.id, box });
+  });
+
+  setTextElementBoxes(boxes);
+  canvas.classList.add('active');
 }
 
 function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, params) {
@@ -271,6 +423,13 @@ export function initPreviewWorkspace() {
 
   if (previewVideo) {
     previewVideo.addEventListener('timeupdate', updatePreviewFrame);
+    // `timeupdate` alone is not enough for a SEEK on a paused video: browsers
+    // throttle it to roughly 4/s and fire it only once the seek settles, so
+    // scrubbing could leave the caption/overlay layers showing the previous
+    // position for a noticeable beat — and a seek that lands on the same
+    // throttled tick fires no timeupdate at all, leaving them stale
+    // indefinitely. `seeked` fires exactly once per completed seek.
+    previewVideo.addEventListener('seeked', updatePreviewFrame);
 
     previewVideo.addEventListener('play', startPreviewLoop);
     previewVideo.addEventListener('pause', stopPreviewLoop);
@@ -467,6 +626,13 @@ export function syncVideoSubtitles() {
 
   const baseStyleParams = getStyleParams();
   const baseCssConfig = getCSSPreviewFromConfig(baseStyleParams);
+
+  // Manually placed captions + text overlays, painted on their own layer.
+  // Runs BEFORE the caption branches below because every one of them can
+  // early-return (demo fallback, Word Mode, Rolling Stack, no active phrase)
+  // — text elements are independent of whether a transcript caption happens
+  // to be on screen, so their own pass must not be downstream of any of that.
+  syncTextElementsCanvas(currentTime, baseStyleParams);
 
   const activeHighlight = baseCssConfig.highlightColor || '#FEF08A';
   const inactiveColor = baseCssConfig.inactiveColor || '#FFFFFF';

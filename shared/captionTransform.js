@@ -156,3 +156,54 @@ export function resolveWordOverrideAtTime(baseParams, wordIndex, currentTime) {
     opacity: resolveAnimatableField(override, 'opacity', currentTime, override.opacity != null ? override.opacity : 100)
   };
 }
+
+/**
+ * The per-word VISUAL STYLE override — a single word's own font/colour/
+ * outline/shadow/italic/underline, independent of every other word in the
+ * same caption. Stored as a nested `style` object on the SAME
+ * `captionTransforms['w<index>']` entry the transform fields above already
+ * live on, so one word has exactly one override entry covering both "where
+ * it is" and "what it looks like".
+ *
+ * Every field is optional and `null`/absent means INHERIT — the word falls
+ * back to the keyword tier (if it's a keyword), then the preset/global
+ * style, exactly as it did before it had any override. That's the same
+ * "null = unset, defer to the preset" convention the global style fields in
+ * src/store/editorStore.js already use.
+ *
+ * Values are authored in the SAME units as the global style controls
+ * (`outlineSize`/`shadowSize` in the 0-50 / 0-100 slider units, not px), so
+ * the Word panel reuses those controls' ranges verbatim and the renderer
+ * converts them with the same maths resolveGeometry already applies to the
+ * caption-level values. Never keyframed — deliberately NOT part of
+ * resolveWordOverrideAtTime, since a font family or a colour has no
+ * meaningful interpolation between two keyframes.
+ *
+ * @returns {{fontFamily?, fontWeight?, italic?, underline?, color?,
+ *   outlineSize?, outlineColor?, shadowEnabled?, shadowSize?, shadowColor?,
+ *   shadowOffsetX?, shadowOffsetY?}|null}
+ */
+export function resolveWordStyleOverride(baseParams, wordIndex) {
+  const override = resolveWordOverride(baseParams, wordIndex);
+  const style = override && override.style;
+  if (!style || typeof style !== 'object') return null;
+  // An entry whose style object exists but has been emptied back out (every
+  // field reset to inherit) must read as "no override" so the renderers'
+  // fast paths stay on their original, byte-identical code path.
+  return Object.values(style).some((v) => v != null) ? style : null;
+}
+
+/**
+ * Whether this word carries ANY override at all — transform or style. The
+ * renderers use this to decide whether a word needs its own isolated paint
+ * pass instead of the cheaper shared one (see shared/captionGraphics.js's
+ * paintRollingStackLines fast path), so it must stay true for a word that
+ * has ONLY a style override and no transform.
+ */
+export function hasWordOverride(baseParams, wordIndex) {
+  const override = resolveWordOverride(baseParams, wordIndex);
+  if (!override) return false;
+  if (resolveWordStyleOverride(baseParams, wordIndex)) return true;
+  // Any non-style key present means a transform/animation/group override.
+  return Object.keys(override).some((k) => k !== 'style');
+}

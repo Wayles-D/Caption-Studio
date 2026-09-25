@@ -22,6 +22,7 @@ import { previewSound } from './audioEngine.js';
 import { promptForAudioFile } from './audioImport.js';
 import { listSounds, getSoundDefinition } from '../../../shared/soundRegistry.js';
 import { getAudioTrackDuration } from '../../../shared/audioTimeline.js';
+import * as textElements from './textElements.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 
 const LANES = [
@@ -58,7 +59,11 @@ const RANGE_BY_FAMILY = {
 
 function familyFor(kind) {
   if (kind === 'video') return 'video';
-  if (kind === 'caption') return 'caption';
+  // A text element is positioned, scaled and rotated in exactly the same
+  // units a caption is (frame percentage, multiplier, degrees — see
+  // shared/textElement.js's resolveTextElementParams), so it shares the
+  // caption ranges rather than needing a family of its own.
+  if (kind === 'caption' || kind === 'text') return 'caption';
   return 'word'; // word | keyword | group
 }
 
@@ -379,8 +384,21 @@ function buildDom(container, options) {
   // distinct for that reason.
   const sfxLane = buildAudioLane('sfx', 'SFX', 'Add a sound effect at the playhead');
   const audioLane = buildAudioLane('audio', 'Audio', 'Import a music, ambience or voiceover file');
+
+  // Text overlays get their own lane, above the audio lanes: they're a
+  // VISUAL element, so they belong next to the picture rather than under the
+  // sound. Built with buildAudioLane because a span-shaped clip lane is a
+  // span-shaped clip lane — only what the clips MEAN differs.
+  const textLane = buildAudioLane('text', 'Text', 'Add a text overlay at the playhead');
+  lanesEl.appendChild(textLane.row);
   lanesEl.appendChild(sfxLane.row);
   lanesEl.appendChild(audioLane.row);
+
+  // Off-DOM parent for the property rows — see the appendChild below for why
+  // they're built but never shown in the timeline. Keeping them in a real
+  // container (rather than leaving them orphaned) is what lets
+  // relocatePrecisionFields put them back when the Advanced panel closes.
+  const detachedPropertyRows = document.createElement('div');
 
   LANES.forEach((lane) => {
     const row = document.createElement('div');
@@ -446,7 +464,15 @@ function buildDom(container, options) {
 
     row.appendChild(gutter);
     row.appendChild(track);
-    lanesEl.appendChild(row);
+    // NOT added to the timeline. These four rows (Position / Scale /
+    // Rotation / Opacity) were only ever a label plus numeric fields — their
+    // own track is CSS-hidden and hosts no markers, the keyframe diamonds
+    // live on the filmstrip row instead — so as timeline rows they cost
+    // vertical space and showed nothing. The fields themselves are still
+    // built, still live, and still reachable: relocatePrecisionFields() moves
+    // these exact elements into the Advanced side panel, which is now their
+    // only home. Keyframing is completely untouched by this.
+    detachedPropertyRows.appendChild(row);
 
     laneEls[lane.key] = { track, inputs, gutter, precisionGroup, label: lane.label };
   });
@@ -465,8 +491,8 @@ function buildDom(container, options) {
   return {
     header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip,
     addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack,
-    sfxTrack: sfxLane.track, audioTrack: audioLane.track,
-    addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addVideoBtn
+    sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
+    addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn, addVideoBtn
   };
 }
 
@@ -647,7 +673,19 @@ function buildMarker(entry, duration, role) {
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-  if (document.activeElement?.tagName === 'INPUT') return;
+  // Never steal a keystroke aimed at a text field. This used to check only
+  // INPUT, which missed the TEXTAREA the Overlay panel's Content field
+  // actually is — so pressing Backspace to fix a typo while typing an
+  // overlay's text deleted the whole element off the timeline instead. Any
+  // editable surface counts, not a list of tag names that has to be kept up
+  // to date with the UI.
+  const focused = document.activeElement;
+  if (focused && (
+    focused.tagName === 'INPUT'
+    || focused.tagName === 'TEXTAREA'
+    || focused.tagName === 'SELECT'
+    || focused.isContentEditable
+  )) return;
 
   // A selected AUDIO clip takes precedence over a selected keyframe: selecting
   // a clip is the more recent, more specific intent, and the two selections
@@ -656,6 +694,14 @@ document.addEventListener('keydown', (e) => {
   // silently remove a keyframe the user had stopped thinking about.
   if (appState.selectedAudioClipId) {
     audioTimeline.removeSelectedClip();
+    return;
+  }
+
+  // Same precedence rung, for the same reason: a selected text clip is what
+  // the user is looking at, so Delete means that one — not a keyframe they
+  // stopped thinking about. Removes no caption and no other clip.
+  if (appState.selectedTextElementId) {
+    textElements.removeSelectedTextElement();
     return;
   }
 
@@ -719,13 +765,14 @@ function refreshLanes(duration) {
 // clip is being dragged or trimmed — so scrubbing and playback never disturb
 // an in-progress interaction.
 let lastAudioSignature = null;
+let lastTextSignature = null;
 let dragClip = null; // { id, kind, mode: 'move'|'trim-start'|'trim-end', startClientX, moved, grabOffsetSeconds }
 
 const CLIP_DRAG_THRESHOLD_PX = 3;
 
 /** Removes every clip from a lane track, leaving its in-strip "+" button in place. */
 function clearClips(track) {
-  track.querySelectorAll('.timeline-sfx-clip, .timeline-audio-clip').forEach((el) => el.remove());
+  track.querySelectorAll('.timeline-sfx-clip, .timeline-audio-clip, .timeline-text-clip').forEach((el) => el.remove());
 }
 
 /** Seconds -> percentage across a lane track, clamped so a clip can't render outside its own lane. */
@@ -746,7 +793,16 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
   el.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     el.setPointerCapture(e.pointerId);
-    audioTimeline.selectClip(clip.id);
+    // Each clip family owns its own selection key, so selecting a text clip
+    // never leaves a stale audio selection behind that Delete would hit
+    // first (and vice versa).
+    if (kind === 'text') {
+      textElements.selectTextElement(clip.id);
+      audioTimeline.selectClip(null);
+    } else {
+      audioTimeline.selectClip(clip.id);
+      textElements.selectTextElement(null);
+    }
     const rect = el.parentElement.getBoundingClientRect();
     const duration = getVideo()?.duration || 0;
     const pointerTime = xToTime(e.clientX - rect.left, rect.width, duration);
@@ -758,7 +814,11 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       moved: false,
       // Where inside the clip the user grabbed it, so a move keeps that point
       // under the cursor instead of snapping the clip's head to the pointer.
-      grabOffsetSeconds: mode === 'move' ? pointerTime - clip.startTime : 0
+      // Audio clips carry `startTime`; text elements carry `start` (they're
+      // phrase-shaped, since the renderer consumes them as one). Read either
+      // rather than forcing one vocabulary onto the other — getting this
+      // wrong yields NaN, which silently collapses the clip to 0.
+      grabOffsetSeconds: mode === 'move' ? pointerTime - (clip.startTime ?? clip.start ?? 0) : 0
     };
   });
 
@@ -787,7 +847,7 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
     // clicking a keyframe marker already does.
     if (dragClip?.moved) return;
     const video = getVideo();
-    if (video && mode === 'move') video.currentTime = clip.startTime;
+    if (video && mode === 'move') video.currentTime = clip.startTime ?? clip.start ?? 0;
   });
 }
 
@@ -803,7 +863,16 @@ function applyClipDrag(clientX, el, options) {
   if (dragClip.mode === 'move') {
     const nextStart = pointerTime - dragClip.grabOffsetSeconds;
     if (dragClip.kind === 'sound') audioTimeline.moveSoundEvent(dragClip.id, nextStart, options);
+    else if (dragClip.kind === 'text') textElements.moveTextElement(dragClip.id, nextStart, options);
     else audioTimeline.moveAudioTrack(dragClip.id, nextStart, options);
+    return;
+  }
+
+  // Text has no source media behind it, so trimming its head is a plain
+  // retime — unlike an audio clip, where dragging the left edge also has to
+  // move the source offset to keep the audio under the cursor still.
+  if (dragClip.kind === 'text') {
+    textElements.trimTextElement(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
     return;
   }
 
@@ -923,6 +992,63 @@ function buildAudioClip(track, duration, isSelected) {
   });
 
   return el;
+}
+
+/**
+ * One text-overlay / manual-caption clip. A span bar with trim handles,
+ * exactly like an audio track's — the gestures expected on a timed clip
+ * don't change just because the payload is text, so it reuses
+ * attachClipPointerHandlers rather than growing its own.
+ */
+function buildTextClip(element, duration, isSelected) {
+  const el = document.createElement('div');
+  el.className = 'timeline-text-clip';
+  if (isSelected) el.classList.add('selected');
+  if (!element.enabled) el.classList.add('disabled');
+  if (element.kind === 'caption') el.classList.add('is-caption');
+
+  el.style.left = `${timeToPercent(element.start, duration)}%`;
+  el.style.width = `${Math.max(1, timeToPercent(element.end, duration) - timeToPercent(element.start, duration))}%`;
+  el.dataset.clipId = element.id;
+  el.tabIndex = 0;
+  el.title = `${element.text || '(empty)'} · ${element.start.toFixed(2)}s → ${element.end.toFixed(2)}s`
+    + ' — drag to move, drag an edge to retime, Delete to remove';
+
+  const label = document.createElement('span');
+  label.className = 'timeline-text-clip-label';
+  label.textContent = element.text || (element.kind === 'caption' ? 'Caption' : 'Text');
+  el.appendChild(label);
+
+  attachClipPointerHandlers(el, element, 'text', 'move');
+
+  ['start', 'end'].forEach((edge) => {
+    const handle = document.createElement('div');
+    handle.className = `timeline-text-clip-handle ${edge}`;
+    handle.title = edge === 'start' ? 'Change when it appears' : 'Change when it disappears';
+    attachClipPointerHandlers(handle, element, 'text', edge === 'start' ? 'trim-start' : 'trim-end');
+    el.appendChild(handle);
+  });
+
+  return el;
+}
+
+function refreshTextLane(duration) {
+  const elements = appState.textElements || [];
+  const selectedId = appState.selectedTextElementId;
+  const signature = JSON.stringify({ elements, selectedId, duration });
+  // Same two invariants refreshAudioLanes documents: never rebuild mid-drag
+  // (a DOM swap under the pointer kills the gesture), and never
+  // replaceChildren (the in-strip "+" is a child of the track).
+  if (signature === lastTextSignature || dragClip) return;
+  lastTextSignature = signature;
+
+  clearClips(els.textTrack);
+  if (!(duration > 0)) return;
+
+  elements.forEach((element) => {
+    els.textTrack.appendChild(buildTextClip(element, duration, element.id === selectedId));
+  });
+  els.textTrack.classList.toggle('is-empty', elements.length === 0);
 }
 
 function refreshAudioLanes(duration) {
@@ -1178,6 +1304,9 @@ function tick() {
   // every tick rather than inside the `hasTarget` branch below — and, like
   // the filmstrip, it only does real work when the data actually changed.
   refreshAudioLanes(duration);
+  // Outside the hasTarget branch below, like the audio lanes: a text overlay
+  // exists independently of whatever keyframe target happens to be selected.
+  refreshTextLane(duration);
   if (els.timeReadout) els.timeReadout.textContent = formatTime(currentTime);
 
   const paused = video?.paused ?? true;
@@ -1206,6 +1335,11 @@ function tick() {
   const advancedOpen = isDesktop ? (activeOptions?.isAdvancedOpenGetter?.() ?? false) : false;
   relocatePrecisionFields(advancedOpen ? advancedContainer : null);
   if (els.advancedBtn) {
+    // Desktop-only now: the precision fields no longer have an inline home in
+    // the timeline (their rows aren't mounted — see buildDom), so the
+    // mobile/tablet inline toggle would have nothing to show. The side panel
+    // is where they live.
+    els.advancedBtn.hidden = !isDesktop;
     els.advancedBtn.classList.toggle('active', isDesktop ? advancedOpen : advancedExpanded);
   }
 
@@ -1259,6 +1393,7 @@ export function initTimelinePanel(container, options = {}) {
   // buildDom() just replaced every clip element, so the cached signature would
   // otherwise match and the (now empty) lanes would never be repopulated.
   lastAudioSignature = null;
+  lastTextSignature = null;
   dragClip = null;
   applyAdvancedState();
 
@@ -1325,6 +1460,14 @@ export function initTimelinePanel(container, options = {}) {
   // "+ Sound" opens the sound picker (audition, then place at the playhead);
   // "+ Audio" goes straight to the OS file picker, since choosing a file IS
   // the choice — there is nothing to preview first.
+  // "+ Text" creates an overlay at the playhead and selects it, so the Text
+  // panel is already pointed at what was just created — the next action is
+  // always "type the words".
+  els.addTextBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    textElements.addTextElement({ kind: 'overlay', text: 'New text' });
+  });
+
   els.addSoundBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     openSoundPicker(els.addSoundBtn);

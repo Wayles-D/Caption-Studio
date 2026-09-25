@@ -1018,7 +1018,7 @@ export function getASSStyleFromConfig(params = {}) {
   // ASS only supports a boolean Bold flag (no numeric weight) — derive it from
   // the same fontWeight the CSS preview uses so both sides agree on bold-ness,
   // even though libass can't reproduce the exact numeric weight a browser can.
-  const fontWeightNum = parseInt(profile.fontWeight, 10) || 700;
+  const fontWeightNum = parseInt(params.fontWeight || profile.fontWeight, 10) || 700;
   const bold = fontWeightNum >= 600 ? -1 : 0;
 
   // Keyword-driven styling (e.g. WAYLES) and whether the base active/inactive
@@ -1107,7 +1107,12 @@ export function getCSSPreviewFromConfig(params = {}) {
   // can request its base text render with a specific face (e.g. 'italic')
   // via profile.baseFontFace — every existing preset leaves this unset and
   // keeps resolving 'regular', byte-identical to before this field existed.
-  const baseFontFace = resolveFontFace(params.fontFamily, profile.baseFontFace || 'regular');
+  // params.italic, when set, asks for the italic face regardless of what the
+  // preset wanted — that's how a TEXT ELEMENT (shared/textElement.js) makes
+  // its whole block italic, using the same params bag captions resolve
+  // through rather than a parallel path. Unset (every caption today) leaves
+  // this byte-identical to before.
+  const baseFontFace = resolveFontFace(params.fontFamily, params.italic ? 'italic' : (profile.baseFontFace || 'regular'));
   const fontName = baseFontFace.familyName;
   const feSize = parseInt(params.fontSize || '14', 10);
 
@@ -1271,12 +1276,24 @@ export function getCSSPreviewFromConfig(params = {}) {
       // resolveFontFace() above already guarantees a real, bundled font.
       fontFamily: `'${fontName}'`,
       fontSize: `${feSize}px`,
-      fontWeight: profile.fontWeight,
+      // params.fontWeight overrides the preset's weight for the whole block
+      // (see params.italic above) — unset for every caption, so presets are
+      // unaffected.
+      fontWeight: params.fontWeight || profile.fontWeight,
       // Reflects profile.baseFontFace ('italic' presets, e.g. Chrome Blend) —
       // read back by shared/captionGraphics.js's non-keyword-driven word path
       // so canvas preview/export render the same italic base text the CSS
       // fallback text-layer's font-style would.
       fontStyle: baseFontFace.italic ? 'italic' : 'normal',
+      // Italic was ASKED for but this family ships no real italic file — the
+      // canvas renderer draws the slant itself (see captionGraphics.js's
+      // SYNTHETIC_ITALIC_SKEW), exactly as it already does per word.
+      syntheticItalic: !!params.italic && !baseFontFace.italic,
+      // Canvas2D has no text-decoration, so the renderer draws a bar (see
+      // paintText); textDecoration is the DOM text-layer fallback's version
+      // of the same thing.
+      underline: !!params.underline,
+      textDecoration: params.underline ? 'underline' : 'none',
       // CSS's own equivalent of textBlendMode above, for the legacy DOM
       // text-layer fallback — 'normal' (the vast majority of captions) is a
       // true no-op value here, matching the canvas path leaving the property

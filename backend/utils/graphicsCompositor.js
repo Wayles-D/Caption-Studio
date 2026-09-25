@@ -192,9 +192,24 @@ export function getAudioInfo(inputPath) {
  * @param {string} [textBlendMode] - One of shared/captionConfig.js's TEXT_BLEND_MODES, or falsy/'normal' for the plain overlay.
  * @returns {string[]} One or more filter_complex stage strings (no leading/trailing semicolons) to append after the `[captrack]` concat stage.
  */
-function buildCaptionCompositeStages(baseVideoLabel, textBlendMode) {
+function buildCaptionCompositeStages(baseVideoLabel, textBlendMode, opts = {}) {
+  // Parameterized so this runs once per LAYER. There are up to two: the
+  // transcript's captions (which may blend), and manually placed captions /
+  // text overlays (which never do — see graphicsFrameGenerator.js's
+  // buildTextElementSegments for why they must not inherit the caption's
+  // blend mode). Every intermediate pad is prefixed, so two invocations in
+  // one filter graph can't collide on a label name.
+  const { trackLabel = '[captrack]', outLabel = '[outv]', prefix = 'ct', finalFormat = true } = opts;
+  const pad = (name) => `[${prefix}_${name}]`;
+
   if (!textBlendMode || textBlendMode === 'normal') {
-    return [`${baseVideoLabel}[captrack]overlay=x=0:y=0:format=yuv420[outv]`];
+    // `format=yuv420` is the overlay's own compositing colourspace, and is
+    // only correct as the LAST layer — an intermediate layer stays in rgb so
+    // the next overlay isn't handed a chroma-subsampled base (the same class
+    // of colour shift the blend branch below documents at length).
+    return finalFormat
+      ? [`${baseVideoLabel}${trackLabel}overlay=x=0:y=0:format=yuv420${outLabel}`]
+      : [`${baseVideoLabel}${trackLabel}overlay=x=0:y=0:format=rgb${outLabel}`];
   }
 
   // The blend branch needs the base video TWICE — once to derive the blended
@@ -213,15 +228,19 @@ function buildCaptionCompositeStages(baseVideoLabel, textBlendMode) {
   // applied unconditionally rather than only when a video transform happens
   // to be active — one code path, no special-casing to keep in sync.
   return [
-    `[captrack]split=2[ct_blend_src][ct_alpha_src]`,
-    `[ct_blend_src]format=rgb24[ct_opaque]`,
-    `[ct_alpha_src]alphaextract[ct_alpha]`,
-    `${baseVideoLabel}split=2[ct_base_src][ct_overlay_base]`,
-    `[ct_base_src]format=rgb24[ct_base_rgb]`,
-    `[ct_base_rgb][ct_opaque]blend=all_mode=${textBlendMode}:all_opacity=1[ct_blended_rgb]`,
-    `[ct_blended_rgb][ct_alpha]alphamerge[ct_blended_masked]`,
-    `[ct_overlay_base][ct_blended_masked]overlay=x=0:y=0:format=rgb[ct_composited_rgb]`,
-    `[ct_composited_rgb]format=yuv420p[outv]`
+    `${trackLabel}split=2${pad('blend_src')}${pad('alpha_src')}`,
+    `${pad('blend_src')}format=rgb24${pad('opaque')}`,
+    `${pad('alpha_src')}alphaextract${pad('alpha')}`,
+    `${baseVideoLabel}split=2${pad('base_src')}${pad('overlay_base')}`,
+    `${pad('base_src')}format=rgb24${pad('base_rgb')}`,
+    `${pad('base_rgb')}${pad('opaque')}blend=all_mode=${textBlendMode}:all_opacity=1${pad('blended_rgb')}`,
+    `${pad('blended_rgb')}${pad('alpha')}alphamerge${pad('blended_masked')}`,
+    `${pad('overlay_base')}${pad('blended_masked')}overlay=x=0:y=0:format=rgb${pad('composited_rgb')}`,
+    finalFormat
+      ? `${pad('composited_rgb')}format=yuv420p${outLabel}`
+      // An intermediate layer stays RGB — converting to yuv420p here and
+      // back would chroma-subsample twice for no reason.
+      : `${pad('composited_rgb')}null${outLabel}`
   ];
 }
 
@@ -314,20 +333,28 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // absorbs its span (that neighbour's image covers those sub-frame
     // milliseconds instead). Dropping it is what keeps every other segment on
     // time; the old floor kept it at the cost of delaying everything after it.
-    const timeline = [];
-    let cursor = quantizeTime(segments[0].start);
-    const trackStart = cursor;
-    segments.forEach((segment) => {
-      const end = quantizeTime(segment.end);
-      if (end - cursor < FRAME_QUANTUM / 2) return; // sub-frame — not displayable
-      timeline.push({ file: segment.file, duration: end - cursor });
-      cursor = end;
-    });
-    if (!timeline.length) return reject(new Error('compositeGraphicsCaptionTrack: every segment quantized away to sub-frame length.'));
+    // Runs once per LAYER — there are up to two (see this function's
+    // `textElementSegments` option), and both need identical quantization.
+    // Returns null when a layer quantizes away entirely.
+    const buildLayerTimeline = (layerSegments) => {
+      const entries = [];
+      let cursor = quantizeTime(layerSegments[0].start);
+      const trackStart = cursor;
+      layerSegments.forEach((segment) => {
+        const end = quantizeTime(segment.end);
+        if (end - cursor < FRAME_QUANTUM / 2) return; // sub-frame — not displayable
+        entries.push({ file: segment.file, duration: end - cursor });
+        cursor = end;
+      });
+      if (!entries.length) return null;
+      return { entries, total: cursor - trackStart };
+    };
 
-    const orderedSegments = timeline;
-    const quantizedDurations = timeline.map((entry) => entry.duration);
-    const totalCaptionDuration = cursor - trackStart;
+    const captionLayer = buildLayerTimeline(segments);
+    if (!captionLayer) return reject(new Error('compositeGraphicsCaptionTrack: every segment quantized away to sub-frame length.'));
+
+    const orderedSegments = captionLayer.entries;
+    const totalCaptionDuration = captionLayer.total;
 
     // ffmpeg's concat-demuxer manifest format: one `file '<path>'` line per
     // segment, each preceded by the `duration` (in seconds) that segment
@@ -343,17 +370,34 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // reason: Windows drive-letter colons and backslashes otherwise breaking
     // ffmpeg's own filter/manifest path parsing).
     const escapeConcatPath = (p) => p.replace(/\\/g, '/').replace(/'/g, `'\\''`);
-    const listLines = [];
-    orderedSegments.forEach((entry, idx) => {
-      listLines.push(`file '${escapeConcatPath(entry.file)}'`);
-      listLines.push(`duration ${quantizedDurations[idx].toFixed(3)}`);
-    });
-    listLines.push(`file '${escapeConcatPath(orderedSegments[orderedSegments.length - 1].file)}'`);
+    const writeConcatManifest = (entries) => {
+      const listLines = [];
+      entries.forEach((entry) => {
+        listLines.push(`file '${escapeConcatPath(entry.file)}'`);
+        listLines.push(`duration ${entry.duration.toFixed(3)}`);
+      });
+      listLines.push(`file '${escapeConcatPath(entries[entries.length - 1].file)}'`);
+      const listPath = path.join(os.tmpdir(), `caption-studio-concat-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+      fs.writeFileSync(listPath, listLines.join('\n'), 'utf8');
+      return listPath;
+    };
 
-    const concatListPath = path.join(os.tmpdir(), `caption-studio-concat-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-    fs.writeFileSync(concatListPath, listLines.join('\n'), 'utf8');
+    // The OVERLAY layer — manually placed captions / text overlays, kept as
+    // its own stream so the caption's Text Blend Mode can't be applied to it
+    // (see graphicsFrameGenerator.js's buildTextElementSegments for the bug
+    // that caused). Absent for every project with no text elements, in which
+    // case everything below is exactly the single-track graph it has always
+    // been.
+    const { textElementSegments } = videoTransformOpts;
+    const textLayer = (textElementSegments && textElementSegments.length)
+      ? buildLayerTimeline(textElementSegments)
+      : null;
+
+    const concatListPath = writeConcatManifest(orderedSegments);
+    const textConcatListPath = textLayer ? writeConcatManifest(textLayer.entries) : null;
 
     const inputArgs = ['-y', '-i', inputVideoPath, '-f', 'concat', '-safe', '0', '-i', concatListPath];
+    if (textConcatListPath) inputArgs.push('-f', 'concat', '-safe', '0', '-i', textConcatListPath);
 
     // `fps=` resamples the demuxer's variable, duration-driven timestamps
     // into the same fixed-rate stream `-loop 1 -r 50 -t X` used to produce
@@ -365,6 +409,10 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // entry's duration is a no-op" ambiguity entirely rather than relying on
     // the repeated last-file line above to get it exactly right on its own.
     const captionTrackStage = `[1:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${totalCaptionDuration.toFixed(3)},setpts=PTS-STARTPTS[captrack]`;
+    // Identical treatment for the overlay layer, at input index 2.
+    const textTrackStage = textLayer
+      ? `[2:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${textLayer.total.toFixed(3)},setpts=PTS-STARTPTS[texttrack]`
+      : null;
 
     // The VIDEO's own keyframed transform (see videoTransformFilter.js) —
     // when present, produces a `[vt_out]` stage that REPLACES `[0:v]` as
@@ -387,7 +435,21 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // buildCaptionCompositeStages' own doc comment for why `blend` (which
     // ignores alpha and blends the WHOLE frame) needs the extra split/
     // alphamerge masking step to only affect glyph-covered pixels.
-    const compositeStages = buildCaptionCompositeStages(baseVideoLabel, textBlendMode);
+    // Captions first, then overlays on top — the same z-order the preview
+    // uses (its text canvas sits above the captions canvas). The overlay
+    // pass is always a plain alpha-over: text the user coloured
+    // deliberately must not be dragged through the caption's blend.
+    const captionOutLabel = textTrackStage ? '[after_captions]' : '[outv]';
+    const compositeStages = [
+      ...buildCaptionCompositeStages(baseVideoLabel, textBlendMode, {
+        trackLabel: '[captrack]', outLabel: captionOutLabel, prefix: 'ct', finalFormat: !textTrackStage
+      }),
+      ...(textTrackStage
+        ? buildCaptionCompositeStages(captionOutLabel, 'normal', {
+            trackLabel: '[texttrack]', outLabel: '[outv]', prefix: 'tt', finalFormat: true
+          })
+        : [])
+    ];
 
     // The audio timeline (sound effects + imported tracks — see
     // backend/utils/audioMixFilter.js). Its `-i` arguments are appended AFTER
@@ -398,13 +460,14 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // existed, including still being a stream copy rather than a re-encode.
     const { audio, hasSourceAudio } = videoTransformOpts;
     const audioMix = (audio && duration)
-      ? buildAudioMixGraph(audio, { duration, hasSourceAudio: hasSourceAudio !== false, firstInputIndex: 2 })
+      ? buildAudioMixGraph(audio, { duration, hasSourceAudio: hasSourceAudio !== false, firstInputIndex: textTrackStage ? 3 : 2 })
       : null;
     if (audioMix) inputArgs.push(...audioMix.inputArgs);
 
     const filterComplex = [
       ...(videoTransformChain ? [videoTransformChain.filterComplex] : []),
       captionTrackStage,
+      ...(textTrackStage ? [textTrackStage] : []),
       ...compositeStages,
       ...(audioMix ? audioMix.filterStages : [])
     ].join(';');
@@ -447,11 +510,14 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       outputPath
     ];
 
-    console.log(`Executing FFmpeg Graphics Composite command (${orderedSegments.length} of ${segments.length} segments displayable, via 1 concat-manifest input): ${ffmpegPath} ${args.slice(0, 4).join(' ')} ... [concat list: ${concatListPath}] ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
+    console.log(`Executing FFmpeg Graphics Composite command (${orderedSegments.length} of ${segments.length} segments displayable, via ${textLayer ? 2 : 1} concat-manifest input(s)): ${ffmpegPath} ${args.slice(0, 4).join(' ')} ... [concat list: ${concatListPath}] ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
 
     const cleanupScript = () => {
       try { fs.unlinkSync(filterScriptPath); } catch (cleanupErr) { /* best-effort; a leftover temp file is harmless */ }
       try { fs.unlinkSync(concatListPath); } catch (cleanupErr) { /* best-effort; a leftover temp file is harmless */ }
+      if (textConcatListPath) {
+        try { fs.unlinkSync(textConcatListPath); } catch (cleanupErr) { /* best-effort */ }
+      }
     };
 
     const ffmpegProc = spawn(ffmpegPath, args);
