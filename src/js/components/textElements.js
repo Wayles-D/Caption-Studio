@@ -21,6 +21,26 @@ import {
   MIN_TEXT_ELEMENT_DURATION,
   DEFAULT_TEXT_ELEMENT_DURATION
 } from '../../../shared/textElement.js';
+import {
+  KEYFRAME_PROPERTIES,
+  PHRASE_FIELD_TO_PROPERTY,
+  routeFieldsThroughKeyframes,
+  upsertKeyframeEntry,
+  removeKeyframeEntry,
+  moveKeyframeEntry,
+  findKeyframeEntryNear,
+  evaluatePropertyAtTime
+} from '../../../shared/keyframes.js';
+
+// Property -> the element style field holding its STATIC (un-keyframed)
+// value. Identical to a caption phrase's mapping, which is the point: an
+// element is positioned/scaled/rotated in exactly the same units a caption
+// is, so the timeline's lanes and ranges apply unchanged.
+const STATIC_FIELD_BY_PROPERTY = {
+  positionX: 'customPosX', positionY: 'customPosY',
+  rotation: 'rotation', scale: 'captionScaleMultiplier', opacity: 'opacity'
+};
+const KEYFRAME_PROPERTY_DEFAULTS = { positionX: 50, positionY: 50, rotation: 0, scale: 1, opacity: 100 };
 
 /** The playhead — the same `#preview-video` every other part of the editor treats as the single source of time. */
 export function getPlayheadTime() {
@@ -167,4 +187,144 @@ export function getSelectedTextElement() {
 export function removeSelectedTextElement() {
   const id = appState.selectedTextElementId;
   if (id) removeTextElement(id);
+}
+
+// --- Keyframes -------------------------------------------------------------
+//
+// The text target's keyframe read/write API, modelled on
+// src/js/components/videoTransform.js's — same shape, same shared engine
+// (shared/keyframes.js), plugged into the same dispatcher
+// (src/js/components/keyframeEngine.js). A text element is simpler than a
+// caption: there is no wordIndex fan-out, no scope toggle, no group
+// membership, just one element and one keyframe list.
+//
+// The "override" these functions operate on is the element's own style bag
+// plus its keyframe list — deliberately the SAME shape a caption phrase's
+// override has (see shared/keyframes.js's PHRASE_FIELD_TO_PROPERTY), which
+// is why that field map and every range in the timeline panel are reused
+// verbatim rather than duplicated for a second target kind.
+
+function getSelectedId() {
+  return appState.selectedTextElementId || null;
+}
+
+/** The selected element as a keyframe override: static fields + keyframe list. */
+function getOverride(id = getSelectedId()) {
+  const element = id ? getTextElement(id) : null;
+  if (!element) return null;
+  return { ...(element.style || {}), keyframes: element.keyframes || [] };
+}
+
+/** True while a text element is the active keyframe target (see keyframeEngine.js). */
+export function isTextTargetSelected() {
+  return !!getSelectedId() && !!getTextElement(getSelectedId());
+}
+
+/**
+ * Current resolved (static-or-keyframed) value for `property` at the
+ * playhead — what the timeline panel's property inputs display.
+ */
+export function getCurrentTextElementValue(property) {
+  const override = getOverride();
+  if (!override) return KEYFRAME_PROPERTY_DEFAULTS[property];
+  const kfValue = evaluatePropertyAtTime(override.keyframes, property, getPlayheadTime());
+  if (kfValue !== undefined) return kfValue;
+  const field = STATIC_FIELD_BY_PROPERTY[property];
+  return override[field] != null ? override[field] : KEYFRAME_PROPERTY_DEFAULTS[property];
+}
+
+/**
+ * Writes one animatable property on the selected element, auto-keying through
+ * the same shared primitive captions/words/the video use: once a property has
+ * been keyframed, an ordinary edit updates the keyframe AT the playhead
+ * rather than silently overwriting the static base underneath the animation.
+ */
+export function setTextElementValue(property, value, { recordHistory = true } = {}) {
+  const id = getSelectedId();
+  const element = id ? getTextElement(id) : null;
+  if (!element) return;
+  const field = STATIC_FIELD_BY_PROPERTY[property];
+  const existing = getOverride(id);
+  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(
+    existing, { [field]: value }, PHRASE_FIELD_TO_PROPERTY, getPlayheadTime(), getCurrentTextElementValue
+  );
+  const patch = { style: { ...(element.style || {}), ...remainingFields } };
+  // A position written here is a manual one, for the same reason
+  // resolveTextElementParams stamps it on the read side.
+  if (remainingFields.customPosX != null || remainingFields.customPosY != null) patch.style.position = 'manual';
+  if (nextKeyframes) patch.keyframes = nextKeyframes;
+  updateTextElement(id, patch, { recordHistory });
+}
+
+/**
+ * Several properties in one write — what an on-canvas drag/resize/rotate
+ * gesture uses (see canvasTransform.js's text branch), exactly as the video
+ * target's own gestures use setVideoValues.
+ *
+ * Routing a gesture through here rather than writing the style field
+ * directly is what makes dragging a KEYFRAMED element update the keyframe at
+ * the playhead instead of silently changing the static base underneath the
+ * animation — where the edit would appear to do nothing, because the
+ * keyframe track wins on the read side.
+ */
+export function setTextElementValues(valuesByProperty, { recordHistory = true } = {}) {
+  const id = getSelectedId();
+  const element = id ? getTextElement(id) : null;
+  if (!element) return;
+  const fields = {};
+  Object.entries(valuesByProperty).forEach(([property, value]) => {
+    fields[STATIC_FIELD_BY_PROPERTY[property]] = value;
+  });
+  const { remainingFields, nextKeyframes } = routeFieldsThroughKeyframes(
+    getOverride(id), fields, PHRASE_FIELD_TO_PROPERTY, getPlayheadTime(), getCurrentTextElementValue
+  );
+  const patch = { style: { ...(element.style || {}), ...remainingFields } };
+  if (remainingFields.customPosX != null || remainingFields.customPosY != null) patch.style.position = 'manual';
+  if (nextKeyframes) patch.keyframes = nextKeyframes;
+  updateTextElement(id, patch, { recordHistory });
+}
+
+/** Snapshots every animatable property's CURRENT value into one entry at the playhead. */
+export function addOrUpdateTextElementKeyframeAtPlayhead() {
+  const id = getSelectedId();
+  const element = id ? getTextElement(id) : null;
+  if (!element) return;
+  const valuesPatch = {};
+  KEYFRAME_PROPERTIES.forEach((property) => { valuesPatch[property] = getCurrentTextElementValue(property); });
+  updateTextElement(id, {
+    keyframes: upsertKeyframeEntry(element.keyframes, getPlayheadTime(), valuesPatch)
+  }, { recordHistory: true });
+}
+
+export function hasTextElementKeyframeAtPlayhead() {
+  return !!findKeyframeEntryNear(getOverride()?.keyframes, getPlayheadTime());
+}
+
+export function currentTextElementHasKeyframes() {
+  const list = getOverride()?.keyframes;
+  return Array.isArray(list) && list.length > 0;
+}
+
+export function getTextElementKeyframeTimestamps() {
+  return (getOverride()?.keyframes || []).map((k) => k.t).sort((a, b) => a - b);
+}
+
+export function getTextElementKeyframeEntries() {
+  return getOverride()?.keyframes || [];
+}
+
+export function deleteTextElementKeyframeAt(time) {
+  const id = getSelectedId();
+  const element = id ? getTextElement(id) : null;
+  if (!element) return;
+  const next = removeKeyframeEntry(element.keyframes, time);
+  if (next !== element.keyframes) updateTextElement(id, { keyframes: next }, { recordHistory: true });
+}
+
+export function moveTextElementKeyframeAt(oldTime, newTime) {
+  const id = getSelectedId();
+  const element = id ? getTextElement(id) : null;
+  if (!element) return;
+  const next = moveKeyframeEntry(element.keyframes, oldTime, newTime);
+  if (next !== element.keyframes) updateTextElement(id, { keyframes: next }, { recordHistory: true });
 }

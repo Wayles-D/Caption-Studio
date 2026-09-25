@@ -8,7 +8,7 @@ import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolv
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame } from '../../../shared/captionGraphics.js';
 import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay, setTextElementBoxes } from './canvasTransform.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
-import { getActiveTextElements, textElementToPhrase } from '../../../shared/textElement.js';
+import { getActiveTextElements, textElementToPhrase, resolveTextElementParams } from '../../../shared/textElement.js';
 import { initVideoCanvasControls } from './videoCanvasControls.js';
 import { initAudioEngine } from './audioEngine.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
@@ -217,7 +217,11 @@ function syncTextElementsCanvas(currentTime, baseStyleParams) {
   const boxes = [];
 
   active.forEach((element) => {
-    const params = { ...baseStyleParams, ...element.style };
+    // The SAME resolver the exporter uses — style bag over caption params,
+    // then this element's own keyframes at this instant on top. Sharing it
+    // is what keeps preview and export from ever disagreeing about where an
+    // animated overlay is.
+    const params = resolveTextElementParams(baseStyleParams, element, currentTime);
     const cssConfig = getCSSPreviewFromConfig(params);
     // An element whose font differs from the caption's needs that face loaded
     // before the canvas paints, or it silently falls back — the same trap
@@ -419,6 +423,13 @@ export function initPreviewWorkspace() {
 
   if (previewVideo) {
     previewVideo.addEventListener('timeupdate', updatePreviewFrame);
+    // `timeupdate` alone is not enough for a SEEK on a paused video: browsers
+    // throttle it to roughly 4/s and fire it only once the seek settles, so
+    // scrubbing could leave the caption/overlay layers showing the previous
+    // position for a noticeable beat — and a seek that lands on the same
+    // throttled tick fires no timeupdate at all, leaving them stale
+    // indefinitely. `seeked` fires exactly once per completed seek.
+    previewVideo.addEventListener('seeked', updatePreviewFrame);
 
     previewVideo.addEventListener('play', startPreviewLoop);
     previewVideo.addEventListener('pause', stopPreviewLoop);

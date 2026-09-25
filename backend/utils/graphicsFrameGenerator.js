@@ -32,7 +32,8 @@ import {
   normalizeTextElementList,
   getActiveTextElements,
   getTextElementBoundaryTimes,
-  textElementToPhrase
+  textElementToPhrase,
+  resolveTextElementParams
 } from '../../shared/textElement.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
@@ -430,6 +431,28 @@ async function compositeTextElementsIntoSegments(segments, textElements, params,
   // Every instant at which the visible set changes — used to cut segments so
   // a redraw never spans a moment where text appears or disappears.
   const boundaries = getTextElementBoundaryTimes(active);
+
+  // ...plus dense sample points wherever an element is actually MOVING.
+  // Each rendered slice is one static PNG drawn at its own start time, so a
+  // stretch that is only cut at the element's edges renders a keyframed or
+  // entrance-animated overlay as a single frozen frame in the exported file
+  // while animating correctly in the preview — the same bug class already
+  // found twice here, for caption-level and then per-word animation (see
+  // subdivideSlicesForAnimation's own doc comment).
+  const addSamples = (from, to) => {
+    for (let t = from + ANIMATION_SAMPLE_STEP_SECONDS; t < to; t += ANIMATION_SAMPLE_STEP_SECONDS) boundaries.push(t);
+  };
+  active.forEach((element) => {
+    const kfRange = getKeyframeTimeRange({ keyframes: element.keyframes });
+    if (kfRange) addSamples(Math.max(kfRange.min, element.start), Math.min(kfRange.max, element.end));
+
+    const animType = element.style?.captionAnimationType ?? params.captionAnimationType;
+    if (animType && animType !== 'none') {
+      const requested = element.style?.captionAnimationDuration ?? params.captionAnimationDuration ?? 0.25;
+      const duration = Math.min(requested, element.end - element.start);
+      if (duration > 0) addSamples(element.start, element.start + duration);
+    }
+  });
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
@@ -470,7 +493,10 @@ async function compositeTextElementsIntoSegments(segments, textElements, params,
       if (captionImage) ctx.drawImage(captionImage, 0, 0);
 
       visible.forEach((element) => {
-        const elementParams = { ...params, ...element.style };
+        // Shared with the live preview (src/js/components/preview.js's
+        // syncTextElementsCanvas) so an animated overlay resolves identically
+        // on both sides — see resolveTextElementParams.
+        const elementParams = resolveTextElementParams(params, element, start);
         drawCaptionFrameForExport(ctx, {
           canvasWidth,
           canvasHeight,

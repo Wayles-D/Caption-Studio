@@ -59,7 +59,11 @@ const RANGE_BY_FAMILY = {
 
 function familyFor(kind) {
   if (kind === 'video') return 'video';
-  if (kind === 'caption') return 'caption';
+  // A text element is positioned, scaled and rotated in exactly the same
+  // units a caption is (frame percentage, multiplier, degrees — see
+  // shared/textElement.js's resolveTextElementParams), so it shares the
+  // caption ranges rather than needing a family of its own.
+  if (kind === 'caption' || kind === 'text') return 'caption';
   return 'word'; // word | keyword | group
 }
 

@@ -56,7 +56,7 @@ import { appState, updateState } from '../state.js';
 import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
 import { setWordKeyword } from './transcriptEditorState.js';
 import { deselectVideoTarget } from './videoTransform.js';
-import { getTextElement, updateTextElementStyle, selectTextElement } from './textElements.js';
+import { getTextElement, updateTextElement, updateTextElementStyle, setTextElementValues, selectTextElement } from './textElements.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../../../shared/captionGraphics.js';
 
@@ -1612,17 +1612,19 @@ function effectiveTextElementValue(id, field, fallback) {
 }
 
 /**
- * The element's OWN stored values for `fields` before a gesture starts, with
- * absent keys as explicit nulls (updateTextElementStyle reads null as
- * "delete this key" — i.e. go back to inheriting, which is exactly the right
- * restore for an element that had never been moved). See endTextDrag for why
- * a gesture has to be able to rewind itself.
+ * The element's complete pre-gesture state — its whole style bag AND its
+ * keyframe list, not a handful of named fields.
+ *
+ * Whole-element on purpose: a gesture on a KEYFRAMED element writes into the
+ * keyframe track rather than the static field (see
+ * textElements.js's setTextElementValues), so a rewind that only restored
+ * named style keys would leave the mutated keyframe behind. See endTextDrag
+ * for why a gesture has to be able to rewind itself at all.
  */
-function textStyleSnapshot(id, fields) {
-  const style = getTextElement(id)?.style || {};
-  const out = {};
-  fields.forEach((f) => { out[f] = style[f] == null ? null : style[f]; });
-  return out;
+function textElementSnapshot(id) {
+  const element = getTextElement(id);
+  if (!element) return null;
+  return { style: { ...(element.style || {}) }, keyframes: element.keyframes || [] };
 }
 
 function beginTextMove(e) {
@@ -1634,7 +1636,7 @@ function beginTextMove(e) {
     kind: 'move',
     pointerId: e.pointerId,
     textElementId: selectedTextElementId,
-    startStyle: textStyleSnapshot(selectedTextElementId, ['position', 'customPosX', 'customPosY']),
+    startStyle: textElementSnapshot(selectedTextElementId),
     // Delta-based, for the same reason the whole-caption move is (see
     // onPointerMove): the element is grabbed wherever the user clicked, not
     // at its center, so snapping its anchor to the cursor would jump it by
@@ -1661,7 +1663,7 @@ function beginTextResize(e, corner) {
     pointerId: e.pointerId,
     textElementId: selectedTextElementId,
     corner,
-    startStyle: textStyleSnapshot(selectedTextElementId, ['fontSize']),
+    startStyle: textElementSnapshot(selectedTextElementId),
     startDist: Math.hypot(x - box.centerX / scale, y - box.centerY / scale) || 1,
     startFontSize: effectiveTextElementValue(selectedTextElementId, 'fontSize', appState.fontSize)
   };
@@ -1671,7 +1673,7 @@ function beginTextResize(e, corner) {
 function beginTextRotate(e) {
   drag = {
     kind: 'rotate', pointerId: e.pointerId, textElementId: selectedTextElementId,
-    startStyle: textStyleSnapshot(selectedTextElementId, ['rotation'])
+    startStyle: textElementSnapshot(selectedTextElementId)
   };
   e.target.setPointerCapture(e.pointerId);
 }
@@ -1693,22 +1695,27 @@ function onTextPointerMove(e) {
   if (drag.kind === 'move') {
     const xPct = (x / rect.width) * 100;
     const yPct = (y / rect.height) * 100;
-    updateTextElementStyle(id, {
-      // Stamped explicitly: an element inheriting an ANCHORED position
-      // (e.g. 'bottom') has nowhere for a dragged coordinate to go, so the
-      // first drag is also what switches it to manual placement.
-      position: 'manual',
-      customPosX: Math.max(0, Math.min(100, drag.startPosXPct + (xPct - drag.startPointerXPct))),
-      customPosY: Math.max(0, Math.min(100, drag.startPosYPct + (yPct - drag.startPointerYPct)))
+    // Through setTextElementValues, not a raw style write: on a keyframed
+    // element this updates the keyframe AT the playhead instead of the
+    // static base underneath it (which the keyframe track would win over,
+    // making the drag look like it did nothing). It also stamps
+    // position:'manual' — an element inheriting an ANCHORED position has
+    // nowhere to put a dragged coordinate.
+    setTextElementValues({
+      positionX: Math.max(0, Math.min(100, drag.startPosXPct + (xPct - drag.startPointerXPct))),
+      positionY: Math.max(0, Math.min(100, drag.startPosYPct + (yPct - drag.startPointerYPct)))
     }, { recordHistory: false });
   } else if (drag.kind === 'resize') {
+    // fontSize is a plain style field, not one of the five animatable
+    // properties (scale is captionScaleMultiplier) — exactly as a caption's
+    // own corner-resize writes fontSize rather than keyframing scale.
     const ratio = (Math.hypot(x - centerX, y - centerY) || 1) / drag.startDist;
     updateTextElementStyle(id, {
       fontSize: Math.max(6, Math.min(150, Math.round(drag.startFontSize * ratio)))
     }, { recordHistory: false });
   } else if (drag.kind === 'rotate') {
     const angleDeg = (Math.atan2(y - centerY, x - centerX) * 180) / Math.PI;
-    updateTextElementStyle(id, { rotation: Math.round(angleDeg + 90) }, { recordHistory: false });
+    setTextElementValues({ rotation: Math.round(angleDeg + 90) }, { recordHistory: false });
   }
 }
 
@@ -1725,15 +1732,10 @@ function onTextPointerMove(e) {
  */
 function endTextDrag(d) {
   const id = d.textElementId;
-  const style = getTextElement(id)?.style;
-  if (!style) return;
-  const final = d.kind === 'move'
-    ? { position: 'manual', customPosX: style.customPosX, customPosY: style.customPosY }
-    : d.kind === 'resize'
-      ? { fontSize: style.fontSize }
-      : { rotation: style.rotation };
-  if (d.startStyle) updateTextElementStyle(id, d.startStyle, { recordHistory: false });
-  updateTextElementStyle(id, final, { recordHistory: true });
+  const final = textElementSnapshot(id);
+  if (!final) return;
+  if (d.startStyle) updateTextElement(id, d.startStyle, { recordHistory: false });
+  updateTextElement(id, final, { recordHistory: true });
 }
 
 /**
