@@ -23,6 +23,7 @@ import { promptForAudioFile } from './audioImport.js';
 import { listSounds, getSoundDefinition } from '../../../shared/soundRegistry.js';
 import { getAudioTrackDuration } from '../../../shared/audioTimeline.js';
 import * as textElements from './textElements.js';
+import * as captionEvents from './captionEvents.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 
 const LANES = [
@@ -890,9 +891,15 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
     if (kind === 'text') {
       textElements.selectTextElement(clip.id);
       audioTimeline.selectClip(null);
+      captionEvents.selectCaptionEvent(null);
+    } else if (kind === 'caption') {
+      captionEvents.selectCaptionEvent(clip.id);
+      textElements.selectTextElement(null);
+      audioTimeline.selectClip(null);
     } else {
       audioTimeline.selectClip(clip.id);
       textElements.selectTextElement(null);
+      captionEvents.selectCaptionEvent(null);
     }
     const rect = el.parentElement.getBoundingClientRect();
     const duration = getVideo()?.duration || 0;
@@ -955,6 +962,7 @@ function applyClipDrag(clientX, el, options) {
     const nextStart = pointerTime - dragClip.grabOffsetSeconds;
     if (dragClip.kind === 'sound') audioTimeline.moveSoundEvent(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'text') textElements.moveTextElement(dragClip.id, nextStart, options);
+    else if (dragClip.kind === 'caption') captionEvents.moveCaptionEventTo(dragClip.id, nextStart, options);
     else audioTimeline.moveAudioTrack(dragClip.id, nextStart, options);
     return;
   }
@@ -964,6 +972,14 @@ function applyClipDrag(clientX, el, options) {
   // move the source offset to keep the audio under the cursor still.
   if (dragClip.kind === 'text') {
     textElements.trimTextElement(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
+    return;
+  }
+
+  // A caption's words stay where they are when its edges move — trimming
+  // changes how long it is on screen, not when it was spoken (see
+  // shared/captionEvent.js's trimCaptionEvent).
+  if (dragClip.kind === 'caption') {
+    captionEvents.trimCaptionEventEdge(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
     return;
   }
 
@@ -1123,10 +1139,57 @@ function buildTextClip(element, duration, isSelected) {
   return el;
 }
 
+/**
+ * One clip for one of the TRANSCRIPT's captions (shared/captionEvent.js) —
+ * what is actually on screen at that moment, the way every other editor
+ * shows it.
+ *
+ * Built as a `.timeline-text-clip` like a manual caption rather than as its
+ * own thing: the two are the same object to the user (a caption, on the
+ * captions lane, that can be dragged and trimmed), and sharing the element
+ * means sharing every gesture, selection and stacking path already built for
+ * it. Only the drag FAMILY differs ('caption' vs 'text'), which is what routes
+ * the edit to the right module.
+ */
+function buildCaptionEventClip(event, duration, isSelected) {
+  const el = document.createElement('div');
+  el.className = 'timeline-text-clip is-caption is-transcript';
+  if (isSelected) el.classList.add('selected');
+
+  el.style.left = `${timeToPercent(event.start, duration)}%`;
+  el.style.width = `${Math.max(1, timeToPercent(event.end, duration) - timeToPercent(event.start, duration))}%`;
+  el.dataset.clipId = event.id;
+  el.tabIndex = 0;
+
+  const words = appState.words || [];
+  const text = event.wordIndices.map((i) => (words[i]?.word ?? '').trim()).filter(Boolean).join(' ');
+  el.title = `${text || '(caption)'} · ${event.start.toFixed(2)}s → ${event.end.toFixed(2)}s`
+    + ' — drag to retime, drag an edge to change how long it shows, S to split at the playhead';
+
+  const label = document.createElement('span');
+  label.className = 'timeline-text-clip-label';
+  label.textContent = text || 'Caption';
+  el.appendChild(label);
+
+  attachClipPointerHandlers(el, event, 'caption', 'move');
+
+  ['start', 'end'].forEach((edge) => {
+    const handle = document.createElement('div');
+    handle.className = `timeline-text-clip-handle ${edge}`;
+    handle.title = edge === 'start' ? 'Change when it appears' : 'Change when it disappears';
+    attachClipPointerHandlers(handle, event, 'caption', edge === 'start' ? 'trim-start' : 'trim-end');
+    el.appendChild(handle);
+  });
+
+  return el;
+}
+
 function refreshTextLane(duration) {
   const elements = appState.textElements || [];
   const selectedId = appState.selectedTextElementId;
-  const signature = JSON.stringify({ elements, selectedId, duration });
+  const events = appState.captionEvents || [];
+  const selectedCaptionId = appState.selectedCaptionEventId;
+  const signature = JSON.stringify({ elements, selectedId, events, selectedCaptionId, duration });
   // Same two invariants refreshAudioLanes documents: never rebuild mid-drag
   // (a DOM swap under the pointer kills the gesture), and never
   // replaceChildren (the in-strip "+" is a child of the track).
@@ -1143,6 +1206,17 @@ function refreshTextLane(duration) {
   // depends on its kind.
   const captionClips = [];
   const overlayClips = [];
+
+  // The TRANSCRIPT's own captions share the Captions lane with manually
+  // placed ones — to the user they are the same thing (a caption, on the
+  // captions lane) and they stack against each other through the same
+  // packer, so an overlap between the two is as reachable as any other.
+  events.forEach((event) => {
+    const clip = buildCaptionEventClip(event, duration, event.id === selectedCaptionId);
+    captionClips.push(clip);
+    els.captionsTrack.appendChild(clip);
+  });
+
   elements.forEach((element) => {
     const clip = buildTextClip(element, duration, element.id === selectedId);
     if (element.kind === 'caption') {

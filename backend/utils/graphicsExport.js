@@ -18,6 +18,7 @@ import path from 'path';
 import { canGenerateGraphicsFrames, buildFullTimelineSegments } from './graphicsFrameGenerator.js';
 import { compositeGraphicsCaptionTrack, getVideoInfo } from './graphicsCompositor.js';
 import { groupWordsToPhrases, sanitizePhraseTimings } from './phraseGrouper.js';
+import { normalizeCaptionEventList, resolveCaptionPhrases } from '../../shared/captionEvent.js';
 import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
 
 /**
@@ -69,7 +70,17 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
 
   let phrases;
   try {
-    phrases = sanitizePhraseTimings(groupWordsToPhrases({ words }));
+    // CAPTION EVENTS WIN when the project has them (see
+    // shared/captionEvent.js). Regrouping the word list here would discard
+    // every retime, split and merge the user made — the grouper is a pure
+    // function of word timings and pauses, so a caption dragged next to its
+    // neighbour would come back MERGED with it, and a split caption would
+    // come back whole. The grouper still produces the first version of the
+    // list; after that this renders what the user actually has on screen.
+    const captionEvents = normalizeCaptionEventList(params.captionEvents);
+    phrases = captionEvents.length
+      ? sanitizePhraseTimings(resolveCaptionPhrases(words, captionEvents))
+      : sanitizePhraseTimings(groupWordsToPhrases({ words }));
   } catch (err) {
     console.error(`[GraphicsExport] Failed to group words into phrases, falling back to ASS: ${err.message}`, err.stack);
     return recordFailure('phrase-grouping', err.message, err.stack);

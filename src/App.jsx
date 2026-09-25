@@ -23,6 +23,7 @@ import { collectEditedWords } from './js/components/transcriptEditorState.js';
 import { applySemanticEvents } from './js/components/audioTimeline.js';
 import * as audioTimelineApi from './js/components/audioTimeline.js';
 import * as textElementsApi from './js/components/textElements.js';
+import * as captionEventsApi from './js/components/captionEvents.js';
 import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
@@ -330,6 +331,7 @@ export function App() {
       // for the same reason __audioTimeline is: e2e drives real clip
       // create/move/trim without depending on pointer gymnastics.
       window.__textElements = textElementsApi;
+      window.__captionEvents = captionEventsApi;
     }
   }, []);
 
@@ -399,6 +401,12 @@ export function App() {
         isProcessing: false,
         isLoaded: true
       }, { recordHistory: false });
+
+      // The handoff from "grouped automatically" to "owned by the user" —
+      // see shared/captionEvent.js. `force` because this is a brand new
+      // transcript: whatever caption list a previous video left behind
+      // addresses word indices that no longer mean anything.
+      captionEventsApi.captureCaptionEventsFromPhrases(data.phrases || [], { force: true });
 
       setVideoSrc(URL.createObjectURL(file));
       setViewState('video');
@@ -502,6 +510,15 @@ export function App() {
         phrases: result.phrases || appState.phrases,
         isProcessing: false
       }, { recordHistory: false });
+
+      // NOT forced: a regenerate returns freshly grouped phrases, and
+      // adopting them would silently undo every retime, split and merge the
+      // user has made. captureCaptionEventsFromPhrases only fills an EMPTY
+      // list, so this seeds captions for a project that predates caption
+      // events and is a no-op for one that already has them. The edited list
+      // is then re-projected so `phrases` reflects any transcript text edits.
+      captionEventsApi.captureCaptionEventsFromPhrases(result.phrases || []);
+      captionEventsApi.refreshPhrasesFromCaptionEvents();
 
       setViewState('video');
       if (result.renderedWithEffects === false) {
