@@ -350,6 +350,18 @@ export function App() {
     setTimeout(() => setToastVisible(false), 2500);
   }, []);
 
+  // A render PROBLEM is not a toast. When the advanced renderer falls back,
+  // the exported file is genuinely missing effects the user asked for
+  // (caption transform keyframes, text blend mode, text overlays), and the
+  // reason is an ffmpeg error far too long to read — let alone remember — in
+  // the 2.5 seconds a toast is on screen. Reported by a user who hit this
+  // repeatedly and could only say "there's that error, but I can't remember
+  // the error", which is exactly what a disappearing notice produces.
+  //
+  // So this one stays until it is dismissed, and can be copied in one click.
+  const [renderIssue, setRenderIssue] = useState(null);
+  const [renderIssueCopied, setRenderIssueCopied] = useState(false);
+
   const handleFileSelected = useCallback(async (file) => {
     if (!file.type.startsWith('video/')) {
       showToast('Please select a valid video file.');
@@ -512,9 +524,17 @@ export function App() {
     showToast("Re-rendering captioned video...");
     const { ok, renderedWithEffects, graphicsFailureReason } = await renderCurrentEditsToServer();
     if (ok) {
-      showToast(renderedWithEffects
-        ? "Render complete! Ready to download."
-        : `Rendered, but without some caption effects (position/rotation/blend) — the advanced renderer couldn't run this time.${graphicsFailureReason ? ` Reason: ${graphicsFailureReason.stage} — ${graphicsFailureReason.message}` : ""}`);
+      if (renderedWithEffects) {
+        showToast('Render complete! Ready to download.');
+        setRenderIssue(null);
+      } else {
+        setRenderIssue({
+          stage: graphicsFailureReason?.stage || 'render',
+          message: graphicsFailureReason?.message || 'The advanced renderer could not run, and no reason was reported.',
+          detail: graphicsFailureReason?.stack || null
+        });
+        setRenderIssueCopied(false);
+      }
     }
   }, [renderCurrentEditsToServer, showToast]);
 
@@ -820,6 +840,53 @@ export function App() {
       >
         {toastMessage}
       </div>
+
+      {renderIssue && (
+        <div
+          id="render-issue-banner"
+          className="fixed bottom-6 right-6 max-w-[520px] bg-[var(--bg-card)] border border-[#ef4444]
+            text-[var(--text-primary)] rounded-[var(--radius-md)] shadow-[var(--shadow-md)] z-[1001] p-4 flex flex-col gap-2"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <span className="text-[12px] font-bold uppercase tracking-[0.05em] text-[#ef4444]">
+              Exported without some effects
+            </span>
+            <button
+              type="button"
+              id="render-issue-dismiss"
+              className="bg-transparent border-0 text-[var(--text-muted)] cursor-pointer text-[16px] leading-none p-0 hover:text-[var(--text-primary)]"
+              onClick={() => setRenderIssue(null)}
+              aria-label="Dismiss"
+            >×</button>
+          </div>
+          <p className="text-[12px] m-0 text-[var(--text-secondary)]">
+            The advanced renderer failed, so this file was produced by the fallback — caption
+            position/rotation/scale keyframes, text blend mode and text overlays are missing from it.
+          </p>
+          <code
+            id="render-issue-message"
+            className="text-[11px] font-mono whitespace-pre-wrap break-words bg-[var(--bg-input)]
+              border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 max-h-[160px] overflow-auto"
+          >
+            {renderIssue.stage}: {renderIssue.message}
+          </code>
+          <button
+            type="button"
+            id="render-issue-copy"
+            className="h-8 self-start px-3 bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)]
+              font-bold text-[11px] rounded-[var(--radius-sm)] cursor-pointer hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]"
+            onClick={() => {
+              const full = `[${renderIssue.stage}] ${renderIssue.message}${renderIssue.detail ? `\n\n${renderIssue.detail}` : ''}`;
+              navigator.clipboard?.writeText(full).then(
+                () => setRenderIssueCopied(true),
+                () => setRenderIssueCopied(false)
+              );
+            }}
+          >
+            {renderIssueCopied ? 'Copied' : 'Copy details'}
+          </button>
+        </div>
+      )}
     </>
   );
 }
