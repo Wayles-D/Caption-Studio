@@ -786,6 +786,86 @@ function clearClips(track) {
   track.querySelectorAll('.timeline-sfx-clip, .timeline-audio-clip, .timeline-text-clip').forEach((el) => el.remove());
 }
 
+// One sub-row of a lane, in px. A lane holds as many of these as it needs to
+// keep overlapping clips apart (see stackClips).
+const CLIP_ROW_HEIGHT_PX = 30;
+const CLIP_ROW_GAP_PX = 3;
+
+/**
+ * Lays a lane's clips out in as few sub-rows as possible so that none of them
+ * visually covers another, and returns how many rows that took.
+ *
+ * Why this exists: clips are positioned by TIME, so two that overlap in time
+ * land on top of each other and only the topmost can be clicked or dragged —
+ * the one behind becomes uneditable with no way to get at it. Stacking them
+ * is what CapCut does, and it needs no extra interaction: a lane with no
+ * overlaps still renders as a single row and looks exactly as it did.
+ *
+ * Packing is done on each clip's ON-SCREEN span, not its time span. A sound
+ * effect is a point in time but renders as a pill of real width, so two
+ * effects a few hundredths of a second apart genuinely overlap on screen
+ * while their times do not. Measuring the laid-out elements is what makes
+ * "do these collide" mean the same thing the user sees.
+ *
+ * @param {HTMLElement} track - The lane strip the clips were just appended to.
+ * @param {HTMLElement[]} clips - Those clips, any order.
+ * @returns {number} Rows used (>= 1), for sizing the lane.
+ */
+function stackClips(track, clips) {
+  if (!clips.length) return 1;
+
+  const trackWidth = track.clientWidth || 1;
+  const spans = clips.map((el) => {
+    // offsetLeft/offsetWidth are the real laid-out box, so a pill's minimum
+    // rendered width counts even when its clip has no duration at all.
+    const left = el.offsetLeft;
+    return { el, left, right: left + Math.max(el.offsetWidth, 1) };
+  }).sort((a, b) => a.left - b.left);
+
+  // Greedy first-fit: a clip joins the first row whose last clip already
+  // ended before it starts, else it opens a new row. One pixel of slack so
+  // two clips that merely touch don't get split onto separate rows.
+  const rowEnds = [];
+  spans.forEach((span) => {
+    let row = rowEnds.findIndex((end) => span.left >= end - 1);
+    if (row === -1) {
+      rowEnds.push(span.right);
+      row = rowEnds.length - 1;
+    } else {
+      rowEnds[row] = span.right;
+    }
+    const rowTop = row * (CLIP_ROW_HEIGHT_PX + CLIP_ROW_GAP_PX) + CLIP_ROW_GAP_PX;
+    if (span.el.classList.contains('timeline-sfx-clip')) {
+      // A sound-effect pill keeps its own small fixed height and is centred
+      // on its anchor by `transform: translateY(-50%)`, so it gets the row's
+      // CENTRE line rather than its top edge, and no height at all.
+      span.el.style.top = `${rowTop + CLIP_ROW_HEIGHT_PX / 2}px`;
+    } else {
+      span.el.style.top = `${rowTop}px`;
+      span.el.style.height = `${CLIP_ROW_HEIGHT_PX}px`;
+    }
+    span.el.dataset.stackRow = String(row);
+  });
+  void trackWidth;
+  return Math.max(1, rowEnds.length);
+}
+
+/**
+ * Grows a lane AND its strip to fit however many sub-rows its clips needed.
+ *
+ * Both, not just the lane: the strip is the clips' positioning container, so
+ * a strip left at its old height lets a second-row clip render OUTSIDE it —
+ * where it is drawn over whatever follows in the document and is no longer
+ * hit-testable at all (measured: lane 69px, strip still 24px, and the
+ * stacked pill's own centre resolved to the panel underneath the timeline).
+ */
+function sizeLaneForRows(track, rows) {
+  const height = rows * (CLIP_ROW_HEIGHT_PX + CLIP_ROW_GAP_PX) + CLIP_ROW_GAP_PX;
+  track.style.minHeight = `${height}px`;
+  const lane = track.closest('.timeline-lane');
+  if (lane) lane.style.minHeight = `${height}px`;
+}
+
 /** Seconds -> percentage across a lane track, clamped so a clip can't render outside its own lane. */
 function timeToPercent(time, duration) {
   if (!duration || duration <= 0) return 0;
@@ -1061,20 +1141,23 @@ function refreshTextLane(duration) {
   // the same clip element (see buildTextClip), so every drag/trim/select/
   // delete path stays shared — only which strip a clip is appended to
   // depends on its kind.
-  let captionCount = 0;
-  let overlayCount = 0;
+  const captionClips = [];
+  const overlayClips = [];
   elements.forEach((element) => {
     const clip = buildTextClip(element, duration, element.id === selectedId);
     if (element.kind === 'caption') {
-      captionCount++;
+      captionClips.push(clip);
       els.captionsTrack.appendChild(clip);
     } else {
-      overlayCount++;
+      overlayClips.push(clip);
       els.textTrack.appendChild(clip);
     }
   });
-  els.textTrack.classList.toggle('is-empty', overlayCount === 0);
-  els.captionsTrack.classList.toggle('is-empty', captionCount === 0);
+  // Stacked AFTER appending — the packer measures the real laid-out boxes.
+  sizeLaneForRows(els.textTrack, stackClips(els.textTrack, overlayClips));
+  sizeLaneForRows(els.captionsTrack, stackClips(els.captionsTrack, captionClips));
+  els.textTrack.classList.toggle('is-empty', overlayClips.length === 0);
+  els.captionsTrack.classList.toggle('is-empty', captionClips.length === 0);
 }
 
 function refreshAudioLanes(duration) {
@@ -1093,11 +1176,17 @@ function refreshAudioLanes(duration) {
   clearClips(els.audioTrack);
   if (!(duration > 0)) return;
 
+  const sfxClips = [];
+  const audioClips = [];
   soundEvents.forEach((event) => {
-    els.sfxTrack.appendChild(buildSoundClip(event, duration, event.id === selectedId));
+    const clip = buildSoundClip(event, duration, event.id === selectedId);
+    sfxClips.push(clip);
+    els.sfxTrack.appendChild(clip);
   });
   audioTracks.forEach((track) => {
-    els.audioTrack.appendChild(buildAudioClip(track, duration, track.id === selectedId));
+    const clip = buildAudioClip(track, duration, track.id === selectedId);
+    audioClips.push(clip);
+    els.audioTrack.appendChild(clip);
   });
 
   // The in-strip "+" sits at the strip's left edge, which is exactly where a
@@ -1105,6 +1194,9 @@ function refreshAudioLanes(duration) {
   // than let it cover that clip's own label permanently, an occupied lane
   // reveals its "+" on hover instead; an EMPTY lane keeps it plainly visible,
   // which is the case where discoverability actually matters.
+  // Stacked AFTER appending — the packer measures the real laid-out boxes.
+  sizeLaneForRows(els.sfxTrack, stackClips(els.sfxTrack, sfxClips));
+  sizeLaneForRows(els.audioTrack, stackClips(els.audioTrack, audioClips));
   els.sfxTrack.classList.toggle('is-empty', soundEvents.length === 0);
   els.audioTrack.classList.toggle('is-empty', audioTracks.length === 0);
 }

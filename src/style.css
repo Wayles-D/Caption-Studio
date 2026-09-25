@@ -1218,8 +1218,15 @@ body.light-theme {
    Both sit on the SAME 168px-gutter grid as the ruler, the filmstrip and the
    property lanes, so a clip's position lines up exactly with the ruler ticks,
    the keyframe markers on the video row, and the shared playhead. */
+/* Clip lanes (SFX / Audio / Captions / Text). Tall enough for a clip's
+   label to be readable and for its trim edges to be grabbable without
+   precision aiming — 34px left the strips cramped and the handles fiddly.
+   This is only a FLOOR: a lane with clips that overlap in time grows to fit
+   however many sub-rows it takes to keep them all reachable (see
+   timelinePanel.js's stackClips / sizeLaneForRows, which set min-height
+   inline). */
 .timeline-audio-lane {
-  min-height: 34px;
+  min-height: 42px;
 }
 
 .timeline-audio-lane .timeline-lane-label {
@@ -1463,8 +1470,10 @@ body.light-theme {
    at a glance. */
 .timeline-text-clip {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  /* top/height are set inline by stackClips once the clip is laid out; these
+     are the single-row fallback for anything not yet measured. */
+  top: 3px;
+  bottom: 3px;
   display: flex;
   align-items: center;
   min-width: 14px;
