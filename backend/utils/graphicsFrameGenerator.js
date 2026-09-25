@@ -470,7 +470,23 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     const end = boundaries[i + 1];
     if (end - start < 0.001) continue;
 
-    const visible = getActiveTextElements(active, start);
+    // Which elements cover the HALF-OPEN span [start, end), not "which are
+    // visible at the instant `start`".
+    //
+    // The instant test is what getActiveTextElements does, and it is
+    // inclusive at the end (`time <= el.end`) — correct for the preview,
+    // which asks about one moment, and wrong here: a segment is a stretch of
+    // time, and an element whose end lands exactly on this cut would be
+    // counted as still visible and then rendered for the segment's ENTIRE
+    // span. Every element bled one segment past its own end, and for the
+    // last elements on the timeline that segment runs to the end of the
+    // video — so they never disappeared at all (reported: "office and hacks
+    // stayed till end of the video").
+    //
+    // A plain overlap test is exact here with no epsilon, because the cuts
+    // are taken AT every element boundary: no element can partially cover a
+    // segment, so "overlaps" and "covers" are the same thing.
+    const visible = active.filter((el) => el.start < end && el.end > start);
     if (!visible.length) {
       // Nothing on screen — the shared fully-transparent frame, exactly as
       // the caption stream fills its own gaps.

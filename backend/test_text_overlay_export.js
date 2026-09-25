@@ -196,5 +196,63 @@ assert.ok(overFrame.countNearWhite() > 150,
   'A white overlay sitting on top of a yellow caption must still read as white');
 console.log('✓ The overlay is on top');
 
+// ---------------------------------------------------------------------------
+// 5. Consecutive overlays each disappear at their OWN end
+// ---------------------------------------------------------------------------
+console.log('\n[Test 5] Back-to-back overlays disappear when they should');
+// Reported against a real export of "Five home office hacks", timed word by
+// word: "five" and "home" went away, but "office" and "hacks" stayed on
+// screen until the video ended.
+//
+// Cause: the slicer asked getActiveTextElements "what is visible AT this
+// segment's start time", and that test was inclusive at the end
+// (`time <= el.end`). An element whose end landed exactly on a cut counted
+// as still visible and was then drawn for that segment's whole span — so
+// every element bled one segment past its end, and for the LAST elements on
+// the timeline that segment runs to the end of the video. Two elements
+// sharing an end time (adjacent words very often do) both got stuck.
+const words = [
+  { id: 'w1', kind: 'overlay', start: 0.0, end: 0.5, text: 'FIVE', enabled: true, keyframes: [], style: { position: 'manual', customPosX: 50, customPosY: 50, fontSize: 30 } },
+  { id: 'w2', kind: 'overlay', start: 0.5, end: 1.0, text: 'HOME', enabled: true, keyframes: [], style: { position: 'manual', customPosX: 50, customPosY: 50, fontSize: 30 } },
+  // Same end time, which is what made TWO of them stick in the report.
+  { id: 'w3', kind: 'overlay', start: 1.0, end: 1.5, text: 'OFFICE', enabled: true, keyframes: [], style: { position: 'manual', customPosX: 35, customPosY: 50, fontSize: 30 } },
+  { id: 'w4', kind: 'overlay', start: 1.0, end: 1.5, text: 'HACKS', enabled: true, keyframes: [], style: { position: 'manual', customPosX: 65, customPosY: 50, fontSize: 30 } }
+];
+const wordFrames = path.join(work, 'frames-words');
+fs.mkdirSync(wordFrames, { recursive: true });
+const wordLayers = buildFullTimelineSegments(
+  phrases, baseParams({ textElements: words }), WIDTH, HEIGHT, DURATION, wordFrames
+);
+
+const tail = wordLayers.text[wordLayers.text.length - 1];
+console.log(`  last text segment: [${tail.start.toFixed(3)}, ${tail.end.toFixed(3)}) -> ${path.basename(tail.file)}`);
+assert.ok(tail.start >= 1.5 - 1e-9, 'the final text segment must begin once the last element has ended');
+
+// The honest check is the rendered pixels, not the segment list: every
+// segment from the last element's end onward must be genuinely empty.
+const { loadImage } = await import('@napi-rs/canvas');
+const inkOf = async (file) => {
+  const img = await loadImage(file);
+  const c = createCanvas(WIDTH, HEIGHT);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+  let n = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 40) n++;
+  return n;
+};
+
+for (const segment of wordLayers.text) {
+  const ink = await inkOf(segment.file);
+  const shouldBeEmpty = segment.start >= 1.5 - 1e-9;
+  console.log(`  [${segment.start.toFixed(3)}, ${segment.end.toFixed(3)})  ink=${ink}`);
+  if (shouldBeEmpty) {
+    assert.strictEqual(ink, 0, `Nothing may still be drawn at ${segment.start.toFixed(3)}s — every element ended by 1.5s`);
+  } else {
+    assert.ok(ink > 0, `Text is expected on screen at ${segment.start.toFixed(3)}s but the frame is empty`);
+  }
+}
+console.log('✓ Each overlay ends exactly when it should; none survive to the end of the video');
+
 fs.rmSync(work, { recursive: true, force: true });
 console.log('\n--- All text-overlay export checks passed ---');

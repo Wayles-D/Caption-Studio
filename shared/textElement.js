@@ -121,7 +121,15 @@ export function getActiveTextElements(elements, time, kind = null) {
     el.enabled
     && (kind == null || el.kind === kind)
     && time >= el.start
-    && time <= el.end
+    // HALF-OPEN at the end: an element is on screen over [start, end), not
+    // [start, end]. With back-to-back elements the inclusive form showed the
+    // outgoing and incoming one together for one instant, and — because the
+    // exporter used this same test to decide what a whole SEGMENT contains —
+    // made every element bleed past its end in the rendered file (see
+    // graphicsFrameGenerator.js's buildTextElementSegments). A clip's own
+    // minimum duration (MIN_TEXT_ELEMENT_DURATION) keeps this from ever
+    // making one invisible.
+    && time < el.end
     // Empty text would contribute an invisible block that still costs a
     // render pass and, worse, an export PNG.
     && String(el.text || '').trim().length > 0
