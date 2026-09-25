@@ -390,6 +390,15 @@ function buildDom(container, options) {
   // sound. Built with buildAudioLane because a span-shaped clip lane is a
   // span-shaped clip lane — only what the clips MEAN differs.
   const textLane = buildAudioLane('text', 'Text', 'Add a text overlay at the playhead');
+
+  // Manually placed CAPTIONS get a lane of their own, above the overlays.
+  // They are the same record type (shared/textElement.js — one model, two
+  // kinds) and share every gesture, so this is presentation only: a caption
+  // and an overlay differ in what they MEAN, and putting a caption you timed
+  // yourself on its own row next to the transcript is what makes that
+  // difference visible while editing.
+  const captionsLane = buildAudioLane('captions', 'Captions', 'Add a caption at the playhead');
+  lanesEl.appendChild(captionsLane.row);
   lanesEl.appendChild(textLane.row);
   lanesEl.appendChild(sfxLane.row);
   lanesEl.appendChild(audioLane.row);
@@ -492,7 +501,9 @@ function buildDom(container, options) {
     header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip,
     addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack,
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
-    addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn, addVideoBtn
+    captionsTrack: captionsLane.track,
+    addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn,
+    addCaptionBtn: captionsLane.addBtn, addVideoBtn
   };
 }
 
@@ -1043,12 +1054,27 @@ function refreshTextLane(duration) {
   lastTextSignature = signature;
 
   clearClips(els.textTrack);
+  clearClips(els.captionsTrack);
   if (!(duration > 0)) return;
 
+  // Split by kind, not by type: both lanes hold the same records and build
+  // the same clip element (see buildTextClip), so every drag/trim/select/
+  // delete path stays shared — only which strip a clip is appended to
+  // depends on its kind.
+  let captionCount = 0;
+  let overlayCount = 0;
   elements.forEach((element) => {
-    els.textTrack.appendChild(buildTextClip(element, duration, element.id === selectedId));
+    const clip = buildTextClip(element, duration, element.id === selectedId);
+    if (element.kind === 'caption') {
+      captionCount++;
+      els.captionsTrack.appendChild(clip);
+    } else {
+      overlayCount++;
+      els.textTrack.appendChild(clip);
+    }
   });
-  els.textTrack.classList.toggle('is-empty', elements.length === 0);
+  els.textTrack.classList.toggle('is-empty', overlayCount === 0);
+  els.captionsTrack.classList.toggle('is-empty', captionCount === 0);
 }
 
 function refreshAudioLanes(duration) {
@@ -1466,6 +1492,15 @@ export function initTimelinePanel(container, options = {}) {
   els.addTextBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     textElements.addTextElement({ kind: 'overlay', text: 'New text' });
+  });
+
+  // "+ Caption" creates a manual caption at the playhead. Same call, same
+  // record, different kind — which is what decides its lane, its label and
+  // whether it inherits the caption's anchored position (see
+  // textElements.js's addTextElement).
+  els.addCaptionBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    textElements.addTextElement({ kind: 'caption', text: 'New caption' });
   });
 
   els.addSoundBtn.addEventListener('click', (e) => {

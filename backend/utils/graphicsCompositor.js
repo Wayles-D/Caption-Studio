@@ -388,16 +388,39 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // that caused). Absent for every project with no text elements, in which
     // case everything below is exactly the single-track graph it has always
     // been.
-    const { textElementSegments } = videoTransformOpts;
-    const textLayer = (textElementSegments && textElementSegments.length)
-      ? buildLayerTimeline(textElementSegments)
-      : null;
+    // EXTRA LAYERS, composited over the captions in order. Each one is its
+    // own stream with its own blend mode, because blending happens per LAYER
+    // and the two kinds of manually placed text want opposite behaviour:
+    //
+    //  - manual CAPTIONS (shared/textElement.js's kind:'caption') are meant
+    //    to be indistinguishable from the transcript's own captions, so they
+    //    take the SAME Text Blend Mode. Compositing them alpha-over would
+    //    leave a manual caption looking plainly different from the ones
+    //    around it on any project using the transparent/blend look.
+    //  - text OVERLAYS are independent artwork the user coloured
+    //    deliberately, so they are never dragged through the caption's blend
+    //    (see graphicsFrameGenerator.js's buildTextElementSegments).
+    // textBlendMode is read off the options object directly: its own
+    // destructuring happens further down, after the video-transform chain.
+    const { textElementSegments, manualCaptionSegments, textBlendMode: captionBlendMode } = videoTransformOpts;
+    const extraLayers = [];
+    const pushLayer = (segs, blendMode, prefix, label) => {
+      if (!segs || !segs.length) return;
+      const timeline = buildLayerTimeline(segs);
+      if (!timeline) return;
+      extraLayers.push({ timeline, blendMode, prefix, label });
+    };
+    pushLayer(manualCaptionSegments, captionBlendMode, 'mc', 'mcaptrack');
+    pushLayer(textElementSegments, 'normal', 'tt', 'texttrack');
 
     const concatListPath = writeConcatManifest(orderedSegments);
-    const textConcatListPath = textLayer ? writeConcatManifest(textLayer.entries) : null;
-
     const inputArgs = ['-y', '-i', inputVideoPath, '-f', 'concat', '-safe', '0', '-i', concatListPath];
-    if (textConcatListPath) inputArgs.push('-f', 'concat', '-safe', '0', '-i', textConcatListPath);
+    extraLayers.forEach((layer, idx) => {
+      // Input 0 is the video, 1 the caption track, so extra layers start at 2.
+      layer.inputIndex = idx + 2;
+      layer.concatListPath = writeConcatManifest(layer.timeline.entries);
+      inputArgs.push('-f', 'concat', '-safe', '0', '-i', layer.concatListPath);
+    });
 
     // `fps=` resamples the demuxer's variable, duration-driven timestamps
     // into the same fixed-rate stream `-loop 1 -r 50 -t X` used to produce
@@ -409,10 +432,10 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // entry's duration is a no-op" ambiguity entirely rather than relying on
     // the repeated last-file line above to get it exactly right on its own.
     const captionTrackStage = `[1:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${totalCaptionDuration.toFixed(3)},setpts=PTS-STARTPTS[captrack]`;
-    // Identical treatment for the overlay layer, at input index 2.
-    const textTrackStage = textLayer
-      ? `[2:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${textLayer.total.toFixed(3)},setpts=PTS-STARTPTS[texttrack]`
-      : null;
+    // Identical treatment for every extra layer.
+    const extraTrackStages = extraLayers.map((layer) => (
+      `[${layer.inputIndex}:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${layer.timeline.total.toFixed(3)},setpts=PTS-STARTPTS[${layer.label}]`
+    ));
 
     // The VIDEO's own keyframed transform (see videoTransformFilter.js) —
     // when present, produces a `[vt_out]` stage that REPLACES `[0:v]` as
@@ -439,17 +462,29 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // uses (its text canvas sits above the captions canvas). The overlay
     // pass is always a plain alpha-over: text the user coloured
     // deliberately must not be dragged through the caption's blend.
-    const captionOutLabel = textTrackStage ? '[after_captions]' : '[outv]';
-    const compositeStages = [
-      ...buildCaptionCompositeStages(baseVideoLabel, textBlendMode, {
-        trackLabel: '[captrack]', outLabel: captionOutLabel, prefix: 'ct', finalFormat: !textTrackStage
-      }),
-      ...(textTrackStage
-        ? buildCaptionCompositeStages(captionOutLabel, 'normal', {
-            trackLabel: '[texttrack]', outLabel: '[outv]', prefix: 'tt', finalFormat: true
-          })
-        : [])
-    ];
+    // Each layer composites onto the result of the previous one, so only the
+    // LAST pass converts to yuv420p — an intermediate conversion would
+    // chroma-subsample the base a following overlay is then composited
+    // against (see buildCaptionCompositeStages' finalFormat).
+    const compositeStages = [];
+    let currentBase = baseVideoLabel;
+    const chainLabelFor = (i) => (i === extraLayers.length ? '[outv]' : `[after_layer_${i}]`);
+
+    compositeStages.push(...buildCaptionCompositeStages(currentBase, textBlendMode, {
+      trackLabel: '[captrack]', outLabel: chainLabelFor(0), prefix: 'ct', finalFormat: extraLayers.length === 0
+    }));
+    currentBase = chainLabelFor(0);
+
+    extraLayers.forEach((layer, idx) => {
+      const outLabel = chainLabelFor(idx + 1);
+      compositeStages.push(...buildCaptionCompositeStages(currentBase, layer.blendMode, {
+        trackLabel: `[${layer.label}]`,
+        outLabel,
+        prefix: layer.prefix,
+        finalFormat: idx === extraLayers.length - 1
+      }));
+      currentBase = outLabel;
+    });
 
     // The audio timeline (sound effects + imported tracks — see
     // backend/utils/audioMixFilter.js). Its `-i` arguments are appended AFTER
@@ -460,14 +495,14 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // existed, including still being a stream copy rather than a re-encode.
     const { audio, hasSourceAudio } = videoTransformOpts;
     const audioMix = (audio && duration)
-      ? buildAudioMixGraph(audio, { duration, hasSourceAudio: hasSourceAudio !== false, firstInputIndex: textTrackStage ? 3 : 2 })
+      ? buildAudioMixGraph(audio, { duration, hasSourceAudio: hasSourceAudio !== false, firstInputIndex: 2 + extraLayers.length })
       : null;
     if (audioMix) inputArgs.push(...audioMix.inputArgs);
 
     const filterComplex = [
       ...(videoTransformChain ? [videoTransformChain.filterComplex] : []),
       captionTrackStage,
-      ...(textTrackStage ? [textTrackStage] : []),
+      ...extraTrackStages,
       ...compositeStages,
       ...(audioMix ? audioMix.filterStages : [])
     ].join(';');
@@ -510,14 +545,14 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       outputPath
     ];
 
-    console.log(`Executing FFmpeg Graphics Composite command (${orderedSegments.length} of ${segments.length} segments displayable, via ${textLayer ? 2 : 1} concat-manifest input(s)): ${ffmpegPath} ${args.slice(0, 4).join(' ')} ... [concat list: ${concatListPath}] ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
+    console.log(`Executing FFmpeg Graphics Composite command (${orderedSegments.length} of ${segments.length} segments displayable, via ${1 + extraLayers.length} concat-manifest input(s)): ${ffmpegPath} ${args.slice(0, 4).join(' ')} ... [concat list: ${concatListPath}] ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
 
     const cleanupScript = () => {
       try { fs.unlinkSync(filterScriptPath); } catch (cleanupErr) { /* best-effort; a leftover temp file is harmless */ }
       try { fs.unlinkSync(concatListPath); } catch (cleanupErr) { /* best-effort; a leftover temp file is harmless */ }
-      if (textConcatListPath) {
-        try { fs.unlinkSync(textConcatListPath); } catch (cleanupErr) { /* best-effort */ }
-      }
+      extraLayers.forEach((layer) => {
+        try { fs.unlinkSync(layer.concatListPath); } catch (cleanupErr) { /* best-effort */ }
+      });
     };
 
     const ffmpegProc = spawn(ffmpegPath, args);

@@ -91,6 +91,26 @@ export function addTextElement({ kind = 'overlay', start = getPlayheadTime(), te
     ? Math.min(duration, clampedStart + DEFAULT_TEXT_ELEMENT_DURATION)
     : clampedStart + DEFAULT_TEXT_ELEMENT_DURATION;
 
+  // WHERE a new element lands depends on its kind, and only on that.
+  //
+  // An OVERLAY is seeded at the centre, explicitly manual. Inheriting the
+  // caption's `position` would drop it exactly on top of the caption (both
+  // at the bottom), where it's indistinguishable from it — and 'bottom' is
+  // an ANCHORED position, so there'd be no customPosX/Y for a drag to write
+  // into either. Centre + 'manual' puts it somewhere visible and makes it
+  // draggable from its very first frame.
+  //
+  // A manual CAPTION is the opposite case: the whole point of it being a
+  // caption is that it sits where your captions sit and looks like them, so
+  // it seeds NOTHING and inherits the caption style wholesale. It stays
+  // draggable regardless — the first drag stamps position:'manual' itself
+  // (see canvasTransform.js's text branch and setTextElementValues).
+  //
+  // Everything about how either one LOOKS inherits the caption in both cases.
+  const placement = kind === 'caption'
+    ? {}
+    : { position: 'manual', customPosX: 50, customPosY: 50 };
+
   const { style: overrideStyle, ...restOverrides } = overrides;
   const element = createTextElement({
     kind,
@@ -98,14 +118,7 @@ export function addTextElement({ kind = 'overlay', start = getPlayheadTime(), te
     end: Math.max(clampedStart + MIN_TEXT_ELEMENT_DURATION, end),
     text,
     ...restOverrides,
-    // Placement is seeded explicitly rather than inherited. Inheriting the
-    // caption's `position` would drop every new overlay exactly on top of
-    // the caption (both at the bottom), where it's indistinguishable from
-    // it — and, worse, 'bottom' is an ANCHORED position, so there'd be no
-    // customPosX/Y for a drag to write into. Centre + 'manual' puts it
-    // somewhere visible and makes it draggable from its very first frame.
-    // Everything about how it LOOKS still inherits the caption.
-    style: { position: 'manual', customPosX: 50, customPosY: 50, ...(overrideStyle || {}) }
+    style: { ...placement, ...(overrideStyle || {}) }
   });
   writeTextElements([...getTextElements(), element]);
   selectTextElement(element.id);

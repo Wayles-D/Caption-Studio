@@ -580,8 +580,10 @@ export function TextInspector() {
           <span className="text-[11px] font-semibold text-[var(--accent-color)]">{elements.length}</span>
         </div>
         <p className={HINT}>
-          Independent text placed over the video — not part of the transcript or the
-          subtitles. Each one keeps its own content, timing and styling.
+Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
+          looks like the transcript's own captions, blend mode included; an <b>overlay</b> sits
+          on the Text lane and keeps whatever colour you give it. Both can do everything
+          else the same.
         </p>
         <div className="grid grid-cols-2 gap-2">
           <button
@@ -632,7 +634,7 @@ export function TextInspector() {
           <span className={SECTION_TITLE}>Nothing selected</span>
           <p className={HINT}>
             Pick one above, click it on the video, or click its clip on the timeline’s
-            Text lane, to edit its words, timing and style.
+            Captions or Text lane, to edit its words, timing and style.
           </p>
         </div>
       ) : (
