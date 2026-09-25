@@ -109,6 +109,17 @@ export function PreviewStage({
               (currently everything except Unified Shadow, which still falls
               through to the CSS overlay above); hidden/inert otherwise. */}
           <canvas className="captions-canvas" id="captions-canvas" />
+          {/* Manually placed captions + text overlays (see shared/textElement.js).
+              Its own compositing layer rather than a second pass over the
+              captions canvas: syncVideoSubtitles has several early-return
+              branches (demo fallback, Word Mode, Rolling Stack) and threading
+              "did anything draw?" through all of them to decide who clears
+              would put the existing caption paths at risk for no visual gain.
+              Same renderer, same params/cssConfig contract — only the surface
+              differs, and only in the preview; the exporter composites both
+              into one PNG. Sits directly above the captions layer, which is
+              also the z-order the exporter draws in. */}
+          <canvas className="text-elements-canvas" id="text-elements-canvas" />
           {/* On-canvas caption transform overlay (editor-only UI — see
               src/js/components/canvasTransform.js). Never rendered into the
               exported video; populated/positioned entirely from JS. */}

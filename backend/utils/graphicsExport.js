@@ -78,7 +78,11 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
 
   try {
     const { width, height, duration, hasAudio } = await getVideoInfo(videoPath);
-    const segments = buildFullTimelineSegments(phrases, params, width, height, duration, framesDir);
+    // Async because manually placed captions / text overlays are composited
+    // onto the caption rasters, which means decoding them (see
+    // compositeTextElementsIntoSegments). A project with no text elements
+    // resolves immediately with the untouched segment list.
+    const segments = await buildFullTimelineSegments(phrases, params, width, height, duration, framesDir);
     // The VIDEO's own keyframed transform (see shared/videoTransform.js) —
     // passed through so the exported file reproduces the same zoom/pan/
     // rotate/fade the live preview shows, independent of captions. The

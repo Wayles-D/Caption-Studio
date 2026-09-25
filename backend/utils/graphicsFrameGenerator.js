@@ -21,13 +21,19 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { createCanvas } from '@napi-rs/canvas';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
 import { resolveAnimationConfig } from '../../shared/captionAnimation.js';
 import { getKeyframeTimeRange } from '../../shared/keyframes.js';
+import {
+  normalizeTextElementList,
+  getActiveTextElements,
+  getTextElementBoundaryTimes,
+  textElementToPhrase
+} from '../../shared/textElement.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
 /**
@@ -398,7 +404,95 @@ function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
  * @param {string} outDir - Directory to write PNGs into.
  * @returns {{start:number, end:number, file:string}[]} Contiguous, time-ordered segments covering [0, videoDuration).
  */
-export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir) {
+/**
+ * Re-renders whichever segments a manually placed caption / text overlay
+ * overlaps, so the two end up composited into ONE png per slice.
+ *
+ * This runs as a POST-PASS over the caption segments rather than as a rewrite
+ * of the slicer above, for two reasons. First, the compositor
+ * (graphicsCompositor.js) plays segments back-to-back purely by declared
+ * duration and has no notion of absolute time — so there is exactly one
+ * caption-track stream, and overlapping content has to be flattened into the
+ * same picture rather than added as a parallel track. Second, a project with
+ * no text elements must keep producing byte-identical frames, which it does
+ * here by returning the original array untouched.
+ *
+ * Splitting matters: a text element's own start/end rarely line up with a
+ * caption's word boundaries, so any segment it partially covers is cut at the
+ * element's edges and only the covered part is redrawn.
+ */
+async function compositeTextElementsIntoSegments(segments, textElements, params, canvasWidth, canvasHeight, outDir) {
+  const active = (textElements || []).filter((el) => el.enabled && String(el.text || '').trim());
+  if (!active.length) return segments;
+
+  registerBackendCanvasFonts();
+
+  // Every instant at which the visible set changes — used to cut segments so
+  // a redraw never spans a moment where text appears or disappears.
+  const boundaries = getTextElementBoundaryTimes(active);
+  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const ctx = canvas.getContext('2d');
+
+  // The caption raster already written for each segment, decoded once and
+  // reused across every sub-slice cut out of it. loadImage is async (a
+  // Buffer assigned straight to Image.src decodes to nothing here, silently),
+  // which is the only reason this function and its caller are async.
+  const captionImages = new Map();
+  for (const segment of segments) {
+    if (!captionImages.has(segment.file)) {
+      captionImages.set(segment.file, await loadImage(segment.file));
+    }
+  }
+
+  const out = [];
+  for (const segment of segments) {
+    const cuts = [segment.start, ...boundaries.filter((t) => t > segment.start && t < segment.end), segment.end]
+      .sort((a, b) => a - b);
+
+    for (let i = 0; i < cuts.length - 1; i++) {
+      const start = cuts[i];
+      const end = cuts[i + 1];
+      if (end - start < 0.001) continue;
+
+      const visible = getActiveTextElements(active, start);
+      if (!visible.length) {
+        // Nothing of ours here — reuse the caption's own already-rendered png
+        // rather than re-rasterising an identical frame.
+        out.push({ start, end, file: segment.file });
+        continue;
+      }
+
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      // The caption that was already rendered for this slice goes down first,
+      // so text composites ON TOP — the same z-order the preview uses (its
+      // text layer sits above the captions canvas).
+      const captionImage = captionImages.get(segment.file);
+      if (captionImage) ctx.drawImage(captionImage, 0, 0);
+
+      visible.forEach((element) => {
+        const elementParams = { ...params, ...element.style };
+        drawCaptionFrameForExport(ctx, {
+          canvasWidth,
+          canvasHeight,
+          activePhrase: textElementToPhrase(element),
+          currentTime: start,
+          cssConfig: getCSSPreviewFromConfig(elementParams),
+          params: elementParams,
+          createOffscreenCanvas: (w, h) => createCanvas(w, h),
+          clearCanvas: false
+        });
+      });
+
+      const file = path.join(outDir, `text-${Math.round(start * 1000)}.png`);
+      fs.writeFileSync(file, canvas.toBuffer('image/png'));
+      out.push({ start, end, file });
+    }
+  }
+
+  return out;
+}
+
+export async function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir) {
   const blankFile = generateBlankFrame(canvasWidth, canvasHeight, outDir);
   const pushGap = (segments, start, end) => {
     if (end - start >= 0.001) segments.push({ start, end, file: blankFile });
@@ -427,5 +521,12 @@ export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHe
   });
   pushGap(segments, cursor, videoDuration);
 
-  return segments;
+  // Manually placed captions + text overlays are flattened into these same
+  // segments (see compositeTextElementsIntoSegments). A project with none
+  // gets the original array back untouched.
+  return compositeTextElementsIntoSegments(
+    segments,
+    normalizeTextElementList(params.textElements),
+    params, canvasWidth, canvasHeight, outDir
+  );
 }

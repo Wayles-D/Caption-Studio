@@ -98,7 +98,13 @@ test('a per-word font actually renders once its face loads', async ({ page }) =>
   await page.locator('#word-font-select').selectOption('Pacifico');
   // Deliberately does NOT touch the video: the point of the fix is that the
   // canvas redraws itself when the face finishes loading, with no playback.
-  await page.waitForTimeout(1500);
+  //
+  // Waits on the FONT rather than a fixed delay — the face is fetched from
+  // the backend, so under parallel workers a fixed timeout races the network
+  // and fails for a reason unrelated to the code under test.
+  await page.waitForFunction(() => document.fonts.check("400 40px 'Pacifico'"), null, { timeout: 15000 });
+  // Then let the redraw this fix exists to trigger actually land.
+  await page.waitForTimeout(600);
   const after = await canvasStats(page);
 
   expect(await page.evaluate(() => window.__appState.captionTransforms?.w0?.style?.fontFamily)).toBe('Pacifico');

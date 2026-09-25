@@ -435,7 +435,7 @@ function getBoxFillRect(rect, geometry) {
  * keywordDriven branch, which never calls this function.
  */
 function resolveWordDrawSpec(word, drawCtx) {
-  const { currentTime, mode, keywordsEnabled, keywordColor, activeHighlight, inactiveColor, params, profile } = drawCtx;
+  const { currentTime, mode, keywordsEnabled, keywordColor, activeHighlight, inactiveColor, params, profile, blockFontWeight } = drawCtx;
 
   const isWordActive = currentTime >= word.start && currentTime <= word.end;
   const isPastWord = currentTime > word.end;
@@ -462,7 +462,7 @@ function resolveWordDrawSpec(word, drawCtx) {
     color = isWordActive ? (isActiveKeyword ? keywordColor : activeHighlight) : inactiveColor;
   }
 
-  const fontWeight = (keywordsEnabled && word.isKeyword) ? '900' : profile.fontWeight;
+  const fontWeight = (keywordsEnabled && word.isKeyword) ? '900' : (blockFontWeight || profile.fontWeight);
 
   return { visible, color, scale, fontWeight };
 }
@@ -518,6 +518,15 @@ function layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndi
  */
 function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry }) {
   const profile = cssConfig.profile;
+  // BLOCK-LEVEL typeface overrides, resolved once for the whole caption (see
+  // getCSSPreviewFromConfig: params.fontWeight / params.italic /
+  // params.underline). cssConfig.profile is the RAW preset entry, so the
+  // preset's own weight is what these fall back to when nothing overrides
+  // it — which is every caption today. A per-word override still wins over
+  // both, since applyWordStyleOverride runs last on the finished unit.
+  const blockFontWeight = cssConfig.text?.fontWeight || profile.fontWeight;
+  const blockSyntheticItalic = !!cssConfig.text?.syntheticItalic;
+  const blockUnderline = !!cssConfig.text?.underline;
   const mode = cssConfig.animationMode;
   const keywordsEnabled = !!params.enableKeywordHighlighting && params.enableKeywordHighlighting !== 'false';
   const keywordColor = cssConfig.keywordColor || '#EF4444';
@@ -527,7 +536,7 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
   const { fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, anchorX, anchorY, yEdge } = geometry;
 
   const breakAfterIndices = new Set(activePhrase.breakAfterIndices || []);
-  const drawCtx = { currentTime, mode, keywordsEnabled, keywordColor, activeHighlight, inactiveColor, params, profile };
+  const drawCtx = { currentTime, mode, keywordsEnabled, keywordColor, activeHighlight, inactiveColor, params, profile, blockFontWeight };
 
   const resolvedFontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const wordUnits = activePhrase.words.map((w, idx) => {
@@ -559,7 +568,7 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
         activeHighlightColorHex: activeHighlight,
         inactiveColorHex: inactiveColor,
         baseFontFamily: profile.fontFamily,
-        baseFontWeight: profile.fontWeight
+        baseFontWeight: blockFontWeight
       });
       // Matches preview.js's own opacity composition exactly: global Text
       // Opacity only ever applies to keyword words, composed with the
@@ -570,7 +579,7 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
         ? (params.textOpacity ?? 100) * (cssConfig.keywordStyleConfig.opacity ?? 100) / 100
         : 100;
       const wordFontFamily = (metadata.fontFamily || resolvedFontFamily || 'Poppins').toString();
-      const wordFontWeight = metadata.fontWeight || profile.fontWeight;
+      const wordFontWeight = metadata.fontWeight || blockFontWeight;
       const ownFontSizePx = fontSizePx * (metadata.fontScale || 1);
       const emphasisOffsetPx = (KEYWORD_EMPHASIS_ASS_DEPTH / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
       const useEmphasisOutline = !!metadata.outline;
@@ -592,6 +601,8 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
         baseFontWeight: wordFontWeight,
         syntheticBold: needsSyntheticBold(wordFontFamily, parseInt(wordFontWeight, 10) || 0),
         font: buildFontString({ fontFamily: wordFontFamily, fontWeight: wordFontWeight, italic: metadata.italic, fontSizePx: ownFontSizePx }),
+        syntheticItalic: blockSyntheticItalic,
+        underline: blockUnderline,
         outlineWidthPx: useEmphasisOutline ? emphasisOffsetPx : undefined,
         outlineColor: useEmphasisOutline ? KEYWORD_EMPHASIS_OUTLINE_COLOR : undefined,
         hasShadow: useEmphasisShadow || undefined,
@@ -612,7 +623,9 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
       baseFontDisplayName: params.fontFamily,
       baseFontWeight: spec.fontWeight,
       syntheticBold: needsSyntheticBold(params.fontFamily, parseInt(spec.fontWeight, 10) || 0),
-      font: buildFontString({ fontFamily: resolvedFontFamily, fontWeight: spec.fontWeight, italic: cssConfig.text.fontStyle === 'italic', fontSizePx })
+      font: buildFontString({ fontFamily: resolvedFontFamily, fontWeight: spec.fontWeight, italic: cssConfig.text.fontStyle === 'italic', fontSizePx }),
+      syntheticItalic: blockSyntheticItalic,
+      underline: blockUnderline
     }, styleOverride, geometry, fontSizePx);
   });
 
@@ -748,9 +761,11 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
         color: word.color,
         scale: word.scale,
         syntheticBold: word.syntheticBold,
-        // Both set only by a per-word style override (see
-        // applyWordStyleOverride) — absent on every other word, so this is a
-        // no-op for any caption nobody has styled word-by-word.
+        // Either the BLOCK-level value (params.italic/params.underline, used
+        // by text elements — see computeSentenceLines's blockSyntheticItalic/
+        // blockUnderline) or a per-word override on top of it (see
+        // applyWordStyleOverride). Both unset for any caption nobody has
+        // styled, so this stays a no-op there.
         syntheticItalic: word.syntheticItalic,
         underline: word.underline,
         fontSizePx: word.ownFontSizePx ?? fontSizePx,
@@ -770,8 +785,13 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
   targetCtx.restore();
 }
 
-function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas }) {
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas, clearCanvas = true }) {
+  // Clearing is caller-controlled so that SEVERAL text blocks — a caption and
+  // an independently-timed text overlay, say — can be composited into one
+  // frame. Each block is a separate draw with its own params/cssConfig, and
+  // only the first may wipe what came before it. Defaults to true so every
+  // existing single-block caller behaves exactly as it always has.
+  if (clearCanvas) ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   if (!activePhrase || !activePhrase.words || !activePhrase.words.length) return;
 
   const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
@@ -1068,9 +1088,9 @@ function paintText(ctx, text, x, y, style) {
  * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode; see renderResolvedFrame/paintSentenceComposite.
  */
 export function drawCaptionFrame(ctx, opts) {
-  const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, cssPixelWidth, createOffscreenCanvas } = opts;
+  const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, cssPixelWidth, createOffscreenCanvas, clearCanvas } = opts;
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelWidth);
-  renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas });
+  renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas, clearCanvas });
 }
 
 /**
@@ -1093,9 +1113,9 @@ export function drawCaptionFrame(ctx, opts) {
  * @param {(w:number,h:number)=>*} [opts.createOffscreenCanvas] - Required for Unified shadow mode; see renderResolvedFrame/paintSentenceComposite.
  */
 export function drawCaptionFrameForExport(ctx, opts) {
-  const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, createOffscreenCanvas } = opts;
+  const { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, createOffscreenCanvas, clearCanvas } = opts;
   const geometry = resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, PHONE_FRAME_CSS_WIDTH);
-  renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas });
+  renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas, clearCanvas });
 }
 
 /* =========================================================================
@@ -1159,6 +1179,12 @@ const ROLLING_STACK_LAYER_GAP_RATIO = 0.15;
  */
 function resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geometry) {
   const profile = cssConfig.profile;
+  // Same block-level typeface overrides computeSentenceLines resolves — see
+  // its doc comment. Rolling Stack has to read them too, or the three
+  // controls would silently do nothing in one caption mode out of three.
+  const blockFontWeight = cssConfig.text?.fontWeight || profile.fontWeight;
+  const blockSyntheticItalic = !!cssConfig.text?.syntheticItalic;
+  const blockUnderline = !!cssConfig.text?.underline;
   const keywordsEnabled = !!params.enableKeywordHighlighting && params.enableKeywordHighlighting !== 'false';
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
@@ -1177,7 +1203,7 @@ function resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geome
       activeHighlightColorHex: activeHighlight,
       inactiveColorHex: inactiveColor,
       baseFontFamily: profile.fontFamily,
-      baseFontWeight: profile.fontWeight
+      baseFontWeight: blockFontWeight
     }
   );
 
@@ -1190,7 +1216,7 @@ function resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geome
     : 100;
 
   const fontFamily = (metadata.fontFamily || profile.fontFamily || 'Poppins').toString();
-  const fontWeight = metadata.fontWeight || profile.fontWeight;
+  const fontWeight = metadata.fontWeight || blockFontWeight;
   const fontSizePx = geometry.fontSizePx * (metadata.fontScale || 1);
 
   const emphasisOffsetPx = (KEYWORD_EMPHASIS_ASS_DEPTH / FONT_SIZE_ASS_SCALE) * geometry.pxScale;
@@ -1202,6 +1228,8 @@ function resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geome
     text,
     fontSizePx,
     font: buildFontString({ fontFamily, fontWeight, italic: metadata.italic, fontSizePx }),
+    syntheticItalic: blockSyntheticItalic,
+    underline: blockUnderline,
     color: applyOpacityToColor(metadata.colorHex, opacity),
     // Registry DISPLAY name + weight this chunk resolved to, so a per-word
     // style override that only changes (say) italic still resolves against

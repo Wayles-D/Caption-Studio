@@ -22,12 +22,14 @@ import { fetchJson, describeFetchError } from './js/utils/apiRequest.js';
 import { collectEditedWords } from './js/components/transcriptEditorState.js';
 import { applySemanticEvents } from './js/components/audioTimeline.js';
 import * as audioTimelineApi from './js/components/audioTimeline.js';
+import * as textElementsApi from './js/components/textElements.js';
 import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
 import { WordInspector } from './components/WordInspector.jsx';
+import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
@@ -80,6 +82,14 @@ const MOBILE_TOOLS = [
   {
     key: 'keyword-style', label: 'Kw Style', group: 'caption',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /><circle cx="11" cy="11" r="2" /></svg>
+  },
+  {
+    // Independent text placed over the video — NOT captions/subtitles, and
+    // not tied to the transcript. Its own tool because it is its own kind of
+    // timeline object (see shared/textElement.js), even though it renders
+    // through the very same engine captions do.
+    key: 'text-overlay', label: 'Overlay', group: 'textel',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M8 10h8M8 14h5" /></svg>
   },
   {
     // Sound effects + audio tracks. One tool, because they are one panel
@@ -316,6 +326,10 @@ export function App() {
       // The exact snapshot the export is driven from — lets a test assert
       // preview/export parity on the payload itself rather than inferring it.
       window.__getStyleParams = getStyleParams;
+      // Manual captions + text overlays (see shared/textElement.js), exposed
+      // for the same reason __audioTimeline is: e2e drives real clip
+      // create/move/trim without depending on pointer gymnastics.
+      window.__textElements = textElementsApi;
     }
   }, []);
 
@@ -739,6 +753,10 @@ export function App() {
               ) : tool.group === 'audio' ? (
                 <div className="p-4">
                   <AudioInspector onNotify={showToast} />
+                </div>
+              ) : tool.group === 'textel' ? (
+                <div className="p-4">
+                  <TextInspector />
                 </div>
               ) : tool.group === 'word' ? (
                 <div className="p-4">
