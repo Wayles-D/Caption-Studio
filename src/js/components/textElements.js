@@ -189,6 +189,54 @@ export function removeSelectedTextElement() {
   if (id) removeTextElement(id);
 }
 
+/**
+ * Placement keys, excluded when one element's look is copied onto others.
+ *
+ * Copying these would stack every target element at the source's exact spot,
+ * which is destructive and obviously not what "make these look the same"
+ * means — the volume "Apply to All" this mirrors has no equivalent problem
+ * because a volume has no position. Rotation is NOT here: it's applied about
+ * an element's own centre, so it's part of how the text looks, not where it
+ * sits.
+ */
+const PLACEMENT_KEYS = ['position', 'customPosX', 'customPosY'];
+
+/**
+ * Copies `sourceId`'s whole look onto `targetIds` in ONE undoable write.
+ *
+ * Everything in the style bag except placement: font, weight, size, italic,
+ * underline, case, colours, opacity, outline, shadow, rotation, entrance
+ * animation. Keyframes are deliberately not copied — they are timed against
+ * one element's own window and mean nothing on another's.
+ *
+ * Targets keep their own position, and a target's existing style is REPLACED
+ * rather than merged, so "apply to all" actually makes them match instead of
+ * leaving whichever keys they happened to have set already.
+ */
+export function applyTextElementStyleTo(sourceId, targetIds) {
+  const source = getTextElement(sourceId);
+  if (!source) return 0;
+  const targets = new Set((targetIds || []).filter((id) => id !== sourceId));
+  if (!targets.size) return 0;
+
+  const look = { ...(source.style || {}) };
+  PLACEMENT_KEYS.forEach((key) => { delete look[key]; });
+
+  let applied = 0;
+  const next = getTextElements().map((element) => {
+    if (!targets.has(element.id)) return element;
+    applied++;
+    const placement = {};
+    PLACEMENT_KEYS.forEach((key) => {
+      if (element.style?.[key] != null) placement[key] = element.style[key];
+    });
+    return normalizeTextElement({ ...element, style: { ...look, ...placement } });
+  });
+
+  if (applied) writeTextElements(next);
+  return applied;
+}
+
 // --- Keyframes -------------------------------------------------------------
 //
 // The text target's keyframe read/write API, modelled on

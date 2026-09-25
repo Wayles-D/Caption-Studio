@@ -22,7 +22,6 @@ import { useEffect, useRef, useState } from 'react';
 import { appState, subscribe } from '../js/state.js';
 import * as textElements from '../js/components/textElements.js';
 import { listFontOptions } from '../../shared/fontRegistry.js';
-import { TEXT_BLEND_MODES } from '../../shared/captionConfig.js';
 import { ANIMATION_TYPES } from '../../shared/captionAnimation.js';
 import { ColorPickerField } from './ColorPickerField.jsx';
 
@@ -194,6 +193,104 @@ function ColorRow({ label, field, value, fallback, openField, setOpenField, appl
 }
 
 /**
+ * "I styled this one; make the others match."
+ *
+ * Modelled on the sound-effect volume controls' Apply to All, and carrying
+ * over that feature's hard-won rule: an "apply to all" that reaches things
+ * the user didn't mean is worse than no button at all. So the blast radius is
+ * text elements only — never captions, never audio — and "Choose…" is offered
+ * beside "All text" so a project with a dozen overlays doesn't force an
+ * all-or-nothing choice.
+ *
+ * Copies the LOOK, not the placement or the timing: see
+ * textElements.js's applyTextElementStyleTo for exactly what travels and why.
+ */
+function ApplyStyleTo({ element }) {
+  const [picking, setPicking] = useState(false);
+  const [checked, setChecked] = useState(() => new Set());
+
+  const others = (appState.textElements || []).filter((el) => el.id !== element.id);
+  if (!others.length) return null;
+
+  const toggle = (id) => setChecked((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const applyTo = (ids) => {
+    textElements.applyTextElementStyleTo(element.id, ids);
+    setPicking(false);
+    setChecked(new Set());
+  };
+
+  return (
+    <div className={CARD}>
+      <span className={SECTION_TITLE}>Apply this style to</span>
+      <p className={HINT}>
+        Copies the look — font, colour, outline, shadow, rotation, animation.
+        Each one keeps its own position, timing and words.
+      </p>
+
+      {!picking ? (
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button" id="textel-apply-all" className={PRIMARY_BTN}
+            onClick={() => applyTo(others.map((el) => el.id))}
+          >
+            All text ({others.length})
+          </button>
+          <button
+            type="button" id="textel-apply-choose" className={SECONDARY_BTN}
+            onClick={() => setPicking(true)}
+          >
+            Choose…
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-col gap-1.5">
+            {others.map((el) => (
+              <label
+                key={el.id}
+                className={`${ROW_BASE} ${checked.has(el.id) ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}`}
+              >
+                <input
+                  type="checkbox"
+                  data-textel-apply-target={el.id}
+                  checked={checked.has(el.id)}
+                  onChange={() => toggle(el.id)}
+                  className="accent-[var(--accent-color)] shrink-0"
+                />
+                <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--text-primary)]">
+                  {el.text || '(empty)'}
+                </span>
+                <span className="text-[10px] text-[var(--text-muted)] shrink-0">{formatTime(el.start)}</span>
+              </label>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button" id="textel-apply-confirm" className={PRIMARY_BTN}
+              disabled={!checked.size}
+              onClick={() => applyTo([...checked])}
+            >
+              Apply to {checked.size || 'none'}
+            </button>
+            <button
+              type="button" className={SECONDARY_BTN}
+              onClick={() => { setPicking(false); setChecked(new Set()); }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * The whole styling stack for one element. Split out of TextInspector purely
  * for readability — its only state is which colour popover is open.
  */
@@ -296,11 +393,14 @@ function TextElementStyle({ element }) {
           onChange={(v) => apply({ backgroundOpacity: v })}
           onClear={() => apply({ backgroundOpacity: null })}
         />
-        <StyleSelect
-          id="textel-blend" label="Blend with video" value={style.textBlendMode}
-          options={TEXT_BLEND_MODES.map((m) => ({ value: m, label: titleCase(m) }))}
-          onChange={(v) => apply({ textBlendMode: v })}
-        />
+        {/* No "Blend with video" control here, deliberately. Blending needs
+            the video underneath, so it happens at COMPOSITE time, per layer
+            — and all text elements share one layer (one canvas in the
+            preview, one stream in the export). A per-element control could
+            not be honoured when two overlays are on screen at once, and a
+            control that silently does nothing is the exact bug class this
+            panel keeps running into. Overlays composite with a plain
+            alpha-over; the caption's own blend never reaches them. */}
       </div>
 
       {/* --- Outline --- */}
@@ -447,6 +547,8 @@ function TextElementStyle({ element }) {
           onClear={() => apply({ captionAnimationIntensity: null })}
         />
       </div>
+
+      <ApplyStyleTo element={element} />
 
       <button
         type="button" id="textel-reset-style" className={SECONDARY_BTN}

@@ -673,7 +673,19 @@ function buildMarker(entry, duration, role) {
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-  if (document.activeElement?.tagName === 'INPUT') return;
+  // Never steal a keystroke aimed at a text field. This used to check only
+  // INPUT, which missed the TEXTAREA the Overlay panel's Content field
+  // actually is — so pressing Backspace to fix a typo while typing an
+  // overlay's text deleted the whole element off the timeline instead. Any
+  // editable surface counts, not a list of tag names that has to be kept up
+  // to date with the UI.
+  const focused = document.activeElement;
+  if (focused && (
+    focused.tagName === 'INPUT'
+    || focused.tagName === 'TEXTAREA'
+    || focused.tagName === 'SELECT'
+    || focused.isContentEditable
+  )) return;
 
   // A selected AUDIO clip takes precedence over a selected keyframe: selecting
   // a clip is the more recent, more specific intent, and the two selections

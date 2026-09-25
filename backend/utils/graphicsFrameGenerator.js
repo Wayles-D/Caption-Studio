@@ -21,7 +21,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { createCanvas, loadImage } from '@napi-rs/canvas';
+import { createCanvas } from '@napi-rs/canvas';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
@@ -403,44 +403,50 @@ function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
  * @param {number} canvasHeight - Output video's pixel height.
  * @param {number} videoDuration - Total video duration in seconds.
  * @param {string} outDir - Directory to write PNGs into.
- * @returns {{start:number, end:number, file:string}[]} Contiguous, time-ordered segments covering [0, videoDuration).
- */
-/**
- * Re-renders whichever segments a manually placed caption / text overlay
- * overlaps, so the two end up composited into ONE png per slice.
+ * @returns {{captions:{start:number,end:number,file:string}[], text:{start:number,end:number,file:string}[]}} Two independently composited layers, each contiguous over [0, videoDuration); `text` is empty when the project has no text elements.
+ *//**
+ * Renders manually placed captions / text overlays as their OWN contiguous,
+ * gap-filled segment stream, covering [0, videoDuration) exactly like the
+ * caption stream does — a second layer, not extra ink on the caption's.
  *
- * This runs as a POST-PASS over the caption segments rather than as a rewrite
- * of the slicer above, for two reasons. First, the compositor
- * (graphicsCompositor.js) plays segments back-to-back purely by declared
- * duration and has no notion of absolute time — so there is exactly one
- * caption-track stream, and overlapping content has to be flattened into the
- * same picture rather than added as a parallel track. Second, a project with
- * no text elements must keep producing byte-identical frames, which it does
- * here by returning the original array untouched.
+ * WHY A SEPARATE LAYER, not a flatten into the caption rasters (which is what
+ * this used to do): the compositor applies the caption's Text Blend Mode to
+ * the whole caption track (see graphicsCompositor.js's
+ * buildCaptionCompositeStages). Flattened in, a text overlay was blended with
+ * the video too — so on a project using e.g. 'difference' for its transparent
+ * caption look, an overlay the user had deliberately coloured white came out
+ * showing the caption's blended colours instead. It looked correct in the
+ * preview the entire time, because the preview has always had two canvases
+ * and only ever applied mix-blend-mode to the captions one. Two streams make
+ * the export structurally match the preview: captions blend, text does not.
  *
- * Splitting matters: a text element's own start/end rarely line up with a
- * caption's word boundaries, so any segment it partially covers is cut at the
- * element's edges and only the covered part is redrawn.
+ * Deliberately built from scratch over the timeline rather than by
+ * subdividing the caption segments — the two layers have nothing to do with
+ * each other now, and a text element's edges rarely line up with a caption's
+ * word boundaries anyway.
+ *
+ * @returns {{start:number,end:number,file:string}[]} Contiguous segments covering [0, videoDuration), or [] when there is no text at all (in which case the caller adds no second layer and the export is byte-identical to one without this feature).
  */
-async function compositeTextElementsIntoSegments(segments, textElements, params, canvasWidth, canvasHeight, outDir) {
+function buildTextElementSegments(textElements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile) {
   const active = (textElements || []).filter((el) => el.enabled && String(el.text || '').trim());
-  if (!active.length) return segments;
+  if (!active.length) return [];
 
   registerBackendCanvasFonts();
 
-  // Every instant at which the visible set changes — used to cut segments so
-  // a redraw never spans a moment where text appears or disappears.
-  const boundaries = getTextElementBoundaryTimes(active);
+  // Every instant at which the visible set changes — an element's own edges.
+  const cuts = new Set([0, videoDuration]);
+  const addCut = (t) => { if (t > 0 && t < videoDuration) cuts.add(t); };
+  getTextElementBoundaryTimes(active).forEach(addCut);
 
-  // ...plus dense sample points wherever an element is actually MOVING.
-  // Each rendered slice is one static PNG drawn at its own start time, so a
-  // stretch that is only cut at the element's edges renders a keyframed or
-  // entrance-animated overlay as a single frozen frame in the exported file
-  // while animating correctly in the preview — the same bug class already
-  // found twice here, for caption-level and then per-word animation (see
+  // ...plus dense sample points wherever an element is actually MOVING. Each
+  // segment is one static PNG drawn at its own start time, so a stretch cut
+  // only at the element's edges renders a keyframed or entrance-animated
+  // overlay as a single frozen frame in the exported file while animating
+  // correctly in the preview — the same bug class already found twice here,
+  // for caption-level and then per-word animation (see
   // subdivideSlicesForAnimation's own doc comment).
   const addSamples = (from, to) => {
-    for (let t = from + ANIMATION_SAMPLE_STEP_SECONDS; t < to; t += ANIMATION_SAMPLE_STEP_SECONDS) boundaries.push(t);
+    for (let t = from + ANIMATION_SAMPLE_STEP_SECONDS; t < to; t += ANIMATION_SAMPLE_STEP_SECONDS) addCut(t);
   };
   active.forEach((element) => {
     const kfRange = getKeyframeTimeRange({ keyframes: element.keyframes });
@@ -453,72 +459,55 @@ async function compositeTextElementsIntoSegments(segments, textElements, params,
       if (duration > 0) addSamples(element.start, element.start + duration);
     }
   });
+
+  const boundaries = Array.from(cuts).sort((a, b) => a - b);
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
+  const segments = [];
 
-  // The caption raster already written for each segment, decoded once and
-  // reused across every sub-slice cut out of it. loadImage is async (a
-  // Buffer assigned straight to Image.src decodes to nothing here, silently),
-  // which is the only reason this function and its caller are async.
-  const captionImages = new Map();
-  for (const segment of segments) {
-    if (!captionImages.has(segment.file)) {
-      captionImages.set(segment.file, await loadImage(segment.file));
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const start = boundaries[i];
+    const end = boundaries[i + 1];
+    if (end - start < 0.001) continue;
+
+    const visible = getActiveTextElements(active, start);
+    if (!visible.length) {
+      // Nothing on screen — the shared fully-transparent frame, exactly as
+      // the caption stream fills its own gaps.
+      segments.push({ start, end, file: blankFile });
+      continue;
     }
-  }
 
-  const out = [];
-  for (const segment of segments) {
-    const cuts = [segment.start, ...boundaries.filter((t) => t > segment.start && t < segment.end), segment.end]
-      .sort((a, b) => a - b);
-
-    for (let i = 0; i < cuts.length - 1; i++) {
-      const start = cuts[i];
-      const end = cuts[i + 1];
-      if (end - start < 0.001) continue;
-
-      const visible = getActiveTextElements(active, start);
-      if (!visible.length) {
-        // Nothing of ours here — reuse the caption's own already-rendered png
-        // rather than re-rasterising an identical frame.
-        out.push({ start, end, file: segment.file });
-        continue;
-      }
-
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-      // The caption that was already rendered for this slice goes down first,
-      // so text composites ON TOP — the same z-order the preview uses (its
-      // text layer sits above the captions canvas).
-      const captionImage = captionImages.get(segment.file);
-      if (captionImage) ctx.drawImage(captionImage, 0, 0);
-
-      visible.forEach((element) => {
-        // Shared with the live preview (src/js/components/preview.js's
-        // syncTextElementsCanvas) so an animated overlay resolves identically
-        // on both sides — see resolveTextElementParams.
-        const elementParams = resolveTextElementParams(params, element, start);
-        drawCaptionFrameForExport(ctx, {
-          canvasWidth,
-          canvasHeight,
-          activePhrase: textElementToPhrase(element),
-          currentTime: start,
-          cssConfig: getCSSPreviewFromConfig(elementParams),
-          params: elementParams,
-          createOffscreenCanvas: (w, h) => createCanvas(w, h),
-          clearCanvas: false
-        });
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    visible.forEach((element) => {
+      // Shared with the live preview (src/js/components/preview.js's
+      // syncTextElementsCanvas) so an overlay resolves identically on both
+      // sides — see resolveTextElementParams.
+      const elementParams = resolveTextElementParams(params, element, start);
+      drawCaptionFrameForExport(ctx, {
+        canvasWidth,
+        canvasHeight,
+        activePhrase: textElementToPhrase(element),
+        currentTime: start,
+        cssConfig: getCSSPreviewFromConfig(elementParams),
+        params: elementParams,
+        createOffscreenCanvas: (w, h) => createCanvas(w, h),
+        // Several elements can overlap, so the layer is cleared once above
+        // and each element drawn onto it — the same compositing order the
+        // preview's own text canvas uses.
+        clearCanvas: false
       });
+    });
 
-      const file = path.join(outDir, `text-${Math.round(start * 1000)}.png`);
-      fs.writeFileSync(file, canvas.toBuffer('image/png'));
-      out.push({ start, end, file });
-    }
+    const file = path.join(outDir, `text-${Math.round(start * 1000)}.png`);
+    fs.writeFileSync(file, canvas.toBuffer('image/png'));
+    segments.push({ start, end, file });
   }
 
-  return out;
+  return segments;
 }
 
-export async function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir) {
+export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir) {
   const blankFile = generateBlankFrame(canvasWidth, canvasHeight, outDir);
   const pushGap = (segments, start, end) => {
     if (end - start >= 0.001) segments.push({ start, end, file: blankFile });
@@ -547,12 +536,16 @@ export async function buildFullTimelineSegments(phrases, params, canvasWidth, ca
   });
   pushGap(segments, cursor, videoDuration);
 
-  // Manually placed captions + text overlays are flattened into these same
-  // segments (see compositeTextElementsIntoSegments). A project with none
-  // gets the original array back untouched.
-  return compositeTextElementsIntoSegments(
-    segments,
-    normalizeTextElementList(params.textElements),
-    params, canvasWidth, canvasHeight, outDir
-  );
+  // Manually placed captions + text overlays are a SECOND layer, composited
+  // separately so the caption's Text Blend Mode can't bleed onto them — see
+  // buildTextElementSegments. `text` is empty for a project with none, in
+  // which case the compositor adds no second layer at all and the export is
+  // byte-identical to one from before this feature existed.
+  return {
+    captions: segments,
+    text: buildTextElementSegments(
+      normalizeTextElementList(params.textElements),
+      params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile
+    )
+  };
 }

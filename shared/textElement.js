@@ -164,7 +164,17 @@ export function getTextElementBoundaryTimes(elements) {
  * as it did before this function grew a keyframe branch.
  */
 export function resolveTextElementParams(baseParams, element, currentTime) {
-  const merged = { ...baseParams, ...(element.style || {}) };
+  const merged = {
+    ...baseParams,
+    // Blending happens at COMPOSITE time, per layer — never inherited from
+    // the caption. Without this, an overlay on a project using a blend mode
+    // for its transparent caption look would carry that mode along, and the
+    // exporter would apply it to text the user had deliberately coloured.
+    // (The preview has always had a separate, unblended text canvas, so this
+    // was a preview/export divergence: correct on screen, wrong in the file.)
+    textBlendMode: 'normal',
+    ...(element.style || {})
+  };
   const keyframes = element.keyframes;
   if (!Array.isArray(keyframes) || !keyframes.length || currentTime == null) return merged;
 

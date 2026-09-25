@@ -125,6 +125,16 @@ export function PreviewStage({
               exported video; populated/positioned entirely from JS. */}
           <div className="caption-transform-overlay" id="caption-transform-overlay">
             <div className="caption-transform-hit-area" id="caption-transform-hit-area" />
+            {/* Inline editor for a text overlay's words — double-click one on
+                the video to type straight into it, rather than going to the
+                Overlay panel. Positioned over the element's own measured box
+                and shown/hidden entirely from canvasTransform.js. */}
+            <textarea
+              className="text-element-inline-editor"
+              id="text-element-inline-editor"
+              spellCheck="false"
+              hidden
+            />
             <div className="caption-transform-box" id="caption-transform-box" hidden>
               <div className="caption-transform-toolbar" id="caption-transform-toolbar">
                 <button type="button" className="caption-transform-scope-btn" data-scope="this" id="btn-transform-scope-this">This Caption</button>

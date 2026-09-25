@@ -1529,6 +1529,13 @@ export function setTextElementBoxes(boxes) {
     syncOverlayToContentRect(overlayEl);
   }
 
+  if (inlineEditingId) {
+    // The element can still move under the caret (playback, a keyframe), so
+    // the field follows it rather than being placed once.
+    positionInlineEditor();
+    return;
+  }
+
   if (!selectedTextElementId) return;
 
   // Selected but not visible right now (the playhead moved outside the
@@ -1544,6 +1551,75 @@ export function setTextElementBoxes(boxes) {
     boxEl.hidden = false;
     positionBoxElement();
   }
+}
+
+// --- Inline text editing on the canvas -------------------------------------
+//
+// Double-click a text overlay on the video to type straight into it. The
+// Overlay panel's Content field still works and stays the fuller surface;
+// this exists because going to a side panel to fix a word you can see in
+// front of you is exactly the kind of detour a caption editor shouldn't ask
+// for.
+//
+// A real <textarea> laid over the element's own measured box, not a
+// contenteditable canvas trick: it gets caret handling, selection, IME,
+// undo-in-field and mobile keyboards for free, and it keeps the text a plain
+// string rather than DOM that has to be parsed back.
+
+let inlineEditorEl = null;
+let inlineEditingId = null;
+
+/** Positions the editor over the element's current on-screen box. */
+function positionInlineEditor() {
+  if (!inlineEditorEl || !inlineEditingId) return;
+  const entry = textElementBoxes.find((b) => b.id === inlineEditingId);
+  if (!entry) return;
+  const scale = entry.box.cssPxScale || 1;
+  const minWidth = 140;
+  const width = Math.max(minWidth, entry.box.width / scale + 24);
+  const height = Math.max(34, entry.box.height / scale + 16);
+  inlineEditorEl.style.left = `${entry.box.centerX / scale - width / 2}px`;
+  inlineEditorEl.style.top = `${entry.box.centerY / scale - height / 2}px`;
+  inlineEditorEl.style.width = `${width}px`;
+  inlineEditorEl.style.height = `${height}px`;
+}
+
+function startInlineEdit(id) {
+  const element = getTextElement(id);
+  if (!element || !inlineEditorEl) return;
+  inlineEditingId = id;
+  inlineEditorEl.value = element.text || '';
+  inlineEditorEl.hidden = false;
+  positionInlineEditor();
+  inlineEditorEl.focus();
+  inlineEditorEl.select();
+  // The handles would sit on top of the field and swallow clicks meant for
+  // the caret.
+  if (boxEl) boxEl.hidden = true;
+}
+
+/**
+ * Leaves edit mode. The live keystrokes were written with history off, so
+ * this commits the finished text as ONE undo step — the same split every
+ * gesture in this file uses.
+ */
+function endInlineEdit(commit = true) {
+  if (!inlineEditingId || !inlineEditorEl) return;
+  const id = inlineEditingId;
+  const value = inlineEditorEl.value;
+  inlineEditingId = null;
+  inlineEditorEl.hidden = true;
+  inlineEditorEl.blur();
+  if (commit) updateTextElement(id, { text: value }, { recordHistory: true });
+  if (boxEl && selectedTextElementId) {
+    boxEl.hidden = false;
+    positionBoxElement();
+  }
+}
+
+/** True while the canvas editor has the caret — used to hold off gestures. */
+export function isEditingTextElementInline() {
+  return !!inlineEditingId;
 }
 
 /** Topmost visible text element under a viewport point, or null. */
@@ -1587,6 +1663,7 @@ function selectTextElementTarget(id) {
 }
 
 function clearTextElementSelection() {
+  if (inlineEditingId) endInlineEdit(true);
   if (!selectedTextElementId) return;
   selectedTextElementId = null;
   // `selected` is only ever true-because-of-a-text-element here (a text
@@ -2157,9 +2234,47 @@ export function initCanvasTransform() {
   groupStartBtn = document.getElementById('btn-transform-group-start');
   groupConfirmBtn = document.getElementById('btn-transform-group-confirm');
   groupMultiSelectLabelEl = document.getElementById('caption-transform-group-multiselect-label');
+  inlineEditorEl = document.getElementById('text-element-inline-editor');
   if (!overlayEl || !hitAreaEl || !boxEl) return;
 
   updateScopeButtons();
+
+  if (inlineEditorEl) {
+    // Live keystrokes with history OFF; endInlineEdit commits the finished
+    // text as one undo step.
+    inlineEditorEl.addEventListener('input', () => {
+      if (inlineEditingId) {
+        updateTextElement(inlineEditingId, { text: inlineEditorEl.value }, { recordHistory: false });
+      }
+    });
+    inlineEditorEl.addEventListener('blur', () => endInlineEdit(true));
+    inlineEditorEl.addEventListener('keydown', (e) => {
+      // Escape leaves without committing; the live writes are already in
+      // state, so "cancel" here just means "stop editing" — Undo is the way
+      // back, exactly as it is for every other edit.
+      if (e.key === 'Escape') { e.stopPropagation(); endInlineEdit(true); return; }
+      // Enter finishes; Shift+Enter is a real newline, since a text overlay
+      // can legitimately be more than one line.
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); endInlineEdit(true); return; }
+      // Every other key (Backspace included) belongs to the field. Stopping
+      // propagation keeps the timeline's own Delete/Backspace shortcut from
+      // seeing it at all.
+      e.stopPropagation();
+    });
+    // The overlay's own pointer handlers would otherwise start a drag or
+    // deselect the element the moment the user clicks to place a caret.
+    inlineEditorEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+  }
+
+  // Double-click a text overlay to edit it in place.
+  hitAreaEl.addEventListener('dblclick', (e) => {
+    const hit = findTextElementAtClient(e.clientX, e.clientY);
+    if (hit) startInlineEdit(hit.id);
+  });
+  boxEl.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
+    if (selectedTextElementId) startInlineEdit(selectedTextElementId);
+  });
 
   // The overlay is `position: fixed` (see style.css's doc comment on
   // .caption-transform-overlay) precisely so .phone-frame's overflow:hidden
@@ -2179,6 +2294,11 @@ export function initCanvasTransform() {
     // one must resolve to it rather than to whatever caption happens to be
     // underneath — and they exist independently of the transcript, so a
     // click on one must work on frames where there's no caption at all.
+    // A press that lands while the inline editor is open is the user
+    // clicking AWAY from it — finish that edit first, then treat the press
+    // normally.
+    if (inlineEditingId) endInlineEdit(true);
+
     const textHit = findTextElementAtClient(e.clientX, e.clientY);
     if (textHit) {
       deselectVideoTarget();

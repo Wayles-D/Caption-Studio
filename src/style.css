@@ -319,6 +319,39 @@ body.light-theme {
   display: block;
 }
 
+/**
+ * Inline editor for a text overlay (double-click it on the video). Sits
+ * inside .caption-transform-overlay and is positioned over the element's own
+ * measured box by canvasTransform.js. Deliberately NOT styled to imitate the
+ * rendered text: matching the canvas's font, size, outline and shadow exactly
+ * is impossible in a DOM control, and a near-miss reads as a rendering bug —
+ * so this is plainly a text field, sitting where the text is.
+ */
+.text-element-inline-editor {
+  position: absolute;
+  z-index: 30;
+  pointer-events: auto;
+  margin: 0;
+  padding: 6px 8px;
+  resize: none;
+  overflow: hidden;
+  text-align: center;
+  line-height: 1.2;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 2px solid var(--accent-color);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  outline: none;
+}
+
+.text-element-inline-editor[hidden] {
+  display: none;
+}
+
 /* On-canvas caption transform overlay (editor-only — never rendered into the
    exported video, see src/js/components/canvasTransform.js). Sits above the
    graphics canvas (z-index 10) so its hit-test layer and click-to-select
