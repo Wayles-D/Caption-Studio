@@ -87,6 +87,185 @@ let dragMarker = null; // { fromTime }
 let selectedMarkerTime = null;
 let advancedExpanded = false;
 
+// TIMELINE ZOOM. 1 means "the whole clip fits the panel exactly", which is
+// how the timeline has always behaved; above that the rows grow wider than
+// the panel and it pans horizontally instead of squeezing everything into
+// the available width.
+//
+// This is what makes a long video editable at all: at 1x a 40-second clip
+// gives each caption a few dozen pixels, so its text wraps into an unreadable
+// stack and its trim handles are a couple of pixels wide. Zooming in is the
+// only way to see what you are actually editing.
+//
+// A pure VIEW setting — not undo-tracked, never exported, and deliberately
+// not part of the document: how far you happen to be zoomed in is not an edit
+// to the video.
+const TIMELINE_ZOOM_MIN = 1;
+const TIMELINE_ZOOM_MAX = 16;
+const TIMELINE_ZOOM_STEP = 1.5;
+const TIMELINE_GUTTER_PX = 168;
+let timelineZoom = 1;
+
+/**
+ * Sizes every row for the current zoom, anchored so the same instant stays
+ * under the same point on screen.
+ *
+ * Only the ROW WIDTH is written. Everything inside a row is positioned as a
+ * percentage of it (see timeToPercent), so the clips, ruler ticks, filmstrip
+ * tiles and keyframe markers all stretch together for free — there is no
+ * per-element zoom maths anywhere, and nothing else in this file had to learn
+ * about zoom at all.
+ *
+ * @param {number} nextZoom
+ * @param {number|null} anchorClientX - Viewport x to keep fixed (the pointer for a wheel-zoom, the panel's centre for a button).
+ */
+function applyTimelineZoom(nextZoom, anchorClientX = null) {
+  const clamped = Math.max(TIMELINE_ZOOM_MIN, Math.min(TIMELINE_ZOOM_MAX, nextZoom));
+  if (!els?.scroll) return;
+
+  const scrollRect = els.scroll.getBoundingClientRect();
+  // clientWidth, NOT the border-box rect: the rect includes the vertical
+  // scrollbar, so sizing rows from it made them a scrollbar-width too wide
+  // and left the timeline horizontally scrollable even at 1x, where it is
+  // supposed to fit the panel exactly.
+  const viewportTrack = Math.max(1, els.scroll.clientWidth - TIMELINE_GUTTER_PX);
+  const anchorX = anchorClientX == null ? scrollRect.left + scrollRect.width / 2 : anchorClientX;
+
+  // The timeline position under the anchor, as a fraction of the track, BEFORE
+  // the resize — so zooming feels like it happens around that point rather
+  // than yanking the view back to wherever the scroll happened to be.
+  const beforeTrackWidth = viewportTrack * timelineZoom;
+  const beforeOffset = els.scroll.scrollLeft + (anchorX - scrollRect.left) - TIMELINE_GUTTER_PX;
+  const anchorFraction = beforeTrackWidth > 0 ? beforeOffset / beforeTrackWidth : 0;
+
+  timelineZoom = clamped;
+  const rowWidth = TIMELINE_GUTTER_PX + viewportTrack * clamped;
+  els.scroll.style.setProperty('--timeline-row-width', `${rowWidth}px`);
+
+  const afterTrackWidth = viewportTrack * clamped;
+  const desired = (anchorFraction * afterTrackWidth) - (anchorX - scrollRect.left) + TIMELINE_GUTTER_PX;
+  els.scroll.scrollLeft = Math.max(0, desired);
+
+  if (els.zoomLevel) els.zoomLevel.textContent = clamped <= 1 ? 'Fit' : `${clamped.toFixed(1)}x`;
+  if (els.zoomOutBtn) els.zoomOutBtn.disabled = clamped <= TIMELINE_ZOOM_MIN;
+  if (els.zoomInBtn) els.zoomInBtn.disabled = clamped >= TIMELINE_ZOOM_MAX;
+
+  // Zooming re-anchors on the pointer/centre, which is a deliberate scroll
+  // the follow must not mistake for the user taking over.
+  programmaticScroll = true;
+  requestAnimationFrame(() => { programmaticScroll = false; });
+
+  // Clip geometry is percentage-based and therefore already correct, but the
+  // STACKING packer measures laid-out boxes — two clips that overlapped at
+  // 1x may not overlap once stretched, so the rows have to be repacked.
+  lastTextSignature = null;
+  lastAudioSignature = null;
+}
+
+/** Re-applies the current zoom after the panel itself changes size. */
+function refreshTimelineZoom() {
+  applyTimelineZoom(timelineZoom);
+}
+
+// --- PLAYHEAD AUTO-FOLLOW --------------------------------------------------
+//
+// Once the timeline can be wider than its panel (see applyTimelineZoom), the
+// playhead walks off the right edge during playback and the user has to chase
+// it by hand. From here on the viewport follows it instead.
+//
+// The anchor is a FRACTION of the visible track, never a pixel literal, so it
+// adapts to the panel's width, the zoom level, a window resize and any screen
+// size for free. And it is expressed against the same time -> pixel
+// conversion the playhead itself is positioned by (timeToX over the ruler's
+// own measured width), so there is no second notion of where a given instant
+// lives — zoom is handled by construction rather than by a parallel
+// pixels-per-second calculation.
+//
+// ANCHOR == THRESHOLD, deliberately. The obvious design ("start following at
+// 75%, then centre the playhead") snaps the content sideways by the distance
+// between the two the instant following begins. Making the point where
+// following STARTS the same point the playhead then sits at means the
+// transition is continuous: the playhead advances normally to the anchor,
+// stops there, and the content begins sliding underneath it with no jump.
+const FOLLOW_ANCHOR_FRACTION = 0.62;
+
+// True while the viewport should chase the playhead. Manual scrolling during
+// playback turns it off so the timeline doesn't fight a user trying to look
+// somewhere else; pressing play or seeking turns it back on (see
+// initTimelinePanel's listeners), which is the moment the user has asked to
+// be looking at the playhead again.
+let autoFollow = true;
+
+// Our own scrollLeft writes fire 'scroll' exactly like a user's do, so they
+// are flagged rather than guessed at — without this the follow would read its
+// own movement as the user taking over and switch itself off on the first
+// frame.
+let programmaticScroll = false;
+
+function setScrollLeft(value) {
+  if (Math.abs(value - els.scroll.scrollLeft) < 0.5) return;
+  programmaticScroll = true;
+  els.scroll.scrollLeft = value;
+  // Cleared on the next frame rather than synchronously: the scroll event is
+  // dispatched asynchronously, so clearing it here would let our own event
+  // arrive after the flag had already gone.
+  requestAnimationFrame(() => { programmaticScroll = false; });
+}
+
+/**
+ * Keeps the playhead visible while the video plays, and brings it back into
+ * view after a seek.
+ *
+ * @param {number} contentX - The playhead's x within the scrolled content, already computed by refreshPlayhead from the video's real currentTime.
+ * @param {boolean} force - Bring it into view regardless of playback/auto-follow state (a seek).
+ */
+function followPlayhead(contentX, force = false) {
+  const scroll = els?.scroll;
+  if (!scroll) return;
+  const maxScroll = scroll.scrollWidth - scroll.clientWidth;
+  // Fitted timeline — the whole clip is on screen, so there is nothing to
+  // follow and no scrollbar to move.
+  if (maxScroll <= 1) return;
+
+  const video = getVideo();
+  const playing = !!video && !video.paused && !video.ended;
+  if (!force && (!playing || !autoFollow)) return;
+
+  const trackWidth = Math.max(1, scroll.clientWidth - TIMELINE_GUTTER_PX);
+  const anchor = TIMELINE_GUTTER_PX + trackWidth * FOLLOW_ANCHOR_FRACTION;
+  const viewportX = contentX - scroll.scrollLeft;
+
+  if (force) {
+    // A seek can land anywhere, including behind the current view. If the
+    // target is already comfortably on screen, leave the viewport alone —
+    // re-centring on every scrub would yank the timeline around while the
+    // user is dragging.
+    if (viewportX >= TIMELINE_GUTTER_PX && viewportX <= scroll.clientWidth) return;
+    setScrollLeft(Math.max(0, Math.min(maxScroll, contentX - anchor)));
+    return;
+  }
+
+  // Before the anchor the playhead simply advances across a stationary
+  // timeline, exactly as it always has. At and past it, the scroll position
+  // is derived from the playhead's own position every frame, so the content
+  // slides continuously instead of jumping in steps.
+  if (viewportX < anchor) return;
+  setScrollLeft(Math.max(0, Math.min(maxScroll, contentX - anchor)));
+}
+
+/** Re-arms following and pulls the playhead into view — after play or a seek. */
+function resumeFollow() {
+  autoFollow = true;
+  const video = getVideo();
+  const duration = video?.duration || 0;
+  if (!els?.ruler || !(duration > 0)) return;
+  const rulerRect = els.ruler.getBoundingClientRect();
+  const scrollRect = els.scroll.getBoundingClientRect();
+  if (!rulerRect.width) return;
+  const x = timeToX(video.currentTime || 0, rulerRect.width, duration);
+  followPlayhead((rulerRect.left - scrollRect.left) + els.scroll.scrollLeft + x, true);
+}
+
 /** Shows/hides every precision numeric field per the current advancedExpanded state — a pure display toggle, never touches appState. */
 function applyAdvancedState() {
   if (els?.advancedBtn) els.advancedBtn.classList.toggle('active', advancedExpanded);
@@ -289,6 +468,34 @@ function buildDom(container, options) {
   // for a real side panel instead, so the click routes to React's
   // onAdvancedToggle and relocatePrecisionFields (driven from tick(), see
   // below) moves these exact fields there instead of toggling them inline.
+  // Zoom controls sit with the other view controls, left of Advanced.
+  const zoomControls = document.createElement('div');
+  zoomControls.className = 'timeline-zoom-controls';
+  const makeZoomBtn = (id, label, title) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'timeline-zoom-btn';
+    b.id = id;
+    b.textContent = label;
+    b.title = title;
+    return b;
+  };
+  const zoomOutBtn = makeZoomBtn('timeline-zoom-out', '\u2212', 'Zoom out (show more of the timeline)');
+  const zoomInBtn = makeZoomBtn('timeline-zoom-in', '+', 'Zoom in (stretch the timeline so clips are readable)');
+  const zoomLevel = document.createElement('span');
+  zoomLevel.className = 'timeline-zoom-level';
+  zoomLevel.id = 'timeline-zoom-level';
+  zoomLevel.textContent = 'Fit';
+  zoomOutBtn.addEventListener('click', () => applyTimelineZoom(timelineZoom / TIMELINE_ZOOM_STEP));
+  zoomInBtn.addEventListener('click', () => applyTimelineZoom(timelineZoom * TIMELINE_ZOOM_STEP));
+  // Double-clicking the level is the quick way back to "everything visible".
+  zoomLevel.title = 'Double-click to fit the whole clip';
+  zoomLevel.addEventListener('dblclick', () => applyTimelineZoom(1));
+  zoomControls.appendChild(zoomOutBtn);
+  zoomControls.appendChild(zoomLevel);
+  zoomControls.appendChild(zoomInBtn);
+  controlsRow.appendChild(zoomControls);
+
   const advancedBtn = document.createElement('button');
   advancedBtn.type = 'button';
   advancedBtn.className = 'timeline-advanced-toggle';
@@ -504,7 +711,8 @@ function buildDom(container, options) {
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
     captionsTrack: captionsLane.track,
     addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn,
-    addCaptionBtn: captionsLane.addBtn, addVideoBtn
+    addCaptionBtn: captionsLane.addBtn, addVideoBtn,
+    zoomInBtn, zoomOutBtn, zoomLevel
   };
 }
 
@@ -601,6 +809,10 @@ function refreshPlayhead(currentTime, duration) {
   const x = timeToX(currentTime, rulerRect.width, duration);
   const left = (rulerRect.left - scrollRect.left) + els.scroll.scrollLeft + x;
   els.playhead.style.left = `${left}px`;
+  // Driven from the SAME position the playhead was just drawn at, once per
+  // frame, so the viewport can never disagree with where the playhead is —
+  // and no extra layout is measured to do it.
+  followPlayhead(left);
 }
 
 function clearMarkers(track) {
@@ -1185,6 +1397,13 @@ function buildCaptionEventClip(event, duration, isSelected) {
 }
 
 function refreshTextLane(duration) {
+  // A project whose transcript arrived BEFORE caption events existed has
+  // phrases but no events, so its captions would never appear on the lane.
+  // Seeding here rather than only on upload/regenerate is what makes them
+  // show up for a session that is already open. Idempotent and self-
+  // disabling: it only ever fills an EMPTY list.
+  captionEvents.ensureCaptionEventsSeeded();
+
   const elements = appState.textElements || [];
   const selectedId = appState.selectedTextElementId;
   const events = appState.captionEvents || [];
@@ -1587,7 +1806,48 @@ export function initTimelinePanel(container, options = {}) {
   lastAudioSignature = null;
   lastTextSignature = null;
   dragClip = null;
+  timelineZoom = 1;
+  autoFollow = true;
+  programmaticScroll = false;
   applyAdvancedState();
+  applyTimelineZoom(1);
+
+  // The row width is derived from the panel's own width, so it has to be
+  // recomputed whenever that changes — a window resize, or the bottom sheet
+  // being dragged to a new height.
+  const onResize = () => refreshTimelineZoom();
+  window.addEventListener('resize', onResize);
+  const panelObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => refreshTimelineZoom())
+    : null;
+  panelObserver?.observe(els.scroll);
+
+  // Ctrl/Cmd + wheel zooms around the pointer, the way every timeline does.
+  // Without the modifier the wheel keeps its normal scrolling behaviour.
+  // Manual horizontal scrolling during playback hands control back to the
+  // user: chasing the playhead while they are trying to inspect another part
+  // of the timeline is the failure mode this guards against. Pressing play
+  // again, scrubbing or seeking re-arms it (see below).
+  const onScroll = () => {
+    if (programmaticScroll) return;
+    const video = getVideo();
+    if (video && !video.paused && !video.ended) autoFollow = false;
+  };
+  els.scroll.addEventListener('scroll', onScroll, { passive: true });
+
+  // Playback and seeking both mean "show me where I am now".
+  const video = getVideo();
+  const onPlay = () => resumeFollow();
+  const onSeeked = () => resumeFollow();
+  video?.addEventListener('play', onPlay);
+  video?.addEventListener('seeked', onSeeked);
+
+  const onWheel = (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    applyTimelineZoom(timelineZoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientX);
+  };
+  els.scroll.addEventListener('wheel', onWheel, { passive: false });
 
   const scrub = (clientX) => {
     const video = getVideo();
@@ -1716,6 +1976,15 @@ export function initTimelinePanel(container, options = {}) {
     if (rafId) cancelAnimationFrame(rafId);
     document.removeEventListener('pointerdown', dismissTargetInfoOnOutsideClick);
     document.removeEventListener('pointerdown', dismissSoundPickerOnOutsideClick);
+    // The zoom/follow listeners outlive a re-init otherwise: initTimelinePanel
+    // rebuilds the DOM, so a stale observer would go on measuring a detached
+    // element and a stale video listener would call into a dead panel.
+    window.removeEventListener('resize', onResize);
+    panelObserver?.disconnect();
+    els.scroll.removeEventListener('wheel', onWheel);
+    els.scroll.removeEventListener('scroll', onScroll);
+    video?.removeEventListener('play', onPlay);
+    video?.removeEventListener('seeked', onSeeked);
     closeSoundPicker();
   };
 }

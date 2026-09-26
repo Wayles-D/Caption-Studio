@@ -849,11 +849,86 @@ body.light-theme {
   text-align: right;
 }
 
+/* Horizontal scrolling is what makes ZOOM possible: past 1x the rows are
+   wider than the panel and the timeline is panned instead of squeezed. Every
+   row is sized from --timeline-row-width (set by timelinePanel.js's
+   applyTimelineZoom), and everything positioned INSIDE a row is a percentage
+   of it — clips, ruler ticks, filmstrip tiles — so widening the row stretches
+   the whole timeline together with no per-element maths. */
 .timeline-scroll {
   position: relative;
   flex: 1;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
+}
+
+/* The final tick's label flows 35px past the end of the ruler. That was
+   invisible while the timeline had overflow-x: hidden, and became a
+   permanent phantom horizontal scroll the moment panning was enabled —
+   clipping it here keeps exactly the appearance it has always had. */
+.timeline-ruler {
+  overflow: hidden;
+}
+
+.timeline-ruler-row,
+.timeline-filmstrip-row,
+.timeline-lane {
+  width: var(--timeline-row-width, 100%);
+  /* At 1x the rows must still fill the panel exactly, so zoom starts from
+     "fits the width" rather than from an arbitrary pixels-per-second. */
+  min-width: 100%;
+}
+
+/* The label column stays put while the tracks pan underneath it — scrolling
+   a lane away from its own name would make a zoomed timeline unreadable. */
+.timeline-ruler-gutter,
+.timeline-filmstrip-gutter,
+.timeline-lane-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: var(--bg-sidebar);
+}
+
+.timeline-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.timeline-zoom-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 150ms, color 150ms;
+}
+
+.timeline-zoom-btn:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.timeline-zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.timeline-zoom-level {
+  min-width: 34px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
 }
 
 .timeline-ruler-row,
@@ -1235,8 +1310,15 @@ body.light-theme {
   color: var(--text-secondary);
 }
 
+/* Deliberately STICKY, not relative: this rule is more specific than the
+   shared gutter rule above and was silently overriding it, so every clip
+   lane's label scrolled away with its track once the timeline could pan.
+   Sticky is still a positioned ancestor, so it anchors the sound picker
+   popover exactly as relative did. */
 .timeline-audio-lane .timeline-lane-gutter {
-  position: relative; /* anchors the sound picker popover */
+  position: sticky;
+  left: 0;
+  z-index: 4;
 }
 
 /* The in-strip "+". It lives inside the track it adds to — the strip is where
@@ -1288,6 +1370,22 @@ body.light-theme {
 .timeline-audio-track:not(.is-empty) .timeline-add-clip-btn:focus-visible {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* The Captions lane is an exception: hiding an occupied lane's "+" until
+   hover assumes a lane is USUALLY empty, and this one never is — the
+   transcript's own captions fill it from 0:00 (see captionEvent.js). With
+   the default rule its "+" sat under the first caption clip, invisible and
+   pointer-events: none, so there was no way to add a manual caption at all.
+   It stays visible and clickable here; z-index 4 already puts it above the
+   clips. */
+#timeline-captions-track .timeline-add-clip-btn {
+  opacity: 0.75;
+  pointer-events: auto;
+}
+
+#timeline-captions-track:hover .timeline-add-clip-btn {
+  opacity: 1;
 }
 
 /* On the video row the button sits over real frames rather than an empty

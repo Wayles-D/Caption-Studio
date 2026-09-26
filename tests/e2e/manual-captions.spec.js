@@ -76,12 +76,12 @@ test('the Captions lane exists and its "+" creates a manual caption there', asyn
   expect(els[0].start).toBeCloseTo(3, 1);
 
   // It lives on the CAPTIONS strip, and the Text strip is still empty.
-  await expect(captionsTrack.locator('.timeline-text-clip')).toHaveCount(1);
-  await expect(textTrack.locator('.timeline-text-clip')).toHaveCount(0);
+  await expect(captionsTrack.locator('.timeline-text-clip:not(.is-transcript)')).toHaveCount(1);
+  await expect(textTrack.locator('.timeline-text-clip:not(.is-transcript)')).toHaveCount(0);
   // ...and reads as a caption rather than an overlay.
-  await expect(captionsTrack.locator('.timeline-text-clip')).toHaveClass(/is-caption/);
+  await expect(captionsTrack.locator('.timeline-text-clip:not(.is-transcript)')).toHaveClass(/is-caption/);
   // Creating it selects it, so the panel is already pointed at it.
-  await expect(captionsTrack.locator('.timeline-text-clip')).toHaveClass(/selected/);
+  await expect(captionsTrack.locator('.timeline-text-clip:not(.is-transcript)')).toHaveClass(/selected/);
 
   expect(errs).toEqual([]);
 });
@@ -99,10 +99,10 @@ test('each kind goes to its own lane and neither takes the other', async ({ page
   const kinds = els.map((e) => e.kind).sort();
   expect(kinds).toEqual(['caption', 'overlay']);
 
-  await expect(page.locator('#timeline-captions-track .timeline-text-clip')).toHaveCount(1);
-  await expect(page.locator('#timeline-text-track .timeline-text-clip')).toHaveCount(1);
+  await expect(page.locator('#timeline-captions-track .timeline-text-clip:not(.is-transcript)')).toHaveCount(1);
+  await expect(page.locator('#timeline-text-track .timeline-text-clip:not(.is-transcript)')).toHaveCount(1);
   // The overlay clip is NOT marked as a caption.
-  await expect(page.locator('#timeline-text-track .timeline-text-clip')).not.toHaveClass(/is-caption/);
+  await expect(page.locator('#timeline-text-track .timeline-text-clip:not(.is-transcript)')).not.toHaveClass(/is-caption/);
 });
 
 test('a manual caption lands where your captions sit, an overlay lands mid-frame', async ({ page }) => {
@@ -164,7 +164,7 @@ test('a manual caption is still fully editable — drag, select, delete', async 
   const before = await elements(page);
 
   // --- drag its timeline clip to a later time ---
-  const clip = page.locator('#timeline-captions-track .timeline-text-clip').first();
+  const clip = page.locator('#timeline-captions-track .timeline-text-clip:not(.is-transcript)').first();
   const box = await clip.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
@@ -179,7 +179,7 @@ test('a manual caption is still fully editable — drag, select, delete', async 
   expect(moved[0].end - moved[0].start).toBeCloseTo(before[0].end - before[0].start, 1);
   // ...and it's still a caption, still on its own lane.
   expect(moved[0].kind).toBe('caption');
-  await expect(page.locator('#timeline-captions-track .timeline-text-clip')).toHaveCount(1);
+  await expect(page.locator('#timeline-captions-track .timeline-text-clip:not(.is-transcript)')).toHaveCount(1);
 
   // --- delete it ---
   await page.evaluate(() => {

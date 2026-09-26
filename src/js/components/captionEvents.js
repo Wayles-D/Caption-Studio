@@ -77,6 +77,26 @@ export function captureCaptionEventsFromPhrases(phrases, { force = false } = {})
   return events;
 }
 
+/**
+ * Seeds the list from whatever phrases the session already has, if it has
+ * none of its own yet.
+ *
+ * Capture otherwise only happens when a transcript ARRIVES (an upload or a
+ * regenerate), so a project that was already open when caption events landed
+ * had phrases but no events — and therefore no caption clips on the timeline
+ * at all, which read as "the system-generated captions do not work".
+ *
+ * Safe to call from a render path: it only ever fills an EMPTY list, so it
+ * runs at most once and can never overwrite an edit.
+ */
+export function ensureCaptionEventsSeeded() {
+  if (getCaptionEvents().length) return false;
+  const phrases = appState.phrases || [];
+  if (!phrases.length) return false;
+  captureCaptionEventsFromPhrases(phrases);
+  return true;
+}
+
 /** Re-projects phrases from the current words — after a transcript text edit. */
 export function refreshPhrasesFromCaptionEvents() {
   const events = getCaptionEvents();

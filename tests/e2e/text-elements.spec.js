@@ -48,7 +48,7 @@ test('timeline: create at playhead, drag, trim, select, delete', async ({ page }
   expect(els.length).toBe(1);
   expect(els[0].start).toBeCloseTo(3, 1);
 
-  const clip = page.locator('.timeline-text-clip').first();
+  const clip = page.locator('#timeline-text-track .timeline-text-clip').first();
   await expect(clip).toHaveCount(1);
   // creating selects it, so the clip should render as selected
   await expect(clip).toHaveClass(/selected/);
@@ -68,7 +68,7 @@ test('timeline: create at playhead, drag, trim, select, delete', async ({ page }
   expect(afterDrag.end - afterDrag.start).toBeCloseTo(els[0].end - els[0].start, 1);
 
   // --- trim the right edge ---
-  const clip2 = page.locator('.timeline-text-clip').first();
+  const clip2 = page.locator('#timeline-text-track .timeline-text-clip').first();
   const box2 = await clip2.boundingBox();
   await page.mouse.move(box2.x + box2.width - 2, box2.y + box2.height / 2);
   await page.mouse.down();
