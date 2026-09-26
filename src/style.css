@@ -1242,10 +1242,14 @@ body.light-theme {
 /* Tiles are sized in PERCENT by filmstrip.js so the strip re-flows with the
    editor — a time axis must never carry baked-in pixel coordinates. They are
    flush by design: no gap, no margin, no individual radius. */
+/* Positioned on the TIME AXIS rather than flowed in order: the strip is
+   virtualized (see timelinePanel.js's syncFilmstrip), so only the tiles in
+   the visible window exist and each one has to sit at its own timestamp
+   rather than wherever the flow happens to put it. */
 .timeline-filmstrip-tile {
-  position: relative;
-  height: 100%;
-  flex: 0 0 auto;
+  position: absolute;
+  top: 0;
+  bottom: 0;
   background-color: var(--bg-card);
   background-size: cover;
   background-position: center;

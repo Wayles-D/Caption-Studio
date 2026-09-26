@@ -16,7 +16,13 @@
  */
 import * as keyframeEngine from './keyframeEngine.js';
 import { undo, redo, getHistoryState, appState } from '../state.js';
-import { getFilmstrip, computeTileCount, FILMSTRIP_TILE_HEIGHT_PX, FILMSTRIP_COUNT_CHANGE_THRESHOLD } from './filmstrip.js';
+import {
+  getFilmstripWindow,
+  chooseSecondsPerTile,
+  tileTimesForWindow,
+  filmstripTileWidth,
+  FILMSTRIP_TILE_HEIGHT_PX
+} from './filmstrip.js';
 import * as audioTimeline from './audioTimeline.js';
 import { previewSound } from './audioEngine.js';
 import { promptForAudioFile } from './audioImport.js';
@@ -1605,8 +1611,14 @@ let lastPaused = undefined;
 // rotation, style, Rolling Stack, keyframes — is deliberately not an input
 // here: thumbnails depend on the VIDEO, so none of those cause a rebuild.
 let filmstripSrc = null;
-let filmstripCount = 0;
 let filmstripToken = 0;
+// What the strip currently shows: the video, the grid interval, and which
+// slots are mounted. Compared once per tick so a pan that changes nothing
+// costs a string compare.
+let filmstripSignature = '';
+// slotIndex -> tile element, so panning reuses the elements already mounted
+// instead of rebuilding the row (which would flash and drop loaded frames).
+const filmstripTiles = new Map();
 
 function currentVideoSrc() {
   const video = getVideo();
@@ -1617,43 +1629,31 @@ function currentVideoSrc() {
 
 function clearFilmstrip() {
   if (els?.filmstripTrack) els.filmstripTrack.replaceChildren();
+  filmstripTiles.clear();
+  filmstripSignature = '';
   filmstripSrc = null;
-  filmstripCount = 0;
 }
 
 /**
- * Paints `count` placeholder tiles immediately, then fills each one in as its
- * frame arrives. Placeholders are what keep the row from shifting layout when
- * extraction finishes, and give a lightweight loading state for free.
+ * Fills the mounted tiles of the current window, reusing any frame already
+ * cached and extracting only the rest. Tiles are mounted by syncFilmstrip
+ * before this runs, so the row never shifts layout as frames arrive.
  */
-async function rebuildFilmstrip(src, count, trackWidth) {
-  // The width each tile actually occupies on screen. filmstrip.js rasterizes to
-  // exactly this (x devicePixelRatio) so tiles are never upscaled by the browser.
-  const renderedTileWidth = trackWidth / count;
-  const token = ++filmstripToken;
+async function paintFilmstripWindow(src, slots, tileWidthPx, token) {
   const track = els.filmstripTrack;
-  track.replaceChildren();
   track.classList.add('is-loading');
-
-  const tiles = [];
-  for (let i = 0; i < count; i++) {
-    const tile = document.createElement('div');
-    tile.className = 'timeline-filmstrip-tile';
-    // Width as a PERCENTAGE, never fixed px: the row is a time axis, so tiles
-    // must re-flow with the editor rather than carry baked-in coordinates.
-    tile.style.width = `${100 / count}%`;
-    track.appendChild(tile);
-    tiles.push(tile);
-  }
+  // Slot index by sample time, so a frame arriving (cached or fresh) can find
+  // the tile it belongs to without the extractor knowing about the DOM.
+  const byTime = new Map(slots.map((slot) => [Math.round(slot.t * 1000), slot.index]));
 
   try {
-    await getFilmstrip(src, {
-      count,
-      tileWidthPx: renderedTileWidth,
+    await getFilmstripWindow(src, {
+      slots,
+      tileWidthPx,
       shouldAbort: () => token !== filmstripToken,
-      onTile: (index, url) => {
+      onTile: (t, url) => {
         if (token !== filmstripToken) return;
-        const tile = tiles[index];
+        const tile = filmstripTiles.get(byTime.get(Math.round(t * 1000)));
         if (!tile) return;
         tile.style.backgroundImage = `url("${url}")`;
         tile.classList.add('is-loaded');
@@ -1669,8 +1669,18 @@ async function rebuildFilmstrip(src, count, trackWidth) {
 }
 
 /**
- * Called from the existing tick loop. Cheap on every frame: it only measures
- * and compares, and does real work when the video or the ideal count changed.
+ * Called from the existing tick loop. Cheap on every frame: it measures, builds
+ * a signature, and does real work only when the visible window actually moved.
+ *
+ * The strip is VIRTUALIZED. Tiles sit on a fixed time grid at their natural
+ * width however long the clip is or how far it is zoomed, and only the slots
+ * inside the visible window (plus a margin) are mounted and extracted — so the
+ * cost is bounded by how many tiles fit on screen rather than by the clip.
+ *
+ * The previous version sampled a fixed number of frames across the WHOLE clip
+ * and stretched them to fill the row, which is why a zoomed timeline showed
+ * enormous, soft frames: the count was capped at 40, so at 2.3x each portrait
+ * frame was drawn about three times its natural width.
  */
 function syncFilmstrip(duration) {
   const track = els?.filmstripTrack;
@@ -1687,17 +1697,67 @@ function syncFilmstrip(duration) {
 
   const video = getVideo();
   const aspect = (video?.videoWidth || 0) / (video?.videoHeight || 1);
-  const tileWidth = aspect > 0 ? FILMSTRIP_TILE_HEIGHT_PX * aspect : 0;
-  const count = computeTileCount(trackWidth, duration, tileWidth);
-  if (!count) return;
+  const tileWidth = filmstripTileWidth(aspect);
 
-  const srcChanged = src !== filmstripSrc;
-  const countChanged = Math.abs(count - filmstripCount) > FILMSTRIP_COUNT_CHANGE_THRESHOLD;
-  if (!srcChanged && !countChanged) return;
+  // The track is the whole clip, so this is the zoom expressed as a rate —
+  // the same relationship every other part of the timeline uses, rather than
+  // a second pixels-per-second notion.
+  const pixelsPerSecond = trackWidth / duration;
+  const step = chooseSecondsPerTile(tileWidth, pixelsPerSecond);
 
-  filmstripSrc = src;
-  filmstripCount = count;
-  rebuildFilmstrip(src, count, trackWidth);
+  // The visible window, measured from the track's own box against the scroll
+  // viewport. Deriving it this way needs no knowledge of the gutter's width
+  // or of the current scroll offset.
+  const trackRect = track.getBoundingClientRect();
+  const scrollRect = els.scroll.getBoundingClientRect();
+  const visibleLeftPx = Math.max(0, scrollRect.left - trackRect.left);
+  const visibleRightPx = Math.min(trackWidth, visibleLeftPx + scrollRect.width);
+  const marginPx = scrollRect.width * 0.5;
+  const windowStart = Math.max(0, (visibleLeftPx - marginPx) / pixelsPerSecond);
+  const windowEnd = Math.min(duration, (visibleRightPx + marginPx) / pixelsPerSecond);
+
+  const slots = tileTimesForWindow(windowStart, windowEnd, step, duration);
+  if (!slots.length) return;
+
+  const signature = `${src}|${step}|${slots[0].index}|${slots[slots.length - 1].index}|${Math.round(trackWidth)}`;
+  if (signature === filmstripSignature) return;
+
+  if (src !== filmstripSrc) {
+    clearFilmstrip();
+    filmstripSrc = src;
+  }
+  filmstripSignature = signature;
+
+  const token = ++filmstripToken;
+  const wanted = new Set(slots.map((slot) => slot.index));
+
+  // Drop tiles that have panned out of the window, keeping the rest mounted —
+  // rebuilding the row instead would flash and throw away loaded frames.
+  filmstripTiles.forEach((el, index) => {
+    if (!wanted.has(index)) {
+      el.remove();
+      filmstripTiles.delete(index);
+    }
+  });
+
+  slots.forEach((slot) => {
+    let tile = filmstripTiles.get(slot.index);
+    if (!tile) {
+      tile = document.createElement('div');
+      tile.className = 'timeline-filmstrip-tile';
+      track.appendChild(tile);
+      filmstripTiles.set(slot.index, tile);
+    }
+    // Positioned by TIME as a percentage, never in px: the row is a time axis,
+    // so a tile must re-flow with zoom rather than carry baked-in coordinates.
+    const span = slot.span ?? step;
+    tile.style.left = `${(slot.slotStart / duration) * 100}%`;
+    tile.style.width = `${(Math.min(span, duration - slot.slotStart) / duration) * 100}%`;
+  });
+
+  // The width a tile is actually DISPLAYED at — frames are rasterized to
+  // exactly this (x devicePixelRatio) so the browser never upscales them.
+  paintFilmstripWindow(src, slots, step * pixelsPerSecond, token);
 }
 
 function tick() {
