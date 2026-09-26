@@ -164,3 +164,41 @@ test('a caption can still be dragged while zoomed in', async ({ page }) => {
   expect(after.start).toBeGreaterThan(before.start + 0.2);
   expect(after.end - after.start).toBeCloseTo(before.end - before.start, 1);
 });
+
+test('the label column stays opaque and full height while tracks pan under it', async ({ page }) => {
+  await setup(page);
+  await page.locator('#timeline-zoom-in').click();
+  await page.locator('#timeline-zoom-in').click();
+  await page.evaluate(() => { document.getElementById('timeline-scroll').scrollLeft = 600; });
+  await page.waitForTimeout(500);
+
+  const geo = await page.evaluate(() => {
+    const lane = document.querySelector('#timeline-captions-track').closest('.timeline-lane');
+    const gutter = lane.querySelector('.timeline-lane-gutter');
+    const track = lane.querySelector('.timeline-lane-track');
+    const g = gutter.getBoundingClientRect();
+    const t = track.getBoundingClientRect();
+    return {
+      gutterHeight: Math.round(g.height),
+      laneHeight: Math.round(lane.getBoundingClientRect().height),
+      // The track genuinely extends left underneath the gutter — otherwise
+      // this test would pass without the masking mattering.
+      trackLeft: Math.round(t.left),
+      gutterLeft: Math.round(g.left),
+      // What is painted at the gutter's centre, and just inside its edges?
+      atCentre: document.elementFromPoint(g.left + g.width / 2, g.top + g.height / 2)?.closest('.timeline-lane-gutter') ? 'gutter' : 'other',
+      atTop: document.elementFromPoint(g.left + g.width / 2, g.top + 3)?.closest('.timeline-lane-gutter') ? 'gutter' : 'other',
+      atBottom: document.elementFromPoint(g.left + g.width / 2, g.bottom - 3)?.closest('.timeline-lane-gutter') ? 'gutter' : 'other'
+    };
+  });
+  console.log('gutter masking:', JSON.stringify(geo));
+
+  expect(geo.trackLeft).toBeLessThan(geo.gutterLeft);
+  // The rows are `align-items: center`, which sizes a grid item to its
+  // content — the gutter used to be only as tall as its label (15px in a
+  // 36px lane), so scrolled clips reappeared above and below it.
+  expect(geo.gutterHeight).toBe(geo.laneHeight);
+  expect(geo.atCentre).toBe('gutter');
+  expect(geo.atTop).toBe('gutter');
+  expect(geo.atBottom).toBe('gutter');
+});

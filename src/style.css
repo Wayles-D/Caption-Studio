@@ -888,6 +888,17 @@ body.light-theme {
   left: 0;
   z-index: 4;
   background: var(--bg-sidebar);
+  /* FULL HEIGHT, or the label column stops covering the tracks that pan
+     underneath it. The rows are `align-items: center`, which sizes a grid
+     item to its CONTENT — leaving each gutter only as tall as its own label
+     text (measured: 15px inside a 36px lane). Its opaque background then
+     masked just that strip, so scrolled clips reappeared above and below
+     the label and the whole column looked like it was coming apart.
+     Stretching it and centring the label inside keeps the label exactly
+     where it was while the background covers the lane. */
+  align-self: stretch;
+  display: flex;
+  align-items: center;
 }
 
 .timeline-zoom-controls {
