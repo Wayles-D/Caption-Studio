@@ -28,21 +28,12 @@ export function Toolbar({ onExportVideo }) {
   return (
     <>
       <div className="flex items-center gap-2.5">
-        {/* BHYND mark — two interlocking brackets (the "bind/behind" weave —
-            see the brand sheet). The "under" stroke is drawn three times:
-            once in the header's own background color as a cutout so the
-            "over" stroke reads as genuinely woven through it rather than
-            just overlapping, then again at reduced opacity for depth,
-            before the "over" stroke completes the weave. Colors come from
-            the app's own theme tokens (accent teal / bg-toolbar) instead of
-            the brand sheet's black-on-white so it sits naturally in both
-            light and dark theme. */}
-        <svg width="22" height="22" viewBox="0 0 100 100" fill="none">
-          <path d="M 18 26 L 42 26 L 42 74 L 82 74" stroke="var(--bg-toolbar)" strokeWidth="20" strokeLinecap="square" strokeLinejoin="round" />
-          <path d="M 18 26 L 42 26 L 42 74 L 82 74" stroke="var(--accent-color)" strokeWidth="14" strokeLinecap="square" strokeLinejoin="round" opacity="0.45" />
-          <path d="M 18 74 L 58 74 L 58 26 L 82 26" stroke="var(--accent-color)" strokeWidth="14" strokeLinecap="square" strokeLinejoin="round" />
-        </svg>
-        <span className="font-bold text-[15px] tracking-[-0.02em] text-[var(--text-primary)]">BHYND</span>
+        {/* The bhYnd mark, as artwork rather than the hand-drawn SVG that used
+            to stand in for it. alt is empty on purpose: the wordmark beside it
+            already says "bhYnd", so a screen reader announcing it twice would
+            be noise, not information. */}
+        <img className="h-10 w-12 border-0 rounded-[6px]" src="/Logo.jpeg" alt="" />
+        <span className="font-bold text-[15px] tracking-[-0.02em] text-[var(--text-primary)]">bhYnd</span>
       </div>
 
       <div className="flex-1 max-w-[320px] mx-5">
