@@ -314,6 +314,11 @@ export function getStyleParams() {
     // Rides in the same canonical snapshot for the same reason the audio
     // timeline does: the exporter must resolve what text is on screen from
     // exactly the data the preview drew it from, never a second source.
-    textElements: appState.textElements
+    textElements: appState.textElements,
+    // The transcript's OWN captions, now that they are edited rather than
+    // re-derived (see shared/captionEvent.js). The exporter renders these
+    // instead of regrouping the word list, which is what makes a retimed,
+    // split or merged caption survive an export at all.
+    captionEvents: appState.captionEvents
   };
 }

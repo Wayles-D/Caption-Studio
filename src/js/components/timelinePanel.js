@@ -16,13 +16,20 @@
  */
 import * as keyframeEngine from './keyframeEngine.js';
 import { undo, redo, getHistoryState, appState } from '../state.js';
-import { getFilmstrip, computeTileCount, FILMSTRIP_TILE_HEIGHT_PX, FILMSTRIP_COUNT_CHANGE_THRESHOLD } from './filmstrip.js';
+import {
+  getFilmstripWindow,
+  chooseSecondsPerTile,
+  tileTimesForWindow,
+  filmstripTileWidth,
+  FILMSTRIP_TILE_HEIGHT_PX
+} from './filmstrip.js';
 import * as audioTimeline from './audioTimeline.js';
 import { previewSound } from './audioEngine.js';
 import { promptForAudioFile } from './audioImport.js';
-import { listSounds, getSoundDefinition } from '../../../shared/soundRegistry.js';
+import { getSoundDefinition } from '../../../shared/soundRegistry.js';
 import { getAudioTrackDuration } from '../../../shared/audioTimeline.js';
 import * as textElements from './textElements.js';
+import * as captionEvents from './captionEvents.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 
 const LANES = [
@@ -85,6 +92,185 @@ let rafId = null;
 let dragMarker = null; // { fromTime }
 let selectedMarkerTime = null;
 let advancedExpanded = false;
+
+// TIMELINE ZOOM. 1 means "the whole clip fits the panel exactly", which is
+// how the timeline has always behaved; above that the rows grow wider than
+// the panel and it pans horizontally instead of squeezing everything into
+// the available width.
+//
+// This is what makes a long video editable at all: at 1x a 40-second clip
+// gives each caption a few dozen pixels, so its text wraps into an unreadable
+// stack and its trim handles are a couple of pixels wide. Zooming in is the
+// only way to see what you are actually editing.
+//
+// A pure VIEW setting — not undo-tracked, never exported, and deliberately
+// not part of the document: how far you happen to be zoomed in is not an edit
+// to the video.
+const TIMELINE_ZOOM_MIN = 1;
+const TIMELINE_ZOOM_MAX = 16;
+const TIMELINE_ZOOM_STEP = 1.5;
+const TIMELINE_GUTTER_PX = 168;
+let timelineZoom = 1;
+
+/**
+ * Sizes every row for the current zoom, anchored so the same instant stays
+ * under the same point on screen.
+ *
+ * Only the ROW WIDTH is written. Everything inside a row is positioned as a
+ * percentage of it (see timeToPercent), so the clips, ruler ticks, filmstrip
+ * tiles and keyframe markers all stretch together for free — there is no
+ * per-element zoom maths anywhere, and nothing else in this file had to learn
+ * about zoom at all.
+ *
+ * @param {number} nextZoom
+ * @param {number|null} anchorClientX - Viewport x to keep fixed (the pointer for a wheel-zoom, the panel's centre for a button).
+ */
+function applyTimelineZoom(nextZoom, anchorClientX = null) {
+  const clamped = Math.max(TIMELINE_ZOOM_MIN, Math.min(TIMELINE_ZOOM_MAX, nextZoom));
+  if (!els?.scroll) return;
+
+  const scrollRect = els.scroll.getBoundingClientRect();
+  // clientWidth, NOT the border-box rect: the rect includes the vertical
+  // scrollbar, so sizing rows from it made them a scrollbar-width too wide
+  // and left the timeline horizontally scrollable even at 1x, where it is
+  // supposed to fit the panel exactly.
+  const viewportTrack = Math.max(1, els.scroll.clientWidth - TIMELINE_GUTTER_PX);
+  const anchorX = anchorClientX == null ? scrollRect.left + scrollRect.width / 2 : anchorClientX;
+
+  // The timeline position under the anchor, as a fraction of the track, BEFORE
+  // the resize — so zooming feels like it happens around that point rather
+  // than yanking the view back to wherever the scroll happened to be.
+  const beforeTrackWidth = viewportTrack * timelineZoom;
+  const beforeOffset = els.scroll.scrollLeft + (anchorX - scrollRect.left) - TIMELINE_GUTTER_PX;
+  const anchorFraction = beforeTrackWidth > 0 ? beforeOffset / beforeTrackWidth : 0;
+
+  timelineZoom = clamped;
+  const rowWidth = TIMELINE_GUTTER_PX + viewportTrack * clamped;
+  els.scroll.style.setProperty('--timeline-row-width', `${rowWidth}px`);
+
+  const afterTrackWidth = viewportTrack * clamped;
+  const desired = (anchorFraction * afterTrackWidth) - (anchorX - scrollRect.left) + TIMELINE_GUTTER_PX;
+  els.scroll.scrollLeft = Math.max(0, desired);
+
+  if (els.zoomLevel) els.zoomLevel.textContent = clamped <= 1 ? 'Fit' : `${clamped.toFixed(1)}x`;
+  if (els.zoomOutBtn) els.zoomOutBtn.disabled = clamped <= TIMELINE_ZOOM_MIN;
+  if (els.zoomInBtn) els.zoomInBtn.disabled = clamped >= TIMELINE_ZOOM_MAX;
+
+  // Zooming re-anchors on the pointer/centre, which is a deliberate scroll
+  // the follow must not mistake for the user taking over.
+  programmaticScroll = true;
+  requestAnimationFrame(() => { programmaticScroll = false; });
+
+  // Clip geometry is percentage-based and therefore already correct, but the
+  // STACKING packer measures laid-out boxes — two clips that overlapped at
+  // 1x may not overlap once stretched, so the rows have to be repacked.
+  lastTextSignature = null;
+  lastAudioSignature = null;
+}
+
+/** Re-applies the current zoom after the panel itself changes size. */
+function refreshTimelineZoom() {
+  applyTimelineZoom(timelineZoom);
+}
+
+// --- PLAYHEAD AUTO-FOLLOW --------------------------------------------------
+//
+// Once the timeline can be wider than its panel (see applyTimelineZoom), the
+// playhead walks off the right edge during playback and the user has to chase
+// it by hand. From here on the viewport follows it instead.
+//
+// The anchor is a FRACTION of the visible track, never a pixel literal, so it
+// adapts to the panel's width, the zoom level, a window resize and any screen
+// size for free. And it is expressed against the same time -> pixel
+// conversion the playhead itself is positioned by (timeToX over the ruler's
+// own measured width), so there is no second notion of where a given instant
+// lives — zoom is handled by construction rather than by a parallel
+// pixels-per-second calculation.
+//
+// ANCHOR == THRESHOLD, deliberately. The obvious design ("start following at
+// 75%, then centre the playhead") snaps the content sideways by the distance
+// between the two the instant following begins. Making the point where
+// following STARTS the same point the playhead then sits at means the
+// transition is continuous: the playhead advances normally to the anchor,
+// stops there, and the content begins sliding underneath it with no jump.
+const FOLLOW_ANCHOR_FRACTION = 0.62;
+
+// True while the viewport should chase the playhead. Manual scrolling during
+// playback turns it off so the timeline doesn't fight a user trying to look
+// somewhere else; pressing play or seeking turns it back on (see
+// initTimelinePanel's listeners), which is the moment the user has asked to
+// be looking at the playhead again.
+let autoFollow = true;
+
+// Our own scrollLeft writes fire 'scroll' exactly like a user's do, so they
+// are flagged rather than guessed at — without this the follow would read its
+// own movement as the user taking over and switch itself off on the first
+// frame.
+let programmaticScroll = false;
+
+function setScrollLeft(value) {
+  if (Math.abs(value - els.scroll.scrollLeft) < 0.5) return;
+  programmaticScroll = true;
+  els.scroll.scrollLeft = value;
+  // Cleared on the next frame rather than synchronously: the scroll event is
+  // dispatched asynchronously, so clearing it here would let our own event
+  // arrive after the flag had already gone.
+  requestAnimationFrame(() => { programmaticScroll = false; });
+}
+
+/**
+ * Keeps the playhead visible while the video plays, and brings it back into
+ * view after a seek.
+ *
+ * @param {number} contentX - The playhead's x within the scrolled content, already computed by refreshPlayhead from the video's real currentTime.
+ * @param {boolean} force - Bring it into view regardless of playback/auto-follow state (a seek).
+ */
+function followPlayhead(contentX, force = false) {
+  const scroll = els?.scroll;
+  if (!scroll) return;
+  const maxScroll = scroll.scrollWidth - scroll.clientWidth;
+  // Fitted timeline — the whole clip is on screen, so there is nothing to
+  // follow and no scrollbar to move.
+  if (maxScroll <= 1) return;
+
+  const video = getVideo();
+  const playing = !!video && !video.paused && !video.ended;
+  if (!force && (!playing || !autoFollow)) return;
+
+  const trackWidth = Math.max(1, scroll.clientWidth - TIMELINE_GUTTER_PX);
+  const anchor = TIMELINE_GUTTER_PX + trackWidth * FOLLOW_ANCHOR_FRACTION;
+  const viewportX = contentX - scroll.scrollLeft;
+
+  if (force) {
+    // A seek can land anywhere, including behind the current view. If the
+    // target is already comfortably on screen, leave the viewport alone —
+    // re-centring on every scrub would yank the timeline around while the
+    // user is dragging.
+    if (viewportX >= TIMELINE_GUTTER_PX && viewportX <= scroll.clientWidth) return;
+    setScrollLeft(Math.max(0, Math.min(maxScroll, contentX - anchor)));
+    return;
+  }
+
+  // Before the anchor the playhead simply advances across a stationary
+  // timeline, exactly as it always has. At and past it, the scroll position
+  // is derived from the playhead's own position every frame, so the content
+  // slides continuously instead of jumping in steps.
+  if (viewportX < anchor) return;
+  setScrollLeft(Math.max(0, Math.min(maxScroll, contentX - anchor)));
+}
+
+/** Re-arms following and pulls the playhead into view — after play or a seek. */
+function resumeFollow() {
+  autoFollow = true;
+  const video = getVideo();
+  const duration = video?.duration || 0;
+  if (!els?.ruler || !(duration > 0)) return;
+  const rulerRect = els.ruler.getBoundingClientRect();
+  const scrollRect = els.scroll.getBoundingClientRect();
+  if (!rulerRect.width) return;
+  const x = timeToX(video.currentTime || 0, rulerRect.width, duration);
+  followPlayhead((rulerRect.left - scrollRect.left) + els.scroll.scrollLeft + x, true);
+}
 
 /** Shows/hides every precision numeric field per the current advancedExpanded state — a pure display toggle, never touches appState. */
 function applyAdvancedState() {
@@ -288,6 +474,34 @@ function buildDom(container, options) {
   // for a real side panel instead, so the click routes to React's
   // onAdvancedToggle and relocatePrecisionFields (driven from tick(), see
   // below) moves these exact fields there instead of toggling them inline.
+  // Zoom controls sit with the other view controls, left of Advanced.
+  const zoomControls = document.createElement('div');
+  zoomControls.className = 'timeline-zoom-controls';
+  const makeZoomBtn = (id, label, title) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'timeline-zoom-btn';
+    b.id = id;
+    b.textContent = label;
+    b.title = title;
+    return b;
+  };
+  const zoomOutBtn = makeZoomBtn('timeline-zoom-out', '\u2212', 'Zoom out (show more of the timeline)');
+  const zoomInBtn = makeZoomBtn('timeline-zoom-in', '+', 'Zoom in (stretch the timeline so clips are readable)');
+  const zoomLevel = document.createElement('span');
+  zoomLevel.className = 'timeline-zoom-level';
+  zoomLevel.id = 'timeline-zoom-level';
+  zoomLevel.textContent = 'Fit';
+  zoomOutBtn.addEventListener('click', () => applyTimelineZoom(timelineZoom / TIMELINE_ZOOM_STEP));
+  zoomInBtn.addEventListener('click', () => applyTimelineZoom(timelineZoom * TIMELINE_ZOOM_STEP));
+  // Double-clicking the level is the quick way back to "everything visible".
+  zoomLevel.title = 'Double-click to fit the whole clip';
+  zoomLevel.addEventListener('dblclick', () => applyTimelineZoom(1));
+  zoomControls.appendChild(zoomOutBtn);
+  zoomControls.appendChild(zoomLevel);
+  zoomControls.appendChild(zoomInBtn);
+  controlsRow.appendChild(zoomControls);
+
   const advancedBtn = document.createElement('button');
   advancedBtn.type = 'button';
   advancedBtn.className = 'timeline-advanced-toggle';
@@ -363,12 +577,11 @@ function buildDom(container, options) {
   keyframeTrack.id = 'timeline-keyframe-overlay';
   filmstripStack.appendChild(filmstripTrack);
   filmstripStack.appendChild(keyframeTrack);
-  // The video strip gets the same in-strip "+" as the audio lanes, so "add
-  // content to this track" is one consistent gesture across every row. Added
-  // to the STACK rather than inside the strip itself, which clips its own
-  // children (that clipping is what gives the filmstrip its rounded edge).
+  // The video row gets the same gutter-mounted "+" as every other lane, so
+  // "add content to this track" is one consistent gesture — and, like the
+  // others, stays put while the strip pans beneath it.
   const addVideoBtn = buildAddButton('timeline-add-video-btn', 'Upload a video');
-  filmstripStack.appendChild(addVideoBtn);
+  filmstripGutter.appendChild(addVideoBtn);
   filmstripRow.appendChild(filmstripGutter);
   filmstripRow.appendChild(filmstripStack);
   scroll.appendChild(filmstripRow);
@@ -390,6 +603,15 @@ function buildDom(container, options) {
   // sound. Built with buildAudioLane because a span-shaped clip lane is a
   // span-shaped clip lane — only what the clips MEAN differs.
   const textLane = buildAudioLane('text', 'Text', 'Add a text overlay at the playhead');
+
+  // Manually placed CAPTIONS get a lane of their own, above the overlays.
+  // They are the same record type (shared/textElement.js — one model, two
+  // kinds) and share every gesture, so this is presentation only: a caption
+  // and an overlay differ in what they MEAN, and putting a caption you timed
+  // yourself on its own row next to the transcript is what makes that
+  // difference visible while editing.
+  const captionsLane = buildAudioLane('captions', 'Captions', 'Add a caption at the playhead');
+  lanesEl.appendChild(captionsLane.row);
   lanesEl.appendChild(textLane.row);
   lanesEl.appendChild(sfxLane.row);
   lanesEl.appendChild(audioLane.row);
@@ -492,7 +714,10 @@ function buildDom(container, options) {
     header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip,
     addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack,
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
-    addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn, addVideoBtn
+    captionsTrack: captionsLane.track,
+    addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn,
+    addCaptionBtn: captionsLane.addBtn, addVideoBtn,
+    zoomInBtn, zoomOutBtn, zoomLevel
   };
 }
 
@@ -518,15 +743,24 @@ function buildAudioLane(key, label, addTitle) {
   track.className = 'timeline-lane-track timeline-audio-track';
   track.id = `timeline-${key}-track`;
 
-  // The add control lives INSIDE the strip, not out in the gutter — the strip
-  // is the thing the content goes into, so that is where the affordance to
-  // add content belongs (and it keeps the gutter to just a name, so every
-  // lane's label column stays the same narrow, scannable width).
-  track.appendChild(buildAddButton(`timeline-add-${key}-btn`, addTitle));
+  // The add control lives in the GUTTER, beside the lane's name.
+  //
+  // It used to sit inside the strip, on the reasoning that the strip is where
+  // content goes so that is where the control to add content belongs. That
+  // held while the timeline always fitted its panel. It stopped holding the
+  // moment the timeline could pan: the strip scrolls, so an in-strip control
+  // scrolls away with it — it drifted left across the labels and then off
+  // screen entirely, leaving no way to add anything at the playhead, which is
+  // exactly when you want to.
+  //
+  // The gutter is already sticky (it is the label column), so a control
+  // mounted here is always reachable at any zoom or scroll position, and
+  // unlike a sticky in-strip button it can never sit on top of a clip.
+  gutter.appendChild(buildAddButton(`timeline-add-${key}-btn`, addTitle));
 
   row.appendChild(gutter);
   row.appendChild(track);
-  return { row, track, addBtn: track.querySelector('.timeline-add-clip-btn'), gutter };
+  return { row, track, addBtn: gutter.querySelector('.timeline-add-clip-btn'), gutter };
 }
 
 /**
@@ -589,6 +823,10 @@ function refreshPlayhead(currentTime, duration) {
   const x = timeToX(currentTime, rulerRect.width, duration);
   const left = (rulerRect.left - scrollRect.left) + els.scroll.scrollLeft + x;
   els.playhead.style.left = `${left}px`;
+  // Driven from the SAME position the playhead was just drawn at, once per
+  // frame, so the viewport can never disagree with where the playhead is —
+  // and no extra layout is measured to do it.
+  followPlayhead(left);
 }
 
 function clearMarkers(track) {
@@ -775,6 +1013,86 @@ function clearClips(track) {
   track.querySelectorAll('.timeline-sfx-clip, .timeline-audio-clip, .timeline-text-clip').forEach((el) => el.remove());
 }
 
+// One sub-row of a lane, in px. A lane holds as many of these as it needs to
+// keep overlapping clips apart (see stackClips).
+const CLIP_ROW_HEIGHT_PX = 30;
+const CLIP_ROW_GAP_PX = 3;
+
+/**
+ * Lays a lane's clips out in as few sub-rows as possible so that none of them
+ * visually covers another, and returns how many rows that took.
+ *
+ * Why this exists: clips are positioned by TIME, so two that overlap in time
+ * land on top of each other and only the topmost can be clicked or dragged —
+ * the one behind becomes uneditable with no way to get at it. Stacking them
+ * is what CapCut does, and it needs no extra interaction: a lane with no
+ * overlaps still renders as a single row and looks exactly as it did.
+ *
+ * Packing is done on each clip's ON-SCREEN span, not its time span. A sound
+ * effect is a point in time but renders as a pill of real width, so two
+ * effects a few hundredths of a second apart genuinely overlap on screen
+ * while their times do not. Measuring the laid-out elements is what makes
+ * "do these collide" mean the same thing the user sees.
+ *
+ * @param {HTMLElement} track - The lane strip the clips were just appended to.
+ * @param {HTMLElement[]} clips - Those clips, any order.
+ * @returns {number} Rows used (>= 1), for sizing the lane.
+ */
+function stackClips(track, clips) {
+  if (!clips.length) return 1;
+
+  const trackWidth = track.clientWidth || 1;
+  const spans = clips.map((el) => {
+    // offsetLeft/offsetWidth are the real laid-out box, so a pill's minimum
+    // rendered width counts even when its clip has no duration at all.
+    const left = el.offsetLeft;
+    return { el, left, right: left + Math.max(el.offsetWidth, 1) };
+  }).sort((a, b) => a.left - b.left);
+
+  // Greedy first-fit: a clip joins the first row whose last clip already
+  // ended before it starts, else it opens a new row. One pixel of slack so
+  // two clips that merely touch don't get split onto separate rows.
+  const rowEnds = [];
+  spans.forEach((span) => {
+    let row = rowEnds.findIndex((end) => span.left >= end - 1);
+    if (row === -1) {
+      rowEnds.push(span.right);
+      row = rowEnds.length - 1;
+    } else {
+      rowEnds[row] = span.right;
+    }
+    const rowTop = row * (CLIP_ROW_HEIGHT_PX + CLIP_ROW_GAP_PX) + CLIP_ROW_GAP_PX;
+    if (span.el.classList.contains('timeline-sfx-clip')) {
+      // A sound-effect pill keeps its own small fixed height and is centred
+      // on its anchor by `transform: translateY(-50%)`, so it gets the row's
+      // CENTRE line rather than its top edge, and no height at all.
+      span.el.style.top = `${rowTop + CLIP_ROW_HEIGHT_PX / 2}px`;
+    } else {
+      span.el.style.top = `${rowTop}px`;
+      span.el.style.height = `${CLIP_ROW_HEIGHT_PX}px`;
+    }
+    span.el.dataset.stackRow = String(row);
+  });
+  void trackWidth;
+  return Math.max(1, rowEnds.length);
+}
+
+/**
+ * Grows a lane AND its strip to fit however many sub-rows its clips needed.
+ *
+ * Both, not just the lane: the strip is the clips' positioning container, so
+ * a strip left at its old height lets a second-row clip render OUTSIDE it —
+ * where it is drawn over whatever follows in the document and is no longer
+ * hit-testable at all (measured: lane 69px, strip still 24px, and the
+ * stacked pill's own centre resolved to the panel underneath the timeline).
+ */
+function sizeLaneForRows(track, rows) {
+  const height = rows * (CLIP_ROW_HEIGHT_PX + CLIP_ROW_GAP_PX) + CLIP_ROW_GAP_PX;
+  track.style.minHeight = `${height}px`;
+  const lane = track.closest('.timeline-lane');
+  if (lane) lane.style.minHeight = `${height}px`;
+}
+
 /** Seconds -> percentage across a lane track, clamped so a clip can't render outside its own lane. */
 function timeToPercent(time, duration) {
   if (!duration || duration <= 0) return 0;
@@ -799,9 +1117,15 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
     if (kind === 'text') {
       textElements.selectTextElement(clip.id);
       audioTimeline.selectClip(null);
+      captionEvents.selectCaptionEvent(null);
+    } else if (kind === 'caption') {
+      captionEvents.selectCaptionEvent(clip.id);
+      textElements.selectTextElement(null);
+      audioTimeline.selectClip(null);
     } else {
       audioTimeline.selectClip(clip.id);
       textElements.selectTextElement(null);
+      captionEvents.selectCaptionEvent(null);
     }
     const rect = el.parentElement.getBoundingClientRect();
     const duration = getVideo()?.duration || 0;
@@ -864,6 +1188,7 @@ function applyClipDrag(clientX, el, options) {
     const nextStart = pointerTime - dragClip.grabOffsetSeconds;
     if (dragClip.kind === 'sound') audioTimeline.moveSoundEvent(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'text') textElements.moveTextElement(dragClip.id, nextStart, options);
+    else if (dragClip.kind === 'caption') captionEvents.moveCaptionEventTo(dragClip.id, nextStart, options);
     else audioTimeline.moveAudioTrack(dragClip.id, nextStart, options);
     return;
   }
@@ -873,6 +1198,14 @@ function applyClipDrag(clientX, el, options) {
   // move the source offset to keep the audio under the cursor still.
   if (dragClip.kind === 'text') {
     textElements.trimTextElement(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
+    return;
+  }
+
+  // A caption's words stay where they are when its edges move — trimming
+  // changes how long it is on screen, not when it was spoken (see
+  // shared/captionEvent.js's trimCaptionEvent).
+  if (dragClip.kind === 'caption') {
+    captionEvents.trimCaptionEventEdge(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
     return;
   }
 
@@ -1032,10 +1365,64 @@ function buildTextClip(element, duration, isSelected) {
   return el;
 }
 
+/**
+ * One clip for one of the TRANSCRIPT's captions (shared/captionEvent.js) —
+ * what is actually on screen at that moment, the way every other editor
+ * shows it.
+ *
+ * Built as a `.timeline-text-clip` like a manual caption rather than as its
+ * own thing: the two are the same object to the user (a caption, on the
+ * captions lane, that can be dragged and trimmed), and sharing the element
+ * means sharing every gesture, selection and stacking path already built for
+ * it. Only the drag FAMILY differs ('caption' vs 'text'), which is what routes
+ * the edit to the right module.
+ */
+function buildCaptionEventClip(event, duration, isSelected) {
+  const el = document.createElement('div');
+  el.className = 'timeline-text-clip is-caption is-transcript';
+  if (isSelected) el.classList.add('selected');
+
+  el.style.left = `${timeToPercent(event.start, duration)}%`;
+  el.style.width = `${Math.max(1, timeToPercent(event.end, duration) - timeToPercent(event.start, duration))}%`;
+  el.dataset.clipId = event.id;
+  el.tabIndex = 0;
+
+  const words = appState.words || [];
+  const text = event.wordIndices.map((i) => (words[i]?.word ?? '').trim()).filter(Boolean).join(' ');
+  el.title = `${text || '(caption)'} · ${event.start.toFixed(2)}s → ${event.end.toFixed(2)}s`
+    + ' — drag to retime, drag an edge to change how long it shows, S to split at the playhead';
+
+  const label = document.createElement('span');
+  label.className = 'timeline-text-clip-label';
+  label.textContent = text || 'Caption';
+  el.appendChild(label);
+
+  attachClipPointerHandlers(el, event, 'caption', 'move');
+
+  ['start', 'end'].forEach((edge) => {
+    const handle = document.createElement('div');
+    handle.className = `timeline-text-clip-handle ${edge}`;
+    handle.title = edge === 'start' ? 'Change when it appears' : 'Change when it disappears';
+    attachClipPointerHandlers(handle, event, 'caption', edge === 'start' ? 'trim-start' : 'trim-end');
+    el.appendChild(handle);
+  });
+
+  return el;
+}
+
 function refreshTextLane(duration) {
+  // A project whose transcript arrived BEFORE caption events existed has
+  // phrases but no events, so its captions would never appear on the lane.
+  // Seeding here rather than only on upload/regenerate is what makes them
+  // show up for a session that is already open. Idempotent and self-
+  // disabling: it only ever fills an EMPTY list.
+  captionEvents.ensureCaptionEventsSeeded();
+
   const elements = appState.textElements || [];
   const selectedId = appState.selectedTextElementId;
-  const signature = JSON.stringify({ elements, selectedId, duration });
+  const events = appState.captionEvents || [];
+  const selectedCaptionId = appState.selectedCaptionEventId;
+  const signature = JSON.stringify({ elements, selectedId, events, selectedCaptionId, duration });
   // Same two invariants refreshAudioLanes documents: never rebuild mid-drag
   // (a DOM swap under the pointer kills the gesture), and never
   // replaceChildren (the in-strip "+" is a child of the track).
@@ -1043,12 +1430,41 @@ function refreshTextLane(duration) {
   lastTextSignature = signature;
 
   clearClips(els.textTrack);
+  clearClips(els.captionsTrack);
   if (!(duration > 0)) return;
 
-  elements.forEach((element) => {
-    els.textTrack.appendChild(buildTextClip(element, duration, element.id === selectedId));
+  // Split by kind, not by type: both lanes hold the same records and build
+  // the same clip element (see buildTextClip), so every drag/trim/select/
+  // delete path stays shared — only which strip a clip is appended to
+  // depends on its kind.
+  const captionClips = [];
+  const overlayClips = [];
+
+  // The TRANSCRIPT's own captions share the Captions lane with manually
+  // placed ones — to the user they are the same thing (a caption, on the
+  // captions lane) and they stack against each other through the same
+  // packer, so an overlap between the two is as reachable as any other.
+  events.forEach((event) => {
+    const clip = buildCaptionEventClip(event, duration, event.id === selectedCaptionId);
+    captionClips.push(clip);
+    els.captionsTrack.appendChild(clip);
   });
-  els.textTrack.classList.toggle('is-empty', elements.length === 0);
+
+  elements.forEach((element) => {
+    const clip = buildTextClip(element, duration, element.id === selectedId);
+    if (element.kind === 'caption') {
+      captionClips.push(clip);
+      els.captionsTrack.appendChild(clip);
+    } else {
+      overlayClips.push(clip);
+      els.textTrack.appendChild(clip);
+    }
+  });
+  // Stacked AFTER appending — the packer measures the real laid-out boxes.
+  sizeLaneForRows(els.textTrack, stackClips(els.textTrack, overlayClips));
+  sizeLaneForRows(els.captionsTrack, stackClips(els.captionsTrack, captionClips));
+  els.textTrack.classList.toggle('is-empty', overlayClips.length === 0);
+  els.captionsTrack.classList.toggle('is-empty', captionClips.length === 0);
 }
 
 function refreshAudioLanes(duration) {
@@ -1067,11 +1483,17 @@ function refreshAudioLanes(duration) {
   clearClips(els.audioTrack);
   if (!(duration > 0)) return;
 
+  const sfxClips = [];
+  const audioClips = [];
   soundEvents.forEach((event) => {
-    els.sfxTrack.appendChild(buildSoundClip(event, duration, event.id === selectedId));
+    const clip = buildSoundClip(event, duration, event.id === selectedId);
+    sfxClips.push(clip);
+    els.sfxTrack.appendChild(clip);
   });
   audioTracks.forEach((track) => {
-    els.audioTrack.appendChild(buildAudioClip(track, duration, track.id === selectedId));
+    const clip = buildAudioClip(track, duration, track.id === selectedId);
+    audioClips.push(clip);
+    els.audioTrack.appendChild(clip);
   });
 
   // The in-strip "+" sits at the strip's left edge, which is exactly where a
@@ -1079,95 +1501,34 @@ function refreshAudioLanes(duration) {
   // than let it cover that clip's own label permanently, an occupied lane
   // reveals its "+" on hover instead; an EMPTY lane keeps it plainly visible,
   // which is the case where discoverability actually matters.
+  // Stacked AFTER appending — the packer measures the real laid-out boxes.
+  sizeLaneForRows(els.sfxTrack, stackClips(els.sfxTrack, sfxClips));
+  sizeLaneForRows(els.audioTrack, stackClips(els.audioTrack, audioClips));
   els.sfxTrack.classList.toggle('is-empty', soundEvents.length === 0);
   els.audioTrack.classList.toggle('is-empty', audioTracks.length === 0);
 }
 
-// --- "+ Sound" picker ------------------------------------------------------
-
-let soundPickerEl = null;
+// --- "+ Sound" -------------------------------------------------------------
+//
+// The list itself lives in a side panel now (src/components/SoundLibraryPanel.jsx)
+// rather than in a popover this module builds and positions.
+//
+// It was a popover anchored to the button, appended to <body> and
+// fixed-positioned because the lane gutter sits inside .timeline-scroll
+// inside a short panel — a popover opening from there was clipped by that
+// scroll container AND painted under the preview above it. That was fine for
+// eleven sounds. At thirty-eight it has to group and scroll, which a panel
+// does naturally and a popover pinned to a button does not.
+//
+// So this module no longer owns any picker DOM; it just reports the press.
+// Whether a panel is open, and where it renders, is React's business.
 
 function closeSoundPicker() {
-  if (soundPickerEl) {
-    soundPickerEl.remove();
-    soundPickerEl = null;
-  }
+  activeOptions?.onSoundLibraryClose?.();
 }
 
-/**
- * Positions the picker just above its button, in VIEWPORT coordinates.
- *
- * It is appended to <body> and fixed-positioned rather than anchored inside
- * the lane gutter, because the gutter lives inside `.timeline-scroll`
- * (overflow-y:auto) inside a short, fixed-height panel: a popover opening
- * upward from there is both clipped by that scroll container and painted
- * underneath the preview `<main>` above it — visible in a screenshot,
- * completely unclickable in practice (confirmed by the e2e suite, whose click
- * on a picker row was intercepted by <main> until this was changed).
- */
-function positionSoundPicker(picker, anchorBtn) {
-  const rect = anchorBtn.getBoundingClientRect();
-  picker.style.left = `${Math.max(8, rect.left)}px`;
-  // Flip below the button if there genuinely isn't room above it.
-  const height = picker.offsetHeight;
-  const above = rect.top - height - 6;
-  picker.style.top = above >= 8 ? `${above}px` : `${rect.bottom + 6}px`;
-}
-
-/**
- * A small popover listing every registered sound. Each row auditions on its
- * own ▶ button and places the effect at the playhead when the row is clicked
- * — so a user can hear a sound before committing to it, which is the whole
- * difference between picking a sound and guessing one.
- *
- * Built from shared/soundRegistry.js's listing rather than a hard-coded set,
- * so adding a sound to the registry adds it here with no change to this file.
- */
-function openSoundPicker(anchorBtn) {
-  if (soundPickerEl) {
-    closeSoundPicker();
-    return;
-  }
-
-  const picker = document.createElement('div');
-  picker.className = 'timeline-sound-picker';
-
-  const heading = document.createElement('div');
-  heading.className = 'timeline-sound-picker-heading';
-  heading.textContent = 'Add sound at playhead';
-  picker.appendChild(heading);
-
-  listSounds().forEach((sound) => {
-    const row = document.createElement('div');
-    row.className = 'timeline-sound-picker-row';
-
-    const play = document.createElement('button');
-    play.type = 'button';
-    play.className = 'timeline-sound-picker-play';
-    play.setAttribute('aria-label', `Preview ${sound.label}`);
-    play.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg>';
-    play.addEventListener('click', (e) => {
-      e.stopPropagation();
-      previewSound(sound.id, sound.defaultVolume);
-    });
-
-    const name = document.createElement('button');
-    name.type = 'button';
-    name.className = 'timeline-sound-picker-name';
-    name.textContent = sound.label;
-    name.addEventListener('click', () => {
-      audioTimeline.addSoundEvent(sound.id);
-      closeSoundPicker();
-    });
-
-    row.appendChild(play);
-    row.appendChild(name);
-    picker.appendChild(row);
-  });
-
-  document.body.appendChild(picker);
-  positionSoundPicker(picker, anchorBtn);
-  soundPickerEl = picker;
+function openSoundPicker() {
+  activeOptions?.onSoundLibraryToggle?.();
 }
 
 function refreshRangesForTarget(kind) {
@@ -1194,8 +1555,14 @@ let lastPaused = undefined;
 // rotation, style, Rolling Stack, keyframes — is deliberately not an input
 // here: thumbnails depend on the VIDEO, so none of those cause a rebuild.
 let filmstripSrc = null;
-let filmstripCount = 0;
 let filmstripToken = 0;
+// What the strip currently shows: the video, the grid interval, and which
+// slots are mounted. Compared once per tick so a pan that changes nothing
+// costs a string compare.
+let filmstripSignature = '';
+// slotIndex -> tile element, so panning reuses the elements already mounted
+// instead of rebuilding the row (which would flash and drop loaded frames).
+const filmstripTiles = new Map();
 
 function currentVideoSrc() {
   const video = getVideo();
@@ -1206,43 +1573,31 @@ function currentVideoSrc() {
 
 function clearFilmstrip() {
   if (els?.filmstripTrack) els.filmstripTrack.replaceChildren();
+  filmstripTiles.clear();
+  filmstripSignature = '';
   filmstripSrc = null;
-  filmstripCount = 0;
 }
 
 /**
- * Paints `count` placeholder tiles immediately, then fills each one in as its
- * frame arrives. Placeholders are what keep the row from shifting layout when
- * extraction finishes, and give a lightweight loading state for free.
+ * Fills the mounted tiles of the current window, reusing any frame already
+ * cached and extracting only the rest. Tiles are mounted by syncFilmstrip
+ * before this runs, so the row never shifts layout as frames arrive.
  */
-async function rebuildFilmstrip(src, count, trackWidth) {
-  // The width each tile actually occupies on screen. filmstrip.js rasterizes to
-  // exactly this (x devicePixelRatio) so tiles are never upscaled by the browser.
-  const renderedTileWidth = trackWidth / count;
-  const token = ++filmstripToken;
+async function paintFilmstripWindow(src, slots, tileWidthPx, token) {
   const track = els.filmstripTrack;
-  track.replaceChildren();
   track.classList.add('is-loading');
-
-  const tiles = [];
-  for (let i = 0; i < count; i++) {
-    const tile = document.createElement('div');
-    tile.className = 'timeline-filmstrip-tile';
-    // Width as a PERCENTAGE, never fixed px: the row is a time axis, so tiles
-    // must re-flow with the editor rather than carry baked-in coordinates.
-    tile.style.width = `${100 / count}%`;
-    track.appendChild(tile);
-    tiles.push(tile);
-  }
+  // Slot index by sample time, so a frame arriving (cached or fresh) can find
+  // the tile it belongs to without the extractor knowing about the DOM.
+  const byTime = new Map(slots.map((slot) => [Math.round(slot.t * 1000), slot.index]));
 
   try {
-    await getFilmstrip(src, {
-      count,
-      tileWidthPx: renderedTileWidth,
+    await getFilmstripWindow(src, {
+      slots,
+      tileWidthPx,
       shouldAbort: () => token !== filmstripToken,
-      onTile: (index, url) => {
+      onTile: (t, url) => {
         if (token !== filmstripToken) return;
-        const tile = tiles[index];
+        const tile = filmstripTiles.get(byTime.get(Math.round(t * 1000)));
         if (!tile) return;
         tile.style.backgroundImage = `url("${url}")`;
         tile.classList.add('is-loaded');
@@ -1258,8 +1613,18 @@ async function rebuildFilmstrip(src, count, trackWidth) {
 }
 
 /**
- * Called from the existing tick loop. Cheap on every frame: it only measures
- * and compares, and does real work when the video or the ideal count changed.
+ * Called from the existing tick loop. Cheap on every frame: it measures, builds
+ * a signature, and does real work only when the visible window actually moved.
+ *
+ * The strip is VIRTUALIZED. Tiles sit on a fixed time grid at their natural
+ * width however long the clip is or how far it is zoomed, and only the slots
+ * inside the visible window (plus a margin) are mounted and extracted — so the
+ * cost is bounded by how many tiles fit on screen rather than by the clip.
+ *
+ * The previous version sampled a fixed number of frames across the WHOLE clip
+ * and stretched them to fill the row, which is why a zoomed timeline showed
+ * enormous, soft frames: the count was capped at 40, so at 2.3x each portrait
+ * frame was drawn about three times its natural width.
  */
 function syncFilmstrip(duration) {
   const track = els?.filmstripTrack;
@@ -1276,17 +1641,67 @@ function syncFilmstrip(duration) {
 
   const video = getVideo();
   const aspect = (video?.videoWidth || 0) / (video?.videoHeight || 1);
-  const tileWidth = aspect > 0 ? FILMSTRIP_TILE_HEIGHT_PX * aspect : 0;
-  const count = computeTileCount(trackWidth, duration, tileWidth);
-  if (!count) return;
+  const tileWidth = filmstripTileWidth(aspect);
 
-  const srcChanged = src !== filmstripSrc;
-  const countChanged = Math.abs(count - filmstripCount) > FILMSTRIP_COUNT_CHANGE_THRESHOLD;
-  if (!srcChanged && !countChanged) return;
+  // The track is the whole clip, so this is the zoom expressed as a rate —
+  // the same relationship every other part of the timeline uses, rather than
+  // a second pixels-per-second notion.
+  const pixelsPerSecond = trackWidth / duration;
+  const step = chooseSecondsPerTile(tileWidth, pixelsPerSecond);
 
-  filmstripSrc = src;
-  filmstripCount = count;
-  rebuildFilmstrip(src, count, trackWidth);
+  // The visible window, measured from the track's own box against the scroll
+  // viewport. Deriving it this way needs no knowledge of the gutter's width
+  // or of the current scroll offset.
+  const trackRect = track.getBoundingClientRect();
+  const scrollRect = els.scroll.getBoundingClientRect();
+  const visibleLeftPx = Math.max(0, scrollRect.left - trackRect.left);
+  const visibleRightPx = Math.min(trackWidth, visibleLeftPx + scrollRect.width);
+  const marginPx = scrollRect.width * 0.5;
+  const windowStart = Math.max(0, (visibleLeftPx - marginPx) / pixelsPerSecond);
+  const windowEnd = Math.min(duration, (visibleRightPx + marginPx) / pixelsPerSecond);
+
+  const slots = tileTimesForWindow(windowStart, windowEnd, step, duration);
+  if (!slots.length) return;
+
+  const signature = `${src}|${step}|${slots[0].index}|${slots[slots.length - 1].index}|${Math.round(trackWidth)}`;
+  if (signature === filmstripSignature) return;
+
+  if (src !== filmstripSrc) {
+    clearFilmstrip();
+    filmstripSrc = src;
+  }
+  filmstripSignature = signature;
+
+  const token = ++filmstripToken;
+  const wanted = new Set(slots.map((slot) => slot.index));
+
+  // Drop tiles that have panned out of the window, keeping the rest mounted —
+  // rebuilding the row instead would flash and throw away loaded frames.
+  filmstripTiles.forEach((el, index) => {
+    if (!wanted.has(index)) {
+      el.remove();
+      filmstripTiles.delete(index);
+    }
+  });
+
+  slots.forEach((slot) => {
+    let tile = filmstripTiles.get(slot.index);
+    if (!tile) {
+      tile = document.createElement('div');
+      tile.className = 'timeline-filmstrip-tile';
+      track.appendChild(tile);
+      filmstripTiles.set(slot.index, tile);
+    }
+    // Positioned by TIME as a percentage, never in px: the row is a time axis,
+    // so a tile must re-flow with zoom rather than carry baked-in coordinates.
+    const span = slot.span ?? step;
+    tile.style.left = `${(slot.slotStart / duration) * 100}%`;
+    tile.style.width = `${(Math.min(span, duration - slot.slotStart) / duration) * 100}%`;
+  });
+
+  // The width a tile is actually DISPLAYED at — frames are rasterized to
+  // exactly this (x devicePixelRatio) so the browser never upscales them.
+  paintFilmstripWindow(src, slots, step * pixelsPerSecond, token);
 }
 
 function tick() {
@@ -1395,7 +1810,48 @@ export function initTimelinePanel(container, options = {}) {
   lastAudioSignature = null;
   lastTextSignature = null;
   dragClip = null;
+  timelineZoom = 1;
+  autoFollow = true;
+  programmaticScroll = false;
   applyAdvancedState();
+  applyTimelineZoom(1);
+
+  // The row width is derived from the panel's own width, so it has to be
+  // recomputed whenever that changes — a window resize, or the bottom sheet
+  // being dragged to a new height.
+  const onResize = () => refreshTimelineZoom();
+  window.addEventListener('resize', onResize);
+  const panelObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => refreshTimelineZoom())
+    : null;
+  panelObserver?.observe(els.scroll);
+
+  // Ctrl/Cmd + wheel zooms around the pointer, the way every timeline does.
+  // Without the modifier the wheel keeps its normal scrolling behaviour.
+  // Manual horizontal scrolling during playback hands control back to the
+  // user: chasing the playhead while they are trying to inspect another part
+  // of the timeline is the failure mode this guards against. Pressing play
+  // again, scrubbing or seeking re-arms it (see below).
+  const onScroll = () => {
+    if (programmaticScroll) return;
+    const video = getVideo();
+    if (video && !video.paused && !video.ended) autoFollow = false;
+  };
+  els.scroll.addEventListener('scroll', onScroll, { passive: true });
+
+  // Playback and seeking both mean "show me where I am now".
+  const video = getVideo();
+  const onPlay = () => resumeFollow();
+  const onSeeked = () => resumeFollow();
+  video?.addEventListener('play', onPlay);
+  video?.addEventListener('seeked', onSeeked);
+
+  const onWheel = (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    applyTimelineZoom(timelineZoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientX);
+  };
+  els.scroll.addEventListener('wheel', onWheel, { passive: false });
 
   const scrub = (clientX) => {
     const video = getVideo();
@@ -1468,9 +1924,18 @@ export function initTimelinePanel(container, options = {}) {
     textElements.addTextElement({ kind: 'overlay', text: 'New text' });
   });
 
+  // "+ Caption" creates a manual caption at the playhead. Same call, same
+  // record, different kind — which is what decides its lane, its label and
+  // whether it inherits the caption's anchored position (see
+  // textElements.js's addTextElement).
+  els.addCaptionBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    textElements.addTextElement({ kind: 'caption', text: 'New caption' });
+  });
+
   els.addSoundBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    openSoundPicker(els.addSoundBtn);
+    openSoundPicker();
   });
   els.addAudioBtn.addEventListener('click', () => {
     promptForAudioFile(
@@ -1494,7 +1959,8 @@ export function initTimelinePanel(container, options = {}) {
     // actually lands on, so an identity check would dismiss the picker on
     // pointerdown and let the following click immediately reopen it — making
     // the button impossible to toggle closed.
-    if (soundPickerEl && !soundPickerEl.contains(e.target) && !els.addSoundBtn.contains(e.target)) closeSoundPicker();
+    // (The sound library panel handles its own outside-press dismissal —
+    // see SoundLibraryPanel.jsx.)
   };
   document.addEventListener('pointerdown', dismissSoundPickerOnOutsideClick);
 
@@ -1515,6 +1981,15 @@ export function initTimelinePanel(container, options = {}) {
     if (rafId) cancelAnimationFrame(rafId);
     document.removeEventListener('pointerdown', dismissTargetInfoOnOutsideClick);
     document.removeEventListener('pointerdown', dismissSoundPickerOnOutsideClick);
+    // The zoom/follow listeners outlive a re-init otherwise: initTimelinePanel
+    // rebuilds the DOM, so a stale observer would go on measuring a detached
+    // element and a stale video listener would call into a dead panel.
+    window.removeEventListener('resize', onResize);
+    panelObserver?.disconnect();
+    els.scroll.removeEventListener('wheel', onWheel);
+    els.scroll.removeEventListener('scroll', onScroll);
+    video?.removeEventListener('play', onPlay);
+    video?.removeEventListener('seeked', onSeeked);
     closeSoundPicker();
   };
 }

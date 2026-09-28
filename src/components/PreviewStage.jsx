@@ -34,6 +34,8 @@
  */
 import { useEffect, useState } from 'react';
 import { initPreviewWorkspace } from '../js/components/preview.js';
+import { BhyndIntro } from './BhyndIntro.jsx';
+import { INTRO_MORPH_SECONDS } from '../js/brand/bhyndIntro.js';
 
 export function PreviewStage({
   viewState,
@@ -90,9 +92,23 @@ export function PreviewStage({
         </div>
 
         {/* Processing State View */}
+        {/* Transcribing and re-rendering both land here, and both take tens
+            of seconds. The slot above the title had been an empty <div> since
+            the React migration — whatever spinner it used to hold did not
+            survive — so it now holds the bhYnd mark, which idles with a
+            breathing glow for exactly as long as the job runs.
+
+            Mounted only while this view is active: the animation is a rAF
+            loop, and there is no reason to run one behind the video the rest
+            of the time. */}
         <div className={`view-state${viewState === 'processing' ? ' active' : ''}`} id="state-processing">
-          <div>
-            <div />
+          <div className="flex flex-col items-center text-center gap-1">
+            {viewState === 'processing' && (
+              <BhyndIntro
+                startAt={INTRO_MORPH_SECONDS}
+                className="w-[160px] h-[160px] -my-5 shrink-0"
+              />
+            )}
             <h3 id="preview-processing-title">{processingTitle}</h3>
             <p id="preview-processing-text">Whisper AI extracting word timestamps</p>
           </div>

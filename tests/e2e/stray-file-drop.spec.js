@@ -12,7 +12,7 @@ import { test, expect } from '@playwright/test';
  */
 test('a file dropped on the editor does not navigate the page away', async ({ page }) => {
   test.setTimeout(2 * 60 * 1000);
-  await page.goto('/');
+  await page.goto('/?splash=0');
   await page.getByText('Try Demo Video').click();
   await page.waitForFunction(() => {
     const v = document.getElementById('preview-video');
@@ -50,7 +50,7 @@ test('a file dropped on the editor does not navigate the page away', async ({ pa
 });
 
 test('the upload dropzone still receives its own drops', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?splash=0');
 
   // On the upload screen the dropzone is active; the global guard must not
   // stop it from handling a real drop (preventDefault does not stop propagation).

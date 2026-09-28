@@ -22,7 +22,7 @@ import { test, expect } from '@playwright/test';
 // covers :5173 but not the e2e server's port — a webfont blocked by CORS
 // cannot render, which would make assertion 1 fail for a reason that has
 // nothing to do with the code under test. Requires `npm run dev:all`.
-const APP_URL = 'http://localhost:5173/';
+const APP_URL = 'http://localhost:5173/?splash=0';
 
 async function setupTwoWordCaption(page) {
   await page.goto(APP_URL);

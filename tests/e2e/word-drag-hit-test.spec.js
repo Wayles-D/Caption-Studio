@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test';
 // and read exact screen coordinates instead of guessing layout.
 
 test('dragging a word moves its clickable hit area, not just its pixels', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?splash=0');
   await page.getByText('Try Demo Video').click();
 
   const duration = await page.evaluate(() => new Promise((resolve) => {

@@ -122,15 +122,16 @@ async function render(params, label) {
   fs.mkdirSync(frames, { recursive: true });
   await makeSourceVideo(src);
 
-  const { captions, text } = buildFullTimelineSegments(phrases, params, WIDTH, HEIGHT, DURATION, frames);
+  const { captions, manualCaptions, text } = buildFullTimelineSegments(phrases, params, WIDTH, HEIGHT, DURATION, frames);
   await compositeGraphicsCaptionTrack(src, captions, out, {
     duration: DURATION,
     canvasWidth: WIDTH,
     canvasHeight: HEIGHT,
     textBlendMode: getASSStyleFromConfig(params).textBlendMode,
+    manualCaptionSegments: manualCaptions,
     textElementSegments: text
   });
-  return { out, captions, text };
+  return { out, captions, manualCaptions, text };
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +254,56 @@ for (const segment of wordLayers.text) {
   }
 }
 console.log('✓ Each overlay ends exactly when it should; none survive to the end of the video');
+
+// ---------------------------------------------------------------------------
+// 6. A manual CAPTION blends with the captions; an OVERLAY never does
+// ---------------------------------------------------------------------------
+console.log('\n[Test 6] kind decides which layer, and therefore whether it blends');
+// The two kinds want opposite compositing, and this is the one place that
+// difference is observable. A manual caption exists to be indistinguishable
+// from the transcript's own captions, so on a blend-mode project it has to
+// blend like them — compositing it alpha-over would leave it looking plainly
+// different from the captions around it. An overlay is the reverse: it is
+// artwork the user coloured deliberately and must never be dragged through
+// the caption's blend (that was Test 1's whole bug).
+function whiteElement(kind) {
+  return {
+    id: `el_${kind}`, kind, start: 0, end: DURATION, text: 'SAMPLE', enabled: true, keyframes: [],
+    style: {
+      position: 'manual', customPosX: 50, customPosY: 50,
+      fontSize: 34, inactiveWordColor: '#FFFFFF', activeWordColor: '#FFFFFF',
+      outlineSize: 0, shadowMode: 'none'
+    }
+  };
+}
+
+const asCaption = await render(
+  baseParams({ textBlendMode: 'difference', textElements: [whiteElement('caption')] }),
+  'kind-caption'
+);
+const asOverlay = await render(
+  baseParams({ textBlendMode: 'difference', textElements: [whiteElement('overlay')] }),
+  'kind-overlay'
+);
+
+console.log(`  manual caption -> ${asCaption.manualCaptions.length} manual-caption segments, ${asCaption.text.length} text segments`);
+console.log(`  overlay        -> ${asOverlay.manualCaptions.length} manual-caption segments, ${asOverlay.text.length} text segments`);
+assert.ok(asCaption.manualCaptions.length > 0 && asCaption.text.length === 0,
+  'a kind:caption element belongs to the manual-caption layer only');
+assert.ok(asOverlay.text.length > 0 && asOverlay.manualCaptions.length === 0,
+  'a kind:overlay element belongs to the text layer only');
+
+const captionWhite = (await readFrame(asCaption.out, DURATION / 2)).countNearWhite();
+const overlayWhite = (await readFrame(asOverlay.out, DURATION / 2)).countNearWhite();
+console.log(`  near-white pixels — as a caption: ${captionWhite}, as an overlay: ${overlayWhite}`);
+
+// Identical text, identical style, identical position — the ONLY difference
+// is `kind`, and it decides whether the blend reaches it.
+assert.ok(overlayWhite > 150, `An overlay must keep its own white (got ${overlayWhite})`);
+assert.ok(captionWhite < overlayWhite * 0.25,
+  `A manual caption must blend like the captions it belongs with, not stay opaque white ` +
+  `(caption ${captionWhite} vs overlay ${overlayWhite})`);
+console.log('✓ kind alone decides the layer, and the layer decides the blend');
 
 fs.rmSync(work, { recursive: true, force: true });
 console.log('\n--- All text-overlay export checks passed ---');

@@ -24,10 +24,25 @@ export const TEXT_ELEMENT_DEFAULTS = {
   // Editor-only selection (which clip the timeline has highlighted). Not
   // undo-tracked and never exported — a selection is not a document edit,
   // and undoing onto a stale selection would be surprising.
-  selectedTextElementId: null
+  selectedTextElementId: null,
+
+  // THE TRANSCRIPT'S OWN CAPTIONS, once they stop being derived (see
+  // shared/captionEvent.js). The grouper still produces the first version,
+  // but from then on this list is authoritative and the user owns it —
+  // retiming, splitting and merging a caption are edits to THIS, not
+  // attempts to coax a different result out of the grouper.
+  //
+  // Lives beside the manual text for the same two reasons: it is content
+  // rather than styling (so "Reset Style" must not wipe it) and it has to be
+  // undo-tracked (so SESSION_DEFAULTS would be wrong).
+  captionEvents: [],
+
+  // Which caption clip the timeline has highlighted. Editor-only, like
+  // selectedTextElementId above.
+  selectedCaptionEventId: null
 };
 
 /** The subset that is part of the project document (undo-tracked + exported). */
-export const TEXT_ELEMENT_DOCUMENT_KEYS = ['textElements'];
+export const TEXT_ELEMENT_DOCUMENT_KEYS = ['textElements', 'captionEvents'];
 
 export const useTextElementStore = create(() => ({ ...TEXT_ELEMENT_DEFAULTS }));

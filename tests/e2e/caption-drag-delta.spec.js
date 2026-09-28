@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('dragging the whole caption is delta-based, not a snap to the cursor', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?splash=0');
   await page.getByText('Try Demo Video').click();
 
   await page.evaluate(() => {

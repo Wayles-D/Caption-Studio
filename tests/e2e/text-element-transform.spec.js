@@ -16,7 +16,7 @@ import { test, expect } from '@playwright/test';
 // Hits :5173 explicitly rather than the suite baseURL — caption fonts come
 // from the BACKEND, whose CORS allowlist covers :5173 only, and a
 // CORS-blocked webfont renders as a silent fallback. Requires `npm run dev:all`.
-const APP_URL = 'http://localhost:5173/';
+const APP_URL = 'http://localhost:5173/?splash=0';
 
 async function setup(page) {
   await page.goto(APP_URL);
@@ -225,7 +225,7 @@ test('the rotate handle rotates the overlay, and the timeline clip selects it on
   // overlay follows appState rather than owning the selection. ---
   await page.evaluate(() => window.__textElements.selectTextElement(null));
   await page.waitForTimeout(300);
-  await page.locator('.timeline-text-clip').first().click();
+  await page.locator('#timeline-text-track .timeline-text-clip').first().click();
   await page.waitForTimeout(400);
   const id = await page.evaluate(() => window.__appState.textElements[0].id);
   expect(await page.evaluate(() => window.__debugSelectedTextElementId())).toBe(id);

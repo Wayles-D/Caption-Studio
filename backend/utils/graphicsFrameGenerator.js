@@ -557,11 +557,22 @@ export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHe
   // buildTextElementSegments. `text` is empty for a project with none, in
   // which case the compositor adds no second layer at all and the export is
   // byte-identical to one from before this feature existed.
+  // The two KINDS become two separate layers, because blending happens per
+  // layer and they want opposite behaviour (see graphicsCompositor.js's
+  // extraLayers): a manual caption is meant to be indistinguishable from the
+  // transcript's own captions, so it takes the caption's Text Blend Mode; an
+  // overlay is independent artwork and must never be dragged through it.
+  //
+  // Both are built by the SAME function — one model, one renderer; only
+  // which stream they land in differs.
+  const allElements = normalizeTextElementList(params.textElements);
+  const buildLayer = (elements) => buildTextElementSegments(
+    elements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile
+  );
+
   return {
     captions: segments,
-    text: buildTextElementSegments(
-      normalizeTextElementList(params.textElements),
-      params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile
-    )
+    manualCaptions: buildLayer(allElements.filter((el) => el.kind === 'caption')),
+    text: buildLayer(allElements.filter((el) => el.kind !== 'caption'))
   };
 }

@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
 // served by the BACKEND, whose CORS allowlist covers :5173 but not the e2e
 // server's port, and a CORS-blocked webfont renders as a silent fallback.
 // Requires `npm run dev:all`.
-const APP_URL = 'http://localhost:5173/';
+const APP_URL = 'http://localhost:5173/?splash=0';
 
 async function setup(page) {
   await page.goto(APP_URL);
@@ -48,7 +48,7 @@ test('timeline: create at playhead, drag, trim, select, delete', async ({ page }
   expect(els.length).toBe(1);
   expect(els[0].start).toBeCloseTo(3, 1);
 
-  const clip = page.locator('.timeline-text-clip').first();
+  const clip = page.locator('#timeline-text-track .timeline-text-clip').first();
   await expect(clip).toHaveCount(1);
   // creating selects it, so the clip should render as selected
   await expect(clip).toHaveClass(/selected/);
@@ -68,7 +68,7 @@ test('timeline: create at playhead, drag, trim, select, delete', async ({ page }
   expect(afterDrag.end - afterDrag.start).toBeCloseTo(els[0].end - els[0].start, 1);
 
   // --- trim the right edge ---
-  const clip2 = page.locator('.timeline-text-clip').first();
+  const clip2 = page.locator('#timeline-text-track .timeline-text-clip').first();
   const box2 = await clip2.boundingBox();
   await page.mouse.move(box2.x + box2.width - 2, box2.y + box2.height / 2);
   await page.mouse.down();

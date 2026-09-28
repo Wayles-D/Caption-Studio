@@ -42,35 +42,147 @@ const TILE_HEIGHT_PX = 44;
 const MIN_TILE_WIDTH_PX = 44;
 const MAX_TILE_WIDTH_PX = 96;
 
-// Never fewer than this (a filmstrip of 2 frames is not a filmstrip), never
-// more than this (each tile is a real seek+decode, so the ceiling bounds the
-// total work for a long video).
+// Never fewer than this (a filmstrip of 2 frames is not a filmstrip).
 const MIN_TILES = 4;
-const MAX_TILES = 40;
 
-// A short clip should not be sampled more finely than this, or a 3-second video
-// produces a row of near-identical frames for no informational gain.
-const MIN_SECONDS_PER_TILE = 0.35;
+// The ceiling on tiles EXTRACTED AT ONCE — not on tiles in the clip.
+//
+// It used to be both, and that was the bug: a zoomed timeline asks for more
+// frames than a fitted one, the request was clamped to 40, and the tiles were
+// then stretched to fill the row. On a portrait clip a frame's natural width
+// at this row height is ~25px, so at 2.3x zoom each was drawn ~72px wide —
+// about 3x its own size, which is exactly the zoomed, blurry strip that got
+// reported.
+//
+// The strip is now VIRTUALIZED: tiles sit on a fixed time grid at their
+// natural width however long the clip is, and only the ones inside the
+// visible window (plus a margin) are ever extracted. So this bounds the work
+// per pan, which is constant, instead of bounding the clip's resolution.
+const MAX_VISIBLE_TILES = 80;
 
-// Re-extracting on every resize pixel would be pathological, so a regeneration
-// only happens when the ideal count actually moves by more than this.
-const COUNT_CHANGE_THRESHOLD = 2;
+// Extra window either side of what's on screen, as a fraction of the viewport
+// — panning a little should not have to wait for a fresh extraction.
+const WINDOW_MARGIN_FRACTION = 0.5;
+
 
 /**
- * Per-video in-memory cache: src -> { count, tiles: [{ t, url }], aspect }.
- * Deliberately not persisted — thumbnails are cheap to rebuild for the current
+ * The grid of sample times, as a ladder of doubling intervals.
+ *
+ * Doubling matters: the times on any coarser grid are a SUBSET of the times on
+ * the next finer one, so zooming out reuses frames already extracted rather
+ * than re-decoding the whole window. A ladder of "nice" seconds (0.5, 1, 2,
+ * 5, 10) would not nest and would throw the cache away on every zoom step.
+ */
+const TILE_SECONDS_LADDER = [0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256];
+
+// Sampling exactly at 0 tends to land on a black frame, and some browsers
+// never fire 'seeked' for it. A hair inside the slice avoids both while
+// keeping the grid's doubling property intact (the offset is constant, so a
+// coarse grid's times are still a subset of a finer one's).
+const GRID_EPSILON_SECONDS = 0.04;
+
+/**
+ * How much time one tile should span so it renders at roughly its natural
+ * width — snapped UP the ladder, so tiles are never narrower than natural
+ * (which is what made them look like slivers) and the extraction count is
+ * never higher than it needs to be.
+ */
+export function chooseSecondsPerTile(tileWidthPx, pixelsPerSecond) {
+  if (!(pixelsPerSecond > 0) || !(tileWidthPx > 0)) return TILE_SECONDS_LADDER[TILE_SECONDS_LADDER.length - 1];
+  // No separate floor on the interval. A 0.35s floor used to apply
+  // here and silently defeated the whole feature: at 0.35s it snapped to the
+  // 0.5s rung whatever the zoom, so a 3x-wider track just drew the same
+  // frames 3x larger — measured 44.6px -> 151.5px per tile, which is exactly
+  // the stretching this was meant to remove. The ladder's own first rung is
+  // the real floor, and the "do not oversample a short clip" concern it was
+  // guarding is handled by the arithmetic anyway: a short clip has a high
+  // pixels-per-second, so the interval it asks for is already coarse.
+  const wanted = tileWidthPx / pixelsPerSecond;
+  return TILE_SECONDS_LADDER.find((step) => step >= wanted)
+    ?? TILE_SECONDS_LADDER[TILE_SECONDS_LADDER.length - 1];
+}
+
+/**
+ * The grid times covering [windowStart, windowEnd], each tile's own sample
+ * point. Returned as {t, index} so the caller can position a tile by its slot
+ * without re-deriving the arithmetic.
+ */
+export function tileTimesForWindow(windowStart, windowEnd, secondsPerTile, duration) {
+  if (!(duration > 0) || !(secondsPerTile > 0)) return [];
+  // A clip shorter than a few slots would otherwise render as one or two
+  // tiles, which does not read as a filmstrip at all.
+  const slotsInClip = Math.ceil(duration / secondsPerTile);
+  if (slotsInClip < MIN_TILES) {
+    const step = duration / MIN_TILES;
+    return Array.from({ length: MIN_TILES }, (_, i) => ({
+      index: i,
+      slotStart: i * step,
+      t: Math.max(0, Math.min(duration - 0.02, i * step + GRID_EPSILON_SECONDS)),
+      span: step
+    }));
+  }
+  const first = Math.max(0, Math.floor(windowStart / secondsPerTile));
+  const last = Math.min(
+    Math.ceil(duration / secondsPerTile) - 1,
+    Math.ceil(windowEnd / secondsPerTile)
+  );
+  const out = [];
+  for (let i = first; i <= last && out.length < MAX_VISIBLE_TILES; i++) {
+    const slotStart = i * secondsPerTile;
+    if (slotStart >= duration) break;
+    out.push({
+      index: i,
+      slotStart,
+      t: Math.max(0, Math.min(duration - 0.02, slotStart + GRID_EPSILON_SECONDS))
+    });
+  }
+  return out;
+}
+
+/**
+ * Per-video cache of individual FRAMES: src -> Map<timeKey, { url, width }>.
+ *
+ * Keyed by time rather than by "the strip as a whole", which is what makes
+ * virtualization work. The old cache stored one finished strip per video and
+ * threw all of it away whenever the tile count moved, so panning or zooming
+ * meant re-decoding everything. A frame keyed by its own timestamp is reusable
+ * by any window that happens to include it — and because the sample grid
+ * doubles (see TILE_SECONDS_LADDER), zooming out reuses frames the finer grid
+ * already produced instead of starting over.
+ *
+ * Deliberately not persisted: thumbnails are cheap to rebuild for the current
  * video and a permanent store would be a cache-invalidation problem for no
  * real benefit. Object URLs are revoked when an entry is evicted.
  */
 const cache = new Map();
+
+/** Frames are matched to a grid slot, so the key is the time in milliseconds. */
+function timeKey(t) {
+  return Math.round(t * 1000);
+}
+
+// Frames are small, but each one pins decoded image memory until revoked, so
+// a long session panning a long clip needs a ceiling. Oldest-first eviction
+// within a video, since the user is usually moving forwards.
+const MAX_CACHED_FRAMES_PER_VIDEO = 400;
 // Only the most recent few videos are worth keeping; each entry holds N object
 // URLs that pin decoded image memory until revoked.
 const MAX_CACHED_VIDEOS = 3;
 
 function revokeEntry(entry) {
-  entry?.tiles?.forEach((tile) => {
-    if (tile.url) URL.revokeObjectURL(tile.url);
+  entry?.frames?.forEach((frame) => {
+    if (frame.url) URL.revokeObjectURL(frame.url);
   });
+}
+
+/** Drops the oldest frames of one video once it holds more than the ceiling. */
+function trimFrames(entry) {
+  while (entry.frames.size > MAX_CACHED_FRAMES_PER_VIDEO) {
+    const oldest = entry.frames.keys().next().value;
+    const frame = entry.frames.get(oldest);
+    if (frame?.url) URL.revokeObjectURL(frame.url);
+    entry.frames.delete(oldest);
+  }
 }
 
 function evictIfNeeded() {
@@ -85,19 +197,6 @@ function evictIfNeeded() {
 export function clearFilmstripCache() {
   cache.forEach(revokeEntry);
   cache.clear();
-}
-
-/**
- * How many tiles to sample. Bounded by BOTH the available width (so tiles stay
- * a sensible size rather than being squashed) and the video's own length (so a
- * short clip isn't oversampled), then clamped.
- */
-export function computeTileCount(trackWidthPx, durationSeconds, tileWidthPx) {
-  if (!(trackWidthPx > 0) || !(durationSeconds > 0)) return 0;
-  const width = Math.max(MIN_TILE_WIDTH_PX, Math.min(MAX_TILE_WIDTH_PX, tileWidthPx || MIN_TILE_WIDTH_PX));
-  const byWidth = Math.round(trackWidthPx / width);
-  const byDuration = Math.floor(durationSeconds / MIN_SECONDS_PER_TILE);
-  return Math.max(MIN_TILES, Math.min(MAX_TILES, Math.max(1, Math.min(byWidth, byDuration))));
 }
 
 /** Tile width implied by the source's aspect ratio at the fixed row height. */
@@ -243,7 +342,7 @@ function canvasToBlobUrl(canvas) {
  * `shouldAbort()` is polled between frames so a video swap (or unmount) stops
  * the work immediately instead of finishing a strip nobody will see.
  */
-export async function extractThumbnails(src, { count, tileWidthPx, onTile, shouldAbort } = {}) {
+export async function extractThumbnails(src, { times, count, tileWidthPx, onTile, shouldAbort } = {}) {
   const video = document.createElement('video');
   video.preload = 'metadata';
   video.muted = true;
@@ -287,12 +386,14 @@ export async function extractThumbnails(src, { count, tileWidthPx, onTile, shoul
       return { canvas: c, ctx: c.getContext('2d') };
     });
 
-    const times = sampleTimes(count, duration);
-    for (let i = 0; i < times.length; i++) {
+    // Explicit times when the caller has a grid (the virtualized strip);
+    // evenly-spaced ones when it just wants N frames across the clip.
+    const sampleAt = Array.isArray(times) && times.length ? times : sampleTimes(count, duration);
+    for (let i = 0; i < sampleAt.length; i++) {
       if (shouldAbort?.()) break;
       let url = null;
       try {
-        await seekTo(video, times[i]);
+        await seekTo(video, sampleAt[i]);
         drawFrameScaled(ctx, video, vw, vh, buffers);
         url = await canvasToBlobUrl(canvas);
       } catch (err) {
@@ -300,9 +401,9 @@ export async function extractThumbnails(src, { count, tileWidthPx, onTile, shoul
         // blank and the rest still render.
         url = null;
       }
-      const tile = { t: times[i], url };
+      const tile = { t: sampleAt[i], url };
       tiles.push(tile);
-      if (url) onTile?.(i, url, tileWidth);
+      if (url) onTile?.(i, url, tileWidth, sampleAt[i]);
     }
     return { tiles, tileWidth, aspect };
   } finally {
@@ -314,37 +415,75 @@ export async function extractThumbnails(src, { count, tileWidthPx, onTile, shoul
 }
 
 /**
- * Cache-aware entry point. Returns the cached strip when the same video has
- * already been sampled at a comparable count, otherwise extracts and stores it.
+ * Cache-aware entry point for a WINDOW of the clip.
+ *
+ * Announces every frame it already has immediately (so a pan repaints with no
+ * decoding at all), then extracts only the ones missing. This is what makes
+ * the cost constant: it is bounded by how many tiles fit on screen, not by how
+ * long the video is or how far it is zoomed in.
+ *
+ * @param {{t:number}[]} slots - The grid slots to cover, from tileTimesForWindow.
+ * @param {number} tileWidthPx - The width each tile is actually DISPLAYED at; frames are rasterized to exactly this so the browser never upscales them.
+ * @param {(t:number, url:string, width:number) => void} onTile - Called per frame, cached or freshly extracted.
  */
-export async function getFilmstrip(src, { count, tileWidthPx, onTile, shouldAbort } = {}) {
-  const cached = cache.get(src);
-  // Re-extract if the tile is now rendered meaningfully LARGER than what the
-  // cached images were rasterized for, otherwise the browser upscales them and
-  // they look soft. Growing past the cached resolution is the only case worth
-  // paying for; rendering smaller just downsamples, which is fine.
-  const resolutionStale = cached && tileWidthPx > (cached.tileWidth || 0) * 1.25;
-  if (cached && !resolutionStale && Math.abs(cached.count - count) <= COUNT_CHANGE_THRESHOLD) {
-    // Re-announce cached tiles so the caller paints without re-extracting.
-    cached.tiles.forEach((tile, i) => { if (tile.url) onTile?.(i, tile.url, cached.tileWidth); });
-    return cached;
-  }
-  if (cached) {
-    revokeEntry(cached);
-    cache.delete(src);
+export async function getFilmstripWindow(src, { slots, tileWidthPx, onTile, shouldAbort } = {}) {
+  if (!src || !Array.isArray(slots) || !slots.length) return { extracted: 0, reused: 0 };
+
+  let entry = cache.get(src);
+  if (!entry) {
+    entry = { frames: new Map(), tileWidth: 0 };
+    cache.set(src, entry);
+    evictIfNeeded();
   }
 
-  const { tiles, tileWidth, aspect } = await extractThumbnails(src, { count, tileWidthPx, onTile, shouldAbort });
-  if (shouldAbort?.()) {
-    // Discard rather than cache a half-built strip for a video that is gone.
-    tiles.forEach((tile) => { if (tile.url) URL.revokeObjectURL(tile.url); });
-    return { tiles: [], tileWidth, aspect };
+  // A frame rasterized for a NARROWER tile than it is about to be drawn at
+  // would be upscaled by the browser and look soft — the same reasoning the
+  // whole-strip cache used, applied per frame. Drawing one smaller than it was
+  // rasterized is just downsampling, which is fine.
+  const resolutionStale = tileWidthPx > (entry.tileWidth || 0) * 1.25;
+  if (resolutionStale) {
+    revokeEntry(entry);
+    entry.frames = new Map();
+    entry.tileWidth = tileWidthPx;
   }
-  const entry = { count, tiles, tileWidth, aspect };
-  cache.set(src, entry);
-  evictIfNeeded();
-  return entry;
+
+  const missing = [];
+  let reused = 0;
+  slots.forEach((slot) => {
+    const cachedFrame = entry.frames.get(timeKey(slot.t));
+    if (cachedFrame?.url) {
+      reused++;
+      onTile?.(slot.t, cachedFrame.url, entry.tileWidth);
+    } else {
+      missing.push(slot.t);
+    }
+  });
+
+  if (!missing.length || shouldAbort?.()) return { extracted: 0, reused };
+
+  const { tileWidth } = await extractThumbnails(src, {
+    times: missing,
+    tileWidthPx,
+    shouldAbort,
+    onTile: (_i, url, width, t) => {
+      if (shouldAbort?.()) return;
+      entry.frames.set(timeKey(t), { url, width });
+      onTile?.(t, url, width);
+    }
+  });
+  entry.tileWidth = Math.max(entry.tileWidth, tileWidth || tileWidthPx);
+  trimFrames(entry);
+  return { extracted: missing.length, reused };
+}
+
+/** How many frames are cached for a video — for tests and diagnostics. */
+export function cachedFrameCount(src) {
+  return cache.get(src)?.frames.size || 0;
 }
 
 export const FILMSTRIP_TILE_HEIGHT_PX = TILE_HEIGHT_PX;
-export const FILMSTRIP_COUNT_CHANGE_THRESHOLD = COUNT_CHANGE_THRESHOLD;
+
+/** Natural on-screen width of one frame at the row's fixed height. */
+export function filmstripTileWidth(aspect) {
+  return tileWidthForAspect(aspect);
+}

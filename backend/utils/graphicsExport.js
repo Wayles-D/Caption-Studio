@@ -18,6 +18,7 @@ import path from 'path';
 import { canGenerateGraphicsFrames, buildFullTimelineSegments } from './graphicsFrameGenerator.js';
 import { compositeGraphicsCaptionTrack, getVideoInfo } from './graphicsCompositor.js';
 import { groupWordsToPhrases, sanitizePhraseTimings } from './phraseGrouper.js';
+import { normalizeCaptionEventList, resolveCaptionPhrases } from '../../shared/captionEvent.js';
 import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
 
 /**
@@ -69,7 +70,17 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
 
   let phrases;
   try {
-    phrases = sanitizePhraseTimings(groupWordsToPhrases({ words }));
+    // CAPTION EVENTS WIN when the project has them (see
+    // shared/captionEvent.js). Regrouping the word list here would discard
+    // every retime, split and merge the user made — the grouper is a pure
+    // function of word timings and pauses, so a caption dragged next to its
+    // neighbour would come back MERGED with it, and a split caption would
+    // come back whole. The grouper still produces the first version of the
+    // list; after that this renders what the user actually has on screen.
+    const captionEvents = normalizeCaptionEventList(params.captionEvents);
+    phrases = captionEvents.length
+      ? sanitizePhraseTimings(resolveCaptionPhrases(words, captionEvents))
+      : sanitizePhraseTimings(groupWordsToPhrases({ words }));
   } catch (err) {
     console.error(`[GraphicsExport] Failed to group words into phrases, falling back to ASS: ${err.message}`, err.stack);
     return recordFailure('phrase-grouping', err.message, err.stack);
@@ -83,7 +94,8 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // caption's Text Blend Mode cannot bleed onto text the user coloured
     // deliberately — see buildTextElementSegments. `text` is empty (and no
     // second layer is added) for a project with no text elements.
-    const { captions: segments, text: textSegments } = buildFullTimelineSegments(phrases, params, width, height, duration, framesDir);
+    const { captions: segments, manualCaptions: manualCaptionSegments, text: textSegments } =
+      buildFullTimelineSegments(phrases, params, width, height, duration, framesDir);
     // The VIDEO's own keyframed transform (see shared/videoTransform.js) —
     // passed through so the exported file reproduces the same zoom/pan/
     // rotate/fade the live preview shows, independent of captions. The
@@ -97,8 +109,12 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       canvasWidth: width,
       canvasHeight: height,
       textBlendMode: getASSStyleFromConfig(params).textBlendMode,
-      // The overlay layer, composited on top of the captions with a plain
-      // alpha-over — never the caption's blend mode.
+      // Manually placed CAPTIONS composite with the caption's own blend mode
+      // (they are meant to look like the transcript's captions); text
+      // OVERLAYS composite with a plain alpha-over, never that blend. Both
+      // are empty for a project without them, in which case no extra layer
+      // is added at all.
+      manualCaptionSegments,
       textElementSegments: textSegments,
       // The audio timeline (sound effects + imported audio tracks — see
       // shared/audioTimeline.js). Passed through the same way videoTransform
@@ -107,7 +123,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       audio: params.audio,
       hasSourceAudio: hasAudio
     });
-    console.log(`[GraphicsExport] Rendered ${segments.length} caption segments${textSegments.length ? ` + ${textSegments.length} text-overlay segments` : ''} via the graphics pipeline (preset: ${params.preset || 'default'}).`);
+    console.log(`[GraphicsExport] Rendered ${segments.length} caption segments${manualCaptionSegments.length ? ` + ${manualCaptionSegments.length} manual-caption segments` : ''}${textSegments.length ? ` + ${textSegments.length} text-overlay segments` : ''} via the graphics pipeline (preset: ${params.preset || 'default'}).`);
     return true;
   } catch (err) {
     // The full stack (not just err.message) is the whole point of this log

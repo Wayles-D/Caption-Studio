@@ -27,6 +27,8 @@ export function TimelinePanel({
   getAdvancedContainer,
   isAdvancedOpenGetter,
   onAdvancedToggle,
+  onSoundLibraryToggle,
+  onSoundLibraryClose,
   getPlaybackRowContainer
 }) {
   const internalContainerRef = useRef(null);
@@ -39,6 +41,8 @@ export function TimelinePanel({
       getAdvancedContainer,
       isAdvancedOpenGetter,
       onAdvancedToggle,
+      onSoundLibraryToggle,
+      onSoundLibraryClose,
       getPlaybackRowContainer
     });
     // Mount-once, matching PreviewStage.jsx's initPreviewWorkspace() pattern

@@ -121,17 +121,60 @@ function buildSampleTimes(rawTimes, windowStart, windowEnd) {
  */
 function buildPiecewiseExpr(samples, timeVar = 't') {
   if (samples.length === 1) return formatNum(samples[0].value);
-  let expr = formatNum(samples[samples.length - 1].value); // after-last: hold
-  for (let i = samples.length - 2; i >= 0; i--) {
+
+  // FLAT SUM OF GATED TERMS, not a nested if/else chain.
+  //
+  // This used to build `if(between(t,a,b),lerp,if(between(...),...))`, one
+  // nesting level per sample. ffmpeg's expression parser (libavutil/eval.c)
+  // allows a nesting depth of 100 — and MAX_TOTAL_SAMPLES is 120, so a
+  // transform with enough keyframes produced an expression ffmpeg simply
+  // could not parse:
+  //
+  //   [Parsed_scale_12] Cannot parse expression for width: 'iw*(if(...'
+  //   [AVFilterGraph] Error initializing filters
+  //   Failed to set value '<script>' for option 'filter_complex_script'
+  //
+  // ffmpeg exits non-zero, graphicsExport.js's catch swallows it, and the
+  // whole job silently degrades to the ASS renderer — losing caption
+  // keyframes, text blend mode and text overlays at once. Reproduced
+  // directly: an expression 82 levels deep parses, 110 levels does not.
+  //
+  // Crucially this depended on the TOTAL number of samples across every
+  // property, which is why it looked arbitrary from the outside: adding a
+  // few more keyframes anywhere could tip a working project over the edge,
+  // and adding a rotation could change the sample thinning enough to bring
+  // it back under. Nothing about which properties were used mattered.
+  //
+  // A sum of mutually-exclusive gated terms is depth-CONSTANT (about 4)
+  // however many samples there are, so the limit can no longer be reached.
+  // The gates are half-open — `gte(t,a)*lt(t,b)` — so exactly one term is
+  // ever non-zero and the boundaries can't double-count the way `between`
+  // (inclusive at both ends) would. Length still grows linearly with sample
+  // count, which is fine: the 82-deep expression above was already ~70KB
+  // and parsed without complaint.
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const terms = [
+    // Before the first sample: hold its value.
+    `lt(${timeVar},${formatNum(first.t)})*${formatNum(first.value)}`
+  ];
+
+  for (let i = 0; i < samples.length - 1; i++) {
     const a = samples[i];
     const b = samples[i + 1];
     const span = b.t - a.t;
-    const lerp = span > 0.0001
-      ? `(${formatNum(a.value)}+(${formatNum(b.value)}-${formatNum(a.value)})*(${timeVar}-${formatNum(a.t)})/${formatNum(span)})`
-      : formatNum(b.value);
-    expr = `if(between(${timeVar},${formatNum(a.t)},${formatNum(b.t)}),${lerp},${expr})`;
+    // A zero-span segment covers no time at all, so it contributes nothing
+    // and is skipped — which also keeps the division below safe. The next
+    // segment's own `gte` gate still covers that instant.
+    if (span <= 0.0001) continue;
+    const lerp = `(${formatNum(a.value)}+(${formatNum(b.value)}-${formatNum(a.value)})*(${timeVar}-${formatNum(a.t)})/${formatNum(span)})`;
+    terms.push(`gte(${timeVar},${formatNum(a.t)})*lt(${timeVar},${formatNum(b.t)})*${lerp}`);
   }
-  return `if(lt(${timeVar},${formatNum(samples[0].t)}),${formatNum(samples[0].value)},${expr})`;
+
+  // At and after the last sample: hold its value.
+  terms.push(`gte(${timeVar},${formatNum(last.t)})*${formatNum(last.value)}`);
+
+  return `(${terms.join('+')})`;
 }
 
 /**
@@ -401,6 +444,43 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
     // same floor from its own input rather than re-deriving it from the probe.
     activeStages.push(`[vt_padded]rotate=angle='(${rotationExpr})*PI/180':fillcolor=black@0:out_w='max(${padW}\\,iw)':out_h='max(${padH}\\,ih)'[vt_rotated]`);
     afterGeometry = 'vt_rotated';
+  } else if (scaleAnimates) {
+    // CONSTANT-SIZE NORMALIZATION — the fix for "a keyframed zoom silently
+    // does nothing in the exported file, unless a rotation happens to be
+    // keyframed alongside it".
+    //
+    // `scale` with eval=frame emits a DIFFERENT frame size every frame. Most
+    // filters cope; the opacity stage below does not. With scale+opacity and
+    // no rotation, the exported video showed no zoom at all — measured on a
+    // black frame with a known white square, scaling 1x->2x over the clip:
+    //
+    //   scale only      white area ratio 3.50  (a real zoom)
+    //   scale+opacity   white area ratio 0.97  (nothing happened)
+    //   scale+rotation  white area ratio 3.52  (a real zoom)
+    //
+    // The rotation column is the tell, and it is why this looked so
+    // arbitrary from the outside: the rotation branch above pads and rotates
+    // to a FIXED size, so everything downstream of it sees a constant frame
+    // size and works — adding a rotation "fixed" the zoom purely as a side
+    // effect of that normalization.
+    //
+    // So the same normalization is applied when there's no rotation: pad the
+    // varying scaled frame out to the largest size the animation will ever
+    // need, centred, with transparent filler. The layer downstream is then
+    // constant-size in every case, and the overlay stage's own centring
+    // (`(W-w)/2`) already accounts for a layer larger than the canvas —
+    // that is exactly how the rotation path has always behaved.
+    //
+    // Only when scale actually ANIMATES: a constant scale already produces a
+    // constant size, so a static transform emits a byte-identical graph to
+    // before this branch existed.
+    const boxW = Math.ceil(canvasWidth * maxScale);
+    const boxH = Math.ceil(canvasHeight * maxScale);
+    // Same `max(...,iw)` safety floor as the rotation branch — see its doc
+    // comment: padW/padH come from a probe of the source dimensions, and
+    // `pad` fails outright if it ever resolves smaller than its real input.
+    activeStages.push(`[vt_scaled]pad='max(${boxW}\\,iw)':'max(${boxH}\\,ih)':(ow-iw)/2:(oh-ih)/2:color=black@0${sizeEval}[vt_sized]`);
+    afterGeometry = 'vt_sized';
   }
 
   let afterAlpha = afterGeometry;

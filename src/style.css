@@ -849,11 +849,97 @@ body.light-theme {
   text-align: right;
 }
 
+/* Horizontal scrolling is what makes ZOOM possible: past 1x the rows are
+   wider than the panel and the timeline is panned instead of squeezed. Every
+   row is sized from --timeline-row-width (set by timelinePanel.js's
+   applyTimelineZoom), and everything positioned INSIDE a row is a percentage
+   of it — clips, ruler ticks, filmstrip tiles — so widening the row stretches
+   the whole timeline together with no per-element maths. */
 .timeline-scroll {
   position: relative;
   flex: 1;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
+}
+
+/* The final tick's label flows 35px past the end of the ruler. That was
+   invisible while the timeline had overflow-x: hidden, and became a
+   permanent phantom horizontal scroll the moment panning was enabled —
+   clipping it here keeps exactly the appearance it has always had. */
+.timeline-ruler {
+  overflow: hidden;
+}
+
+.timeline-ruler-row,
+.timeline-filmstrip-row,
+.timeline-lane {
+  width: var(--timeline-row-width, 100%);
+  /* At 1x the rows must still fill the panel exactly, so zoom starts from
+     "fits the width" rather than from an arbitrary pixels-per-second. */
+  min-width: 100%;
+}
+
+/* The label column stays put while the tracks pan underneath it — scrolling
+   a lane away from its own name would make a zoomed timeline unreadable. */
+.timeline-ruler-gutter,
+.timeline-filmstrip-gutter,
+.timeline-lane-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: var(--bg-sidebar);
+  /* FULL HEIGHT, or the label column stops covering the tracks that pan
+     underneath it. The rows are `align-items: center`, which sizes a grid
+     item to its CONTENT — leaving each gutter only as tall as its own label
+     text (measured: 15px inside a 36px lane). Its opaque background then
+     masked just that strip, so scrolled clips reappeared above and below
+     the label and the whole column looked like it was coming apart.
+     Stretching it and centring the label inside keeps the label exactly
+     where it was while the background covers the lane. */
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+
+.timeline-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.timeline-zoom-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 150ms, color 150ms;
+}
+
+.timeline-zoom-btn:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.timeline-zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.timeline-zoom-level {
+  min-width: 34px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
 }
 
 .timeline-ruler-row,
@@ -1156,10 +1242,14 @@ body.light-theme {
 /* Tiles are sized in PERCENT by filmstrip.js so the strip re-flows with the
    editor — a time axis must never carry baked-in pixel coordinates. They are
    flush by design: no gap, no margin, no individual radius. */
+/* Positioned on the TIME AXIS rather than flowed in order: the strip is
+   virtualized (see timelinePanel.js's syncFilmstrip), so only the tiles in
+   the visible window exist and each one has to sit at its own timestamp
+   rather than wherever the flow happens to put it. */
 .timeline-filmstrip-tile {
-  position: relative;
-  height: 100%;
-  flex: 0 0 auto;
+  position: absolute;
+  top: 0;
+  bottom: 0;
   background-color: var(--bg-card);
   background-size: cover;
   background-position: center;
@@ -1218,8 +1308,15 @@ body.light-theme {
    Both sit on the SAME 168px-gutter grid as the ruler, the filmstrip and the
    property lanes, so a clip's position lines up exactly with the ruler ticks,
    the keyframe markers on the video row, and the shared playhead. */
+/* Clip lanes (SFX / Audio / Captions / Text). Tall enough for a clip's
+   label to be readable and for its trim edges to be grabbable without
+   precision aiming — 34px left the strips cramped and the handles fiddly.
+   This is only a FLOOR: a lane with clips that overlap in time grows to fit
+   however many sub-rows it takes to keep them all reachable (see
+   timelinePanel.js's stackClips / sizeLaneForRows, which set min-height
+   inline). */
 .timeline-audio-lane {
-  min-height: 34px;
+  min-height: 42px;
 }
 
 .timeline-audio-lane .timeline-lane-label {
@@ -1228,20 +1325,28 @@ body.light-theme {
   color: var(--text-secondary);
 }
 
+/* Deliberately STICKY, not relative: this rule is more specific than the
+   shared gutter rule above and was silently overriding it, so every clip
+   lane's label scrolled away with its track once the timeline could pan.
+   Sticky is still a positioned ancestor, so it anchors the sound picker
+   popover exactly as relative did. */
 .timeline-audio-lane .timeline-lane-gutter {
-  position: relative; /* anchors the sound picker popover */
+  position: sticky;
+  left: 0;
+  z-index: 4;
 }
 
 /* The in-strip "+". It lives inside the track it adds to — the strip is where
    the content goes, so that is where the control to add content belongs —
    pinned to the strip's left edge and subdued until hovered, because it
    shares space with real clips and must not compete with them. */
+/* Sits at the right-hand end of the label column, so it is pinned wherever
+   the timeline is scrolled (the gutter is sticky) and never covers a clip.
+   It was absolutely positioned inside the strip, which panned it off screen
+   once the timeline could scroll — see buildAudioLane. */
 .timeline-add-clip-btn {
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 4;
+  margin-left: auto;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1272,16 +1377,11 @@ body.light-theme {
    visible — that is the case where discoverability actually matters. The
    video strip is exempt: it is never "empty" in this sense, and its button
    carries its own solid backing (below) to stay legible over frames. */
-.timeline-audio-track:not(.is-empty) .timeline-add-clip-btn {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.timeline-audio-track:not(.is-empty):hover .timeline-add-clip-btn,
-.timeline-audio-track:not(.is-empty) .timeline-add-clip-btn:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
+/* No hide-until-hover any more. That existed only because the button shared
+   space with the clips and would have covered one permanently on an occupied
+   lane — which also meant the Captions lane, now never empty, needed its own
+   exception just to stay clickable. In the gutter it overlaps nothing, so it
+   is simply always visible. */
 
 /* On the video row the button sits over real frames rather than an empty
    track, so it needs a solid backing to stay legible against any thumbnail. */
@@ -1463,8 +1563,10 @@ body.light-theme {
    at a glance. */
 .timeline-text-clip {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  /* top/height are set inline by stackClips once the clip is laid out; these
+     are the single-row fallback for anything not yet measured. */
+  top: 3px;
+  bottom: 3px;
   display: flex;
   align-items: center;
   min-width: 14px;

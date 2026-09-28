@@ -23,8 +23,11 @@ import { collectEditedWords } from './js/components/transcriptEditorState.js';
 import { applySemanticEvents } from './js/components/audioTimeline.js';
 import * as audioTimelineApi from './js/components/audioTimeline.js';
 import * as textElementsApi from './js/components/textElements.js';
+import * as captionEventsApi from './js/components/captionEvents.js';
 import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
+import { SoundLibraryPanel } from './components/SoundLibraryPanel.jsx';
+import { SplashScreen, shouldShowSplash } from './components/SplashScreen.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
@@ -228,6 +231,19 @@ export function App() {
   // panel itself.
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT_QUERY);
   const [desktopSidePanel, setDesktopSidePanel] = useState(DESKTOP_SIDE_PANEL_DEFAULT);
+
+  // The sound library (src/components/SoundLibraryPanel.jsx), opened from the
+  // SFX lane's "+". Held here rather than inside timelinePanel.js because
+  // that module no longer owns any picker DOM — it just reports the press and
+  // React decides whether a panel is showing.
+  // The welcome animation. Decided once, from the URL, on the first render
+  // — not in an effect, so the editor is never briefly visible before the
+  // splash lands on top of it.
+  const [splashing, setSplashing] = useState(shouldShowSplash);
+
+  const [soundLibraryOpen, setSoundLibraryOpen] = useState(false);
+  const closeSoundLibrary = useCallback(() => setSoundLibraryOpen(false), []);
+  const toggleSoundLibrary = useCallback(() => setSoundLibraryOpen((open) => !open), []);
   const desktopSidePanelElRef = useRef(null);
   const advancedPanelBodyRef = useRef(null);
   const timelinePanelRef = useRef(null);
@@ -330,6 +346,7 @@ export function App() {
       // for the same reason __audioTimeline is: e2e drives real clip
       // create/move/trim without depending on pointer gymnastics.
       window.__textElements = textElementsApi;
+      window.__captionEvents = captionEventsApi;
     }
   }, []);
 
@@ -349,6 +366,18 @@ export function App() {
     setToastVisible(true);
     setTimeout(() => setToastVisible(false), 2500);
   }, []);
+
+  // A render PROBLEM is not a toast. When the advanced renderer falls back,
+  // the exported file is genuinely missing effects the user asked for
+  // (caption transform keyframes, text blend mode, text overlays), and the
+  // reason is an ffmpeg error far too long to read — let alone remember — in
+  // the 2.5 seconds a toast is on screen. Reported by a user who hit this
+  // repeatedly and could only say "there's that error, but I can't remember
+  // the error", which is exactly what a disappearing notice produces.
+  //
+  // So this one stays until it is dismissed, and can be copied in one click.
+  const [renderIssue, setRenderIssue] = useState(null);
+  const [renderIssueCopied, setRenderIssueCopied] = useState(false);
 
   const handleFileSelected = useCallback(async (file) => {
     if (!file.type.startsWith('video/')) {
@@ -387,6 +416,12 @@ export function App() {
         isProcessing: false,
         isLoaded: true
       }, { recordHistory: false });
+
+      // The handoff from "grouped automatically" to "owned by the user" —
+      // see shared/captionEvent.js. `force` because this is a brand new
+      // transcript: whatever caption list a previous video left behind
+      // addresses word indices that no longer mean anything.
+      captionEventsApi.captureCaptionEventsFromPhrases(data.phrases || [], { force: true });
 
       setVideoSrc(URL.createObjectURL(file));
       setViewState('video');
@@ -491,6 +526,15 @@ export function App() {
         isProcessing: false
       }, { recordHistory: false });
 
+      // NOT forced: a regenerate returns freshly grouped phrases, and
+      // adopting them would silently undo every retime, split and merge the
+      // user has made. captureCaptionEventsFromPhrases only fills an EMPTY
+      // list, so this seeds captions for a project that predates caption
+      // events and is a no-op for one that already has them. The edited list
+      // is then re-projected so `phrases` reflects any transcript text edits.
+      captionEventsApi.captureCaptionEventsFromPhrases(result.phrases || []);
+      captionEventsApi.refreshPhrasesFromCaptionEvents();
+
       setViewState('video');
       if (result.renderedWithEffects === false) {
         // The backend now reports WHY it fell back (see graphicsExport.js's
@@ -512,9 +556,17 @@ export function App() {
     showToast("Re-rendering captioned video...");
     const { ok, renderedWithEffects, graphicsFailureReason } = await renderCurrentEditsToServer();
     if (ok) {
-      showToast(renderedWithEffects
-        ? "Render complete! Ready to download."
-        : `Rendered, but without some caption effects (position/rotation/blend) — the advanced renderer couldn't run this time.${graphicsFailureReason ? ` Reason: ${graphicsFailureReason.stage} — ${graphicsFailureReason.message}` : ""}`);
+      if (renderedWithEffects) {
+        showToast('Render complete! Ready to download.');
+        setRenderIssue(null);
+      } else {
+        setRenderIssue({
+          stage: graphicsFailureReason?.stage || 'render',
+          message: graphicsFailureReason?.message || 'The advanced renderer could not run, and no reason was reported.',
+          detail: graphicsFailureReason?.stack || null
+        });
+        setRenderIssueCopied(false);
+      }
     }
   }, [renderCurrentEditsToServer, showToast]);
 
@@ -580,6 +632,11 @@ export function App() {
 
   return (
     <>
+      {/* Last in the tree by z-index, first in the file by importance: the
+          app mounts and lays out underneath this the whole time it is up,
+          so dismissing it reveals a warm editor rather than starting one. */}
+      {splashing && <SplashScreen onDone={() => setSplashing(false)} />}
+
       <input
         type="file"
         id="video-file-input"
@@ -642,8 +699,30 @@ export function App() {
           getPlaybackRowContainer={getPlaybackRowContainer}
           isAdvancedOpenGetter={isAdvancedOpenGetter}
           onAdvancedToggle={onAdvancedToggle}
+          onSoundLibraryToggle={toggleSoundLibrary}
+          onSoundLibraryClose={closeSoundLibrary}
         />
       </div>
+
+      {/* The sound library, on the LEFT — the one side of the workspace that
+          was otherwise empty, so it opens without displacing the preview or
+          the Video Inspector opposite it. Mirrors that panel's geometry so
+          the two read as a pair, and spans only the preview's height so it
+          never covers the timeline controls that opened it.
+
+          Mounted only while open (unlike the right panel, which stays mounted
+          so relocated DOM has a stable home) — it owns no relocated children,
+          and unmounting is what lets its own outside-press and Escape
+          listeners come and go with it. */}
+      {soundLibraryOpen && (
+        <div
+          id="sound-library-panel"
+          className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
+          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
+        >
+          <SoundLibraryPanel onClose={closeSoundLibrary} />
+        </div>
+      )}
 
       {/* Desktop-only right side panel — an always-visible anchored sidebar
           (Video Inspector by default; Advanced/Transcript temporarily take
@@ -820,6 +899,53 @@ export function App() {
       >
         {toastMessage}
       </div>
+
+      {renderIssue && (
+        <div
+          id="render-issue-banner"
+          className="fixed bottom-6 right-6 max-w-[520px] bg-[var(--bg-card)] border border-[#ef4444]
+            text-[var(--text-primary)] rounded-[var(--radius-md)] shadow-[var(--shadow-md)] z-[1001] p-4 flex flex-col gap-2"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <span className="text-[12px] font-bold uppercase tracking-[0.05em] text-[#ef4444]">
+              Exported without some effects
+            </span>
+            <button
+              type="button"
+              id="render-issue-dismiss"
+              className="bg-transparent border-0 text-[var(--text-muted)] cursor-pointer text-[16px] leading-none p-0 hover:text-[var(--text-primary)]"
+              onClick={() => setRenderIssue(null)}
+              aria-label="Dismiss"
+            >×</button>
+          </div>
+          <p className="text-[12px] m-0 text-[var(--text-secondary)]">
+            The advanced renderer failed, so this file was produced by the fallback — caption
+            position/rotation/scale keyframes, text blend mode and text overlays are missing from it.
+          </p>
+          <code
+            id="render-issue-message"
+            className="text-[11px] font-mono whitespace-pre-wrap break-words bg-[var(--bg-input)]
+              border border-[var(--border-color)] rounded-[var(--radius-sm)] p-2 max-h-[160px] overflow-auto"
+          >
+            {renderIssue.stage}: {renderIssue.message}
+          </code>
+          <button
+            type="button"
+            id="render-issue-copy"
+            className="h-8 self-start px-3 bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)]
+              font-bold text-[11px] rounded-[var(--radius-sm)] cursor-pointer hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]"
+            onClick={() => {
+              const full = `[${renderIssue.stage}] ${renderIssue.message}${renderIssue.detail ? `\n\n${renderIssue.detail}` : ''}`;
+              navigator.clipboard?.writeText(full).then(
+                () => setRenderIssueCopied(true),
+                () => setRenderIssueCopied(false)
+              );
+            }}
+          >
+            {renderIssueCopied ? 'Copied' : 'Copy details'}
+          </button>
+        </div>
+      )}
     </>
   );
 }

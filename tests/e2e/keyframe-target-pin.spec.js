@@ -13,7 +13,7 @@ import { test, expect } from '@playwright/test';
 // transcript instead of depending on real Whisper transcription.
 
 test('caption keyframe target stays pinned after scrubbing to a different caption', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?splash=0');
   await page.getByText('Try Demo Video').click();
 
   const duration = await page.evaluate(() => new Promise((resolve) => {
