@@ -78,6 +78,12 @@ export const SOUND_REGISTRY = {
   rewind: { id: 'rewind', label: 'Rewind', file: 'rewind.mp3', category: 'motion', defaultVolume: 0.5 },
   'riser-metallic': { id: 'riser-metallic', label: 'Metallic Riser', file: 'ES_Riser Metallic - SFX Producer.mp3', category: 'motion', defaultVolume: 0.45 },
   'riser-reverse': { id: 'riser-reverse', label: 'Reverse Riser', file: 'Reverse riser 02 - ( Sound Effects Transition )_25032024.m4a', category: 'motion', defaultVolume: 0.45 },
+  // Two takes of the same effect, kept as separate entries rather than one
+  // "Flicker" picking a winner — which take cuts better is a per-edit call,
+  // and an unpicked variant sitting unreachable on disk is the exact problem
+  // this registry exists to prevent.
+  'flicker-1': { id: 'flicker-1', label: 'Flicker (1)', file: 'flicker v1.mp3', category: 'motion', defaultVolume: 0.5 },
+  'flicker-2': { id: 'flicker-2', label: 'Flicker (2)', file: 'flicker v2.mp3', category: 'motion', defaultVolume: 0.5 },
 
   // --- Impacts -------------------------------------------------------------
   hit: { id: 'hit', label: 'Hit', file: 'hit.mp3', category: 'impact', defaultVolume: 0.6 },
