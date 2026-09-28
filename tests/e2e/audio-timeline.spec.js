@@ -49,39 +49,70 @@ test('sound effects and audio are two separate lanes, each with its own add acti
   await expect(page.locator('#timeline-audio-track')).toBeVisible();
 });
 
-test('every strip carries its own "+" INSIDE the strip, not out in the gutter', async ({ page }) => {
+test('every lane carries its own "+", pinned in the label column', async ({ page }) => {
   await loadDemoVideo(page);
 
-  // Each add control must be a descendant of the strip it adds to — that is
-  // the whole point: the strip is where the content goes, so that is where
-  // the control to add content lives.
+  // These used to live INSIDE each strip, on the reasoning that the strip is
+  // where content goes so that is where the control to add content belongs.
+  // That held while the timeline always fitted its panel, and stopped holding
+  // the moment it could pan: the strip scrolls, so an in-strip control
+  // scrolled away with it — drifting across the labels and then off screen
+  // entirely, leaving no way to add anything at the playhead.
+  //
+  // The gutter is sticky (it is the label column), so a control mounted there
+  // is reachable at any zoom or scroll position and can never sit on top of a
+  // clip.
   const placement = await page.evaluate(() => {
-    const check = (btnId, containerSel) => {
+    const check = (btnId, gutterSel) => {
       const btn = document.getElementById(btnId);
-      const container = document.querySelector(containerSel);
-      if (!btn || !container) return { inside: false };
+      const gutter = document.querySelector(gutterSel);
+      if (!btn || !gutter) return { inGutter: false };
       const b = btn.getBoundingClientRect();
-      const c = container.getBoundingClientRect();
+      const g = gutter.getBoundingClientRect();
       return {
-        inside: container.contains(btn),
-        // ...and visually within the strip's own bounds, not floating beside it.
-        withinBounds: b.left >= c.left - 1 && b.right <= c.right + 1 && b.top >= c.top - 1 && b.bottom <= c.bottom + 1
+        inGutter: gutter.contains(btn),
+        withinBounds: b.left >= g.left - 1 && b.right <= g.right + 1 && b.top >= g.top - 1 && b.bottom <= g.bottom + 1
       };
     };
     return {
-      sfx: check('timeline-add-sfx-btn', '#timeline-sfx-track'),
-      audio: check('timeline-add-audio-btn', '#timeline-audio-track'),
-      video: check('timeline-add-video-btn', '.timeline-filmstrip-stack')
+      sfx: check('timeline-add-sfx-btn', '.timeline-lane[data-lane="sfx"] .timeline-lane-gutter'),
+      audio: check('timeline-add-audio-btn', '.timeline-lane[data-lane="audio"] .timeline-lane-gutter'),
+      captions: check('timeline-add-captions-btn', '.timeline-lane[data-lane="captions"] .timeline-lane-gutter'),
+      text: check('timeline-add-text-btn', '.timeline-lane[data-lane="text"] .timeline-lane-gutter'),
+      video: check('timeline-add-video-btn', '.timeline-filmstrip-gutter')
     };
   });
 
-  expect(placement.sfx).toEqual({ inside: true, withinBounds: true });
-  expect(placement.audio).toEqual({ inside: true, withinBounds: true });
-  expect(placement.video).toEqual({ inside: true, withinBounds: true });
+  Object.entries(placement).forEach(([lane, result]) => {
+    expect(result, `the ${lane} lane's "+"`).toEqual({ inGutter: true, withinBounds: true });
+  });
 
-  // The gutter is now just the lane's name — no add button left out there.
-  await expect(page.locator('.timeline-lane[data-lane="sfx"] .timeline-lane-gutter .timeline-add-clip-btn')).toHaveCount(0);
-  await expect(page.locator('.timeline-lane[data-lane="audio"] .timeline-lane-gutter .timeline-add-clip-btn')).toHaveCount(0);
+  // Nothing is left inside the strips to be panned away.
+  await expect(page.locator('.timeline-lane-track .timeline-add-clip-btn')).toHaveCount(0);
+
+  // THE POINT: still clickable after the timeline has been zoomed and panned.
+  for (let i = 0; i < 3; i++) await page.locator('#timeline-zoom-in').click();
+  await page.evaluate(() => { document.getElementById('timeline-scroll').scrollLeft = 1200; });
+  await page.waitForTimeout(400);
+
+  const reachable = await page.evaluate(() => {
+    const scroll = document.getElementById('timeline-scroll').getBoundingClientRect();
+    return ['timeline-add-sfx-btn', 'timeline-add-audio-btn', 'timeline-add-captions-btn', 'timeline-add-text-btn']
+      .map((id) => {
+        const b = document.getElementById(id).getBoundingClientRect();
+        const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        return {
+          id,
+          onScreen: b.left >= scroll.left - 1 && b.right <= scroll.right + 1,
+          hittable: !!hit?.closest('.timeline-add-clip-btn')
+        };
+      });
+  });
+  console.log('after zoom + pan:', JSON.stringify(reachable));
+  reachable.forEach((r) => {
+    expect(r.onScreen, `${r.id} stayed on screen`).toBe(true);
+    expect(r.hittable, `${r.id} is clickable`).toBe(true);
+  });
 
   // The video "+" opens the app's existing video upload input rather than a
   // second upload path of its own.

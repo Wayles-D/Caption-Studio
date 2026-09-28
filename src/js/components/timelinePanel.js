@@ -577,12 +577,11 @@ function buildDom(container, options) {
   keyframeTrack.id = 'timeline-keyframe-overlay';
   filmstripStack.appendChild(filmstripTrack);
   filmstripStack.appendChild(keyframeTrack);
-  // The video strip gets the same in-strip "+" as the audio lanes, so "add
-  // content to this track" is one consistent gesture across every row. Added
-  // to the STACK rather than inside the strip itself, which clips its own
-  // children (that clipping is what gives the filmstrip its rounded edge).
+  // The video row gets the same gutter-mounted "+" as every other lane, so
+  // "add content to this track" is one consistent gesture — and, like the
+  // others, stays put while the strip pans beneath it.
   const addVideoBtn = buildAddButton('timeline-add-video-btn', 'Upload a video');
-  filmstripStack.appendChild(addVideoBtn);
+  filmstripGutter.appendChild(addVideoBtn);
   filmstripRow.appendChild(filmstripGutter);
   filmstripRow.appendChild(filmstripStack);
   scroll.appendChild(filmstripRow);
@@ -744,15 +743,24 @@ function buildAudioLane(key, label, addTitle) {
   track.className = 'timeline-lane-track timeline-audio-track';
   track.id = `timeline-${key}-track`;
 
-  // The add control lives INSIDE the strip, not out in the gutter — the strip
-  // is the thing the content goes into, so that is where the affordance to
-  // add content belongs (and it keeps the gutter to just a name, so every
-  // lane's label column stays the same narrow, scannable width).
-  track.appendChild(buildAddButton(`timeline-add-${key}-btn`, addTitle));
+  // The add control lives in the GUTTER, beside the lane's name.
+  //
+  // It used to sit inside the strip, on the reasoning that the strip is where
+  // content goes so that is where the control to add content belongs. That
+  // held while the timeline always fitted its panel. It stopped holding the
+  // moment the timeline could pan: the strip scrolls, so an in-strip control
+  // scrolls away with it — it drifted left across the labels and then off
+  // screen entirely, leaving no way to add anything at the playhead, which is
+  // exactly when you want to.
+  //
+  // The gutter is already sticky (it is the label column), so a control
+  // mounted here is always reachable at any zoom or scroll position, and
+  // unlike a sticky in-strip button it can never sit on top of a clip.
+  gutter.appendChild(buildAddButton(`timeline-add-${key}-btn`, addTitle));
 
   row.appendChild(gutter);
   row.appendChild(track);
-  return { row, track, addBtn: track.querySelector('.timeline-add-clip-btn'), gutter };
+  return { row, track, addBtn: gutter.querySelector('.timeline-add-clip-btn'), gutter };
 }
 
 /**

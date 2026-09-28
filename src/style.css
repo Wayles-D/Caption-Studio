@@ -1340,12 +1340,13 @@ body.light-theme {
    the content goes, so that is where the control to add content belongs —
    pinned to the strip's left edge and subdued until hovered, because it
    shares space with real clips and must not compete with them. */
+/* Sits at the right-hand end of the label column, so it is pinned wherever
+   the timeline is scrolled (the gutter is sticky) and never covers a clip.
+   It was absolutely positioned inside the strip, which panned it off screen
+   once the timeline could scroll — see buildAudioLane. */
 .timeline-add-clip-btn {
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 4;
+  margin-left: auto;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1376,32 +1377,11 @@ body.light-theme {
    visible — that is the case where discoverability actually matters. The
    video strip is exempt: it is never "empty" in this sense, and its button
    carries its own solid backing (below) to stay legible over frames. */
-.timeline-audio-track:not(.is-empty) .timeline-add-clip-btn {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.timeline-audio-track:not(.is-empty):hover .timeline-add-clip-btn,
-.timeline-audio-track:not(.is-empty) .timeline-add-clip-btn:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* The Captions lane is an exception: hiding an occupied lane's "+" until
-   hover assumes a lane is USUALLY empty, and this one never is — the
-   transcript's own captions fill it from 0:00 (see captionEvent.js). With
-   the default rule its "+" sat under the first caption clip, invisible and
-   pointer-events: none, so there was no way to add a manual caption at all.
-   It stays visible and clickable here; z-index 4 already puts it above the
-   clips. */
-#timeline-captions-track .timeline-add-clip-btn {
-  opacity: 0.75;
-  pointer-events: auto;
-}
-
-#timeline-captions-track:hover .timeline-add-clip-btn {
-  opacity: 1;
-}
+/* No hide-until-hover any more. That existed only because the button shared
+   space with the clips and would have covered one permanently on an occupied
+   lane — which also meant the Captions lane, now never empty, needed its own
+   exception just to stay clickable. In the gutter it overlaps nothing, so it
+   is simply always visible. */
 
 /* On the video row the button sits over real frames rather than an empty
    track, so it needs a solid backing to stay legible against any thumbnail. */
