@@ -373,25 +373,40 @@ export function AudioInspector({ onNotify }) {
       <div className={CARD}>
         <span className={SECTION_TITLE}>Sound for each moment</span>
         <p className={HINT}>
-          The analysis says what is happening; you decide what it sounds like. Changing one
-          of these re-places the automatic effects immediately.
+          On <b>Auto</b>, the analysis picks a sound for each moment and falls back to the
+          profile. Choosing one here pins it — every moment of that kind sounds the same,
+          whatever the analysis suggested. Either way it re-places the effects immediately.
         </p>
         <div className="flex flex-col gap-1.5">
-          {SEMANTIC_EVENT_TYPES.map((type) => (
-            <div key={type} className="flex items-center gap-2">
-              <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--text-primary)]">
-                {SEMANTIC_EVENT_LABELS[type]}
-              </span>
-              <select
-                className={`${SELECT} w-[120px]`}
-                value={mapping[type] ?? ''}
-                onChange={(e) => audio.setEventTypeSound(type, e.target.value || null)}
-              >
-                <option value="">No sound</option>
-                {listSounds().map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-              </select>
-            </div>
-          ))}
+          {SEMANTIC_EVENT_TYPES.map((type) => {
+            // Pinned is the ABSENCE or presence of the user's own entry, not
+            // whatever sound is currently resolved — an unpinned type showing
+            // "Pop" because the profile says so must not look like a choice
+            // the user made, now that the difference decides whether the
+            // analysis's own pick is allowed to win.
+            const pinned = Object.prototype.hasOwnProperty.call(soundEventMapping || {}, type);
+            return (
+              <div key={type} className="flex items-center gap-2">
+                <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--text-primary)]">
+                  {SEMANTIC_EVENT_LABELS[type]}
+                </span>
+                <select
+                  className={`${SELECT} w-[120px]`}
+                  data-event-type={type}
+                  value={pinned ? (mapping[type] ?? '') : '__auto'}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '__auto') audio.clearEventTypeSound(type);
+                    else audio.setEventTypeSound(type, value || null);
+                  }}
+                >
+                  <option value="__auto">Auto{mapping[type] ? ` · ${getSoundDefinition(mapping[type]).label}` : ''}</option>
+                  <option value="">No sound</option>
+                  {listSounds().map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                </select>
+              </div>
+            );
+          })}
         </div>
       </div>
 

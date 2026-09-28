@@ -1,21 +1,26 @@
 /**
- * THE semantic-event -> sound-effect mapping — the editor's own decision
- * layer, deliberately kept out of the AI prompt.
+ * THE semantic-event -> sound-effect mapping: what a KIND of moment sounds
+ * like by default, and the editor's answer whenever the model has not named
+ * something better for one particular moment.
  *
- * The content analysis (backend/services/keywordAnalysisService.js) reports
- * only what is happening in the speech: "this is a list item", "this is a
- * reveal". It has no idea that a list item currently sounds like a tick, and
- * it must not: baking sound names into the prompt would mean every future
- * sound-design change required re-prompting (and re-validating) the model,
- * and would let the model invent sound IDs that don't exist.
+ * The layers, weakest to strongest:
+ *   profile -> list_item generally means `tick`               (this file)
+ *   model   -> "...but THIS moment wants `netflix-intro`"     (per moment)
+ *   user    -> "...no, list items are `pop` to me"            (soundEventMapping)
+ *   mute    -> "...list items make no sound at all"           (null, either source)
  *
- * So the contract is one-way and narrow:
- *   AI      -> "type": "list_item"     (semantic, from SEMANTIC_EVENT_TYPES)
- *   editor  -> list_item currently means the `tick` sound   (this file)
- *   user    -> ...unless they changed it (appState.soundEventMapping)
+ * applySemanticEvents resolves that order. Note the direction: a per-moment
+ * pick beats a per-type default because it was chosen with more information,
+ * but anything the USER said beats both, because they are the only party who
+ * is not guessing.
  *
- * That's what makes alternative sound profiles/presets possible later without
- * touching the analysis at all — a profile is just another mapping object.
+ * This file originally existed to keep sound names out of the prompt
+ * entirely — hard-coding them there would have meant re-prompting and
+ * re-validating the model on every sound-design change. That cost is gone
+ * now that the model's list is GENERATED from the registry
+ * (describeSoundLibraryForPrompt), but the mapping layer is not: it is still
+ * what a profile is, what a user override acts on, and what every moment the
+ * model declines to name falls back to.
  */
 import { isKnownSoundId } from './soundRegistry.js';
 

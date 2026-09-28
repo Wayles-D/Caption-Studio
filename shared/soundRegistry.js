@@ -165,6 +165,31 @@ export function listSoundsByCategory() {
 }
 
 /**
+ * The library written out for the content-analysis prompt, grouped by
+ * category: the exact, closed set of sound IDs the model may name.
+ *
+ * GENERATED, never hand-written. That is the whole point. The original design
+ * kept sound names out of the prompt because hard-coding them would mean
+ * re-prompting and re-validating the model every time the sound design
+ * changed — a real cost, and the reason the model was only ever told about
+ * meaning. Deriving the list from the registry removes that cost: adding an
+ * asset here offers it to the model on the very next call, with no prompt
+ * edit and nothing to keep in sync. What remains true is that the model
+ * cannot invent an ID, because everything it returns is checked back against
+ * this same registry (see isKnownSoundId).
+ *
+ * Labels are included alongside the IDs because several IDs are opaque on
+ * their own — `faaah` and `who-are-you` say far less about when to use them
+ * than "Faaah" under "Memes & Voices" does. The category headings carry most
+ * of that meaning, which is why the grouping is reused rather than flattened.
+ */
+export function describeSoundLibraryForPrompt() {
+  return listSoundsByCategory()
+    .map((group) => `${group.label}: ${group.sounds.map((s) => `${s.id} (${s.label})`).join(', ')}`)
+    .join('\n');
+}
+
+/**
  * Browser-side URL for a sound. `baseUrl` defaults to the app's own static
  * root; pass a CDN/object-storage origin (or set VITE_SOUNDS_BASE_URL, which
  * src/js/components/audioEngine.js reads) to serve them from elsewhere with

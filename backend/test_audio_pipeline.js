@@ -23,9 +23,9 @@ import {
   hasAnyAudio,
   isDefaultVideoAudio
 } from '../shared/audioTimeline.js';
-import { SOUND_REGISTRY, resolveSoundUrl, getSoundDefinition } from '../shared/soundRegistry.js';
+import { SOUND_REGISTRY, SOUND_IDS, resolveSoundUrl, getSoundDefinition, describeSoundLibraryForPrompt } from '../shared/soundRegistry.js';
 import { resolveSoundMapping, SEMANTIC_EVENT_TYPES, isKnownSemanticEventType } from '../shared/soundProfiles.js';
-import { resolveEventTimestamps } from './services/keywordAnalysisService.js';
+import { resolveEventTimestamps, buildSystemPrompt } from './services/keywordAnalysisService.js';
 import { buildAudioMixGraph, SOUNDS_DIR, resolveAudioAssetPath } from './utils/audioMixFilter.js';
 
 console.log('--- Starting Caption Studio Audio Timeline Verification ---');
@@ -87,6 +87,40 @@ const duplicated = resolveEventTimestamps(
 );
 assert.strictEqual(duplicated.length, 1, 'Duplicate (type, timestamp) events collapse to one');
 console.log(`✓ 4 semantic events resolved to exact transcript times (${events.map((e) => e.timestamp).join('s, ')}s); junk dropped`);
+
+
+// 2b. The model may name a sound — from a list it is GIVEN, and never one it
+// invented.
+console.log('\n[Test 2b] The Model Picks From The Registry, And Cannot Invent An ID');
+
+// The enumeration is generated, so every registered sound reaches the model
+// on the next call with no prompt edit. This is the assertion that fails if
+// someone ever pastes a fixed list into the prompt.
+const prompt = buildSystemPrompt();
+const absent = SOUND_IDS.filter((id) => !prompt.includes(id));
+assert.deepStrictEqual(absent, [], `Every registered sound must be offered to the model; missing: ${absent.join(', ')}`);
+assert.ok(describeSoundLibraryForPrompt().includes('Memes & Voices'), 'Sounds reach the model grouped, so the category carries meaning an opaque id does not');
+
+// A named sound survives validation and rides along with the event.
+const named = resolveEventTimestamps(
+  [
+    { type: 'reveal', wordIndex: 9, soundId: 'netflix-intro' },
+    { type: 'transition', wordIndex: 13, soundId: 'not-a-real-sound' },
+    { type: 'emphasis', wordIndex: 17 }
+  ],
+  words,
+  { allowSoundId: true }
+);
+assert.strictEqual(named.length, 3, 'A bad sound id costs the moment its SOUND, never the moment itself');
+assert.strictEqual(named[0].soundId, 'netflix-intro', 'A real id from the library is carried through');
+assert.strictEqual(named[1].soundId, undefined, 'An invented id is dropped rather than placed, mapped or repaired');
+assert.strictEqual(named[2].soundId, undefined, 'An event with no suggestion simply has none');
+
+// Visual suggestions are pictures. They never carry a sound, even if the
+// model volunteers one.
+const visual = resolveEventTimestamps([{ type: 'reveal', wordIndex: 9, soundId: 'netflix-intro' }], words);
+assert.strictEqual(visual[0].soundId, undefined, 'Visual suggestions never carry a sound id');
+console.log(`✓ All ${SOUND_IDS.length} sounds offered to the model; invented ids dropped, events kept`);
 
 // 3. The editor — not the model — decides what a moment sounds like.
 console.log('\n[Test 3] Semantic Event -> Sound Mapping Is Owned By The Editor');

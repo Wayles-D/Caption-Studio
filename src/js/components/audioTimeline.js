@@ -12,8 +12,12 @@
  * are all downstream consumers of this state, never peers writing it.
  *
  * The AI seam lives here too (applySemanticEvents): semantic events arrive
- * describing what the SPEECH is doing, and this module — not the model —
- * decides which sound that currently means, using shared/soundProfiles.js.
+ * describing what the SPEECH is doing, optionally naming a sound the model
+ * thought fitted that particular moment, and this module decides what
+ * actually gets placed. The precedence is written out at the point it is
+ * applied, but the shape of it is that a mute always wins, a user's own
+ * per-type choice beats the model's, and the model's per-moment pick beats a
+ * profile's per-type default (shared/soundProfiles.js).
  */
 import { appState, updateState } from '../state.js';
 import {
@@ -24,7 +28,7 @@ import {
   getAudioTrackDuration
 } from '../../../shared/audioTimeline.js';
 import { resolveSoundMapping, isKnownSemanticEventType , getSemanticEventKey } from '../../../shared/soundProfiles.js';
-import { getSoundDefinition } from '../../../shared/soundRegistry.js';
+import { getSoundDefinition, isKnownSoundId } from '../../../shared/soundRegistry.js';
 
 /** The playhead — the same `#preview-video` element every other part of the editor treats as the single source of time. */
 export function getPlayheadTime() {
@@ -449,8 +453,22 @@ export function applySemanticEvents(semanticEvents, { force = false } = {}) {
     .map((event) => {
       const key = getSemanticEventKey(event);
       if (!key || dismissed.has(key) || claimed.has(key)) return null;
-      const soundId = mapping[event.type];
-      if (!soundId) return null; // this event type is mapped to silence
+
+      const mapped = mapping[event.type];
+      // Silence wins outright. A null mapping is somebody saying "this kind of
+      // moment makes no sound" — either the profile (Minimal exists to say
+      // exactly that) or the user muting a type — and a sound the model
+      // suggested is not grounds to overrule either of them.
+      if (!mapped) return null;
+
+      // Otherwise the model's own suggestion is preferred, because it was
+      // chosen for THIS moment while the mapping is a default for every
+      // moment of that type. The exception is a type the user has personally
+      // re-pointed: that is a deliberate instruction about what this kind of
+      // moment should sound like, and it outranks a per-moment guess.
+      const userPinned = Object.prototype.hasOwnProperty.call(appState.soundEventMapping || {}, event.type);
+      const soundId = (!userPinned && isKnownSoundId(event.soundId)) ? event.soundId : mapped;
+
       return createSoundEvent(soundId, event.timestamp, {
         source: 'ai',
         eventType: event.type,
@@ -496,6 +514,25 @@ export function setEventTypeSound(eventType, soundId) {
   updateState({
     soundEventMapping: { ...(appState.soundEventMapping || {}), [eventType]: soundId }
   }, { recordHistory: true });
+  if (appState.autoSoundEffects) regenerateAutoSoundEffects();
+}
+
+/**
+ * Un-pins an event type, handing it back to the profile default and to the
+ * model's per-moment picks.
+ *
+ * Deliberately a REMOVAL rather than setting the mapping back to whatever the
+ * profile currently says. The two are not the same thing: an entry present in
+ * soundEventMapping means "the user has an opinion about this type", which is
+ * what outranks the model in applySemanticEvents and what survives a profile
+ * switch. Writing the profile's own value back would silently pin it.
+ */
+export function clearEventTypeSound(eventType) {
+  const current = appState.soundEventMapping || {};
+  if (!Object.prototype.hasOwnProperty.call(current, eventType)) return;
+  const next = { ...current };
+  delete next[eventType];
+  updateState({ soundEventMapping: next }, { recordHistory: true });
   if (appState.autoSoundEffects) regenerateAutoSoundEffects();
 }
 

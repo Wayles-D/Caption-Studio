@@ -527,3 +527,102 @@ test('re-analysis is idempotent and never duplicates a handled moment', async ({
 
   expect(counts).toEqual([3, 3, 3, 3]);
 });
+
+test('the model may name a sound per moment, but the user always outranks it', async ({ page }) => {
+  await loadDemoVideo(page);
+
+  // The model now picks from the registry itself (see
+  // backend/services/keywordAnalysisService.js), so a semantic event can
+  // arrive carrying a soundId chosen for THAT moment rather than for its
+  // type. The editor still decides what actually lands — this is that
+  // precedence, driven through the real applySemanticEvents.
+  const named = await page.evaluate(() => {
+    window.__updateState({ soundEvents: [], dismissedEventKeys: [], soundEventMapping: {} }, { recordHistory: false });
+    const created = window.__audioTimeline.applySemanticEvents([
+      // A pick from the library: beats the profile's per-type default,
+      // because it was chosen knowing what this moment actually is.
+      { type: 'reveal', timestamp: 2.0, soundId: 'netflix-intro' },
+      // Not in the registry: the moment still gets its type's default rather
+      // than falling silent over a bad id.
+      { type: 'reveal', timestamp: 4.0, soundId: 'totally-made-up' },
+      // No suggestion at all: the mapping, exactly as before.
+      { type: 'list_item', timestamp: 6.0 }
+    ]);
+    return created.map((e) => ({ t: e.startTime, soundId: e.soundId }));
+  });
+  console.log('model-named placement:', JSON.stringify(named));
+  expect(named).toEqual([
+    { t: 2.0, soundId: 'netflix-intro' },
+    { t: 4.0, soundId: 'pop' },
+    { t: 6.0, soundId: 'tick' }
+  ]);
+
+  // A type the USER has re-pointed is a standing instruction about that kind
+  // of moment, and outranks a per-moment guess.
+  const afterUserPin = await page.evaluate(() => {
+    window.__updateState({ soundEvents: [], dismissedEventKeys: [] }, { recordHistory: false });
+    window.__audioTimeline.setEventTypeSound('reveal', 'sparkle');
+    const created = window.__audioTimeline.applySemanticEvents([
+      { type: 'reveal', timestamp: 2.0, soundId: 'netflix-intro' }
+    ]);
+    return created.map((e) => e.soundId);
+  });
+  console.log('after the user pinned reveal -> sparkle:', JSON.stringify(afterUserPin));
+  expect(afterUserPin).toEqual(['sparkle']);
+
+  // And a muted type stays muted. "This kind of moment makes no sound" is a
+  // decision; a sound the model liked is not grounds to overrule it.
+  const afterMute = await page.evaluate(() => {
+    window.__updateState({ soundEvents: [], dismissedEventKeys: [] }, { recordHistory: false });
+    window.__audioTimeline.setEventTypeSound('reveal', null);
+    const created = window.__audioTimeline.applySemanticEvents([
+      { type: 'reveal', timestamp: 2.0, soundId: 'netflix-intro' }
+    ]);
+    return { placed: created.length, total: window.__appState.soundEvents.length };
+  });
+  console.log('after muting reveal:', JSON.stringify(afterMute));
+  expect(afterMute).toEqual({ placed: 0, total: 0 });
+});
+
+test('the mapping UI distinguishes "Auto" from a pinned sound', async ({ page }) => {
+  await loadDemoVideo(page);
+  await page.getByRole('button', { name: 'Audio', exact: true }).click();
+
+  const reveal = page.locator('select[data-event-type="reveal"]');
+  await expect(reveal).toBeVisible();
+
+  // Unpinned by default. The row shows the profile's current answer as
+  // context, but the VALUE is Auto — because an unpinned type showing "Pop"
+  // must not look like a decision the user made, now that the difference is
+  // what decides whether the analysis's own pick is allowed to win.
+  await expect(reveal).toHaveValue('__auto');
+  const autoLabel = await reveal.locator('option[value="__auto"]').textContent();
+  console.log('auto option reads:', JSON.stringify(autoLabel));
+  expect(autoLabel).toContain('Auto');
+  expect(await page.evaluate(() => window.__appState.soundEventMapping || {})).toEqual({});
+
+  // Pinning writes the override, which is what outranks the model.
+  await reveal.selectOption('sparkle');
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => window.__appState.soundEventMapping)).toEqual({ reveal: 'sparkle' });
+  const pinnedWins = await page.evaluate(() => {
+    window.__updateState({ soundEvents: [], dismissedEventKeys: [] }, { recordHistory: false });
+    return window.__audioTimeline
+      .applySemanticEvents([{ type: 'reveal', timestamp: 2, soundId: 'netflix-intro' }])
+      .map((e) => e.soundId);
+  });
+  expect(pinnedWins).toEqual(['sparkle']);
+
+  // Back to Auto REMOVES the entry rather than writing the profile's own
+  // value back — otherwise "Auto" would silently still be a pin.
+  await reveal.selectOption('__auto');
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => window.__appState.soundEventMapping)).toEqual({});
+  const autoWins = await page.evaluate(() => {
+    window.__updateState({ soundEvents: [], dismissedEventKeys: [] }, { recordHistory: false });
+    return window.__audioTimeline
+      .applySemanticEvents([{ type: 'reveal', timestamp: 2, soundId: 'netflix-intro' }])
+      .map((e) => e.soundId);
+  });
+  expect(autoWins).toEqual(['netflix-intro']);
+});

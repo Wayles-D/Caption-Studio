@@ -1,5 +1,6 @@
 import { retryWithBackoff } from '../utils/retry.js';
 import { SEMANTIC_EVENT_TYPES, isKnownSemanticEventType } from '../../shared/soundProfiles.js';
+import { describeSoundLibraryForPrompt, isKnownSoundId } from '../../shared/soundRegistry.js';
 
 const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -16,11 +17,19 @@ const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
  *
  * WHAT THE MODEL IS AND ISN'T ASKED FOR:
  *
- *   - It reports SEMANTIC meaning ("this is the second item in a list"). It
- *     is never told that a list item currently sounds like a tick, and it is
- *     explicitly forbidden from naming sounds. The editor owns that mapping
- *     (shared/soundProfiles.js), which is what lets sound profiles change
- *     later without re-prompting or re-validating the model.
+ *   - It reports SEMANTIC meaning ("this is the second item in a list"), and
+ *     MAY additionally name a sound for that moment. The sound list it is
+ *     given is generated from the registry at call time
+ *     (describeSoundLibraryForPrompt), so adding an asset offers it to the
+ *     model on the next call with no prompt edit — which is what makes
+ *     naming sounds affordable here. Every ID it returns is checked back
+ *     against the registry, so it cannot invent one.
+ *
+ *     The type still matters and is still required: it is what the editor
+ *     falls back to when the model names nothing, and what sound profiles
+ *     and per-type mappings act on (shared/soundProfiles.js). A named sound
+ *     is a more specific suggestion layered on top of that, never a
+ *     replacement for it — see applySemanticEvents for the precedence.
  *
  *   - It points at a WORD INDEX, never a timestamp. The transcription already
  *     provides word-level timings and those are the source of truth for when
@@ -33,7 +42,14 @@ const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
  *   - It never sees the video. Everything here is derived from the spoken
  *     content, deliberately.
  */
-const SYSTEM_PROMPT = `You are a content analyst for short-form video subtitles.
+/**
+ * Built per call rather than once at module load, so the sound enumeration
+ * reflects the registry as it is NOW. A module-level constant would freeze
+ * the list at import time and quietly stop offering anything added later —
+ * the exact drift this generation exists to prevent.
+ */
+function buildSystemPrompt() {
+  return `You are a content analyst for short-form video subtitles.
 You will receive a JSON transcript as a list of {"wordIndex": number, "word": string} entries, in speaking order.
 
 You have three jobs:
@@ -52,11 +68,17 @@ You have three jobs:
 - "important_statement": a standout claim or takeaway.
 - Point at the FIRST word of the moment using "wordIndex". Never output a timestamp — you are not given any and must not infer one.
 - Be conservative. Only report a moment you would actually mark up. An empty list is a valid, good answer.
-- NEVER name a sound, an effect, an animation, or any editing action. You describe meaning only.
+- You MAY also suggest a sound effect for a moment, as "soundId". It must be copied EXACTLY from the library below — never invent one, never translate it, never use the display name in brackets. Omit "soundId" entirely when no sound in the library genuinely fits; a moment with no sound is better than a wrong one.
+- Pick for MEANING, not novelty. A meme or music sting is right only when the speech is actually doing that thing; most moments want something small or nothing at all.
+- Never put the same loud sting on more than a couple of moments in one video.
+
+AVAILABLE SOUNDS (id, then its display name in brackets — return the id):
+${describeSoundLibraryForPrompt()}
 
 (3) VISUAL SUGGESTIONS — moments where a supporting image/graphic would help.
 - Same "wordIndex" rule. Include an "index" when it corresponds to a numbered list item.
 - These are suggestions for a human to fill in. Do not describe what the image should be.
+- Never include "soundId" here — these are pictures, not sounds.
 
 Strict rules:
 - NEVER rewrite, summarize, reorder, correct, punctuate, or otherwise modify any word.
@@ -64,9 +86,10 @@ Strict rules:
 - Match every reference strictly by "wordIndex" from the input — never by matching text.
 - Respond with ONLY a JSON object of the exact shape:
   {"keywords":[{"wordIndex":<int>,"confidence":<0-1 number>}],
-   "events":[{"type":"<allowed type>","wordIndex":<int>,"index":<optional 1-based int>}],
+   "events":[{"type":"<allowed type>","wordIndex":<int>,"index":<optional 1-based int>,"soundId":"<optional id from the library>"}],
    "visualSuggestions":[{"type":"<allowed type>","wordIndex":<int>,"index":<optional 1-based int>}]}
 - No prose, no markdown, no explanation — JSON only.`;
+}
 
 /**
  * Validates and normalizes the raw parsed LLM response into a safe array of
@@ -110,7 +133,7 @@ function extractValidKeywordTags(parsed, wordCount) {
  * would otherwise become a sound at an arbitrary moment, which is worse than
  * no sound at all.
  */
-function resolveEventTimestamps(rawList, words) {
+function resolveEventTimestamps(rawList, words, { allowSoundId = false } = {}) {
   if (!Array.isArray(rawList)) return [];
 
   const resolved = [];
@@ -126,6 +149,13 @@ function resolveEventTimestamps(rawList, words) {
     if (!Number.isFinite(start) || start < 0) continue;
 
     const index = Number(entry.index);
+    // A named sound is OPTIONAL and independently validated: an ID the
+    // registry does not know is dropped while the event itself survives, so a
+    // model that misremembers a name costs the moment its sound rather than
+    // costing the moment. Visual suggestions never carry one — they are
+    // pictures — so they do not even look.
+    const soundId = allowSoundId && isKnownSoundId(entry.soundId) ? entry.soundId : null;
+
     resolved.push({
       type: entry.type,
       wordIndex,
@@ -134,7 +164,8 @@ function resolveEventTimestamps(rawList, words) {
       // \"two\""). Nothing downstream depends on it for timing.
       word: (word.word || word.text || '').trim(),
       timestamp: start,
-      ...(Number.isInteger(index) && index > 0 ? { index } : {})
+      ...(Number.isInteger(index) && index > 0 ? { index } : {}),
+      ...(soundId ? { soundId } : {})
     });
   }
 
@@ -192,10 +223,11 @@ export async function analyzeTranscript(words) {
     const validTags = extractValidKeywordTags(parsed, words.length);
     const tagsByIndex = new Map(validTags.map((t) => [t.wordIndex, t]));
 
-    const contentEvents = resolveEventTimestamps(parsed.events, words);
+    const contentEvents = resolveEventTimestamps(parsed.events, words, { allowSoundId: true });
     const visualSuggestions = resolveEventTimestamps(parsed.visualSuggestions, words);
 
-    console.log(`[ContentAnalysis] Tagged ${validTags.length}/${words.length} words as keywords; ${contentEvents.length} semantic event(s), ${visualSuggestions.length} visual suggestion(s).`);
+    const named = contentEvents.filter((e) => e.soundId).length;
+    console.log(`[ContentAnalysis] Tagged ${validTags.length}/${words.length} words as keywords; ${contentEvents.length} semantic event(s) (${named} with a suggested sound), ${visualSuggestions.length} visual suggestion(s).`);
 
     return {
       words: words.map((w, i) => {
@@ -250,7 +282,7 @@ async function performAnalysisRequest(apiKey, modelName, indexedTranscript) {
         response_format: { type: 'json_object' },
         temperature: 0,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: buildSystemPrompt() },
           { role: 'user', content: JSON.stringify({ transcript: indexedTranscript }) }
         ]
       }),
@@ -280,5 +312,5 @@ async function performAnalysisRequest(apiKey, modelName, indexedTranscript) {
   }
 }
 
-/** Exported for tests — the timestamp resolution is the piece with real logic in it. */
-export { resolveEventTimestamps };
+/** Exported for tests — the timestamp resolution is the piece with real logic in it, and the prompt is now generated rather than fixed. */
+export { resolveEventTimestamps, buildSystemPrompt };
