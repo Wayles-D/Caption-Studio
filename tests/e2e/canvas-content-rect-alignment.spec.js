@@ -20,7 +20,7 @@ import { test, expect } from '@playwright/test';
 // tolerance for the border-width-sized error the bug produced.
 
 test('rotated caption geometry matches its actual rendered pixels (no phone-frame-border offset)', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?splash=0');
   await page.getByText('Try Demo Video').click();
 
   await page.evaluate(() => {

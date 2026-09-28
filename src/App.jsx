@@ -27,6 +27,7 @@ import * as captionEventsApi from './js/components/captionEvents.js';
 import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
 import { SoundLibraryPanel } from './components/SoundLibraryPanel.jsx';
+import { SplashScreen, shouldShowSplash } from './components/SplashScreen.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
@@ -235,6 +236,11 @@ export function App() {
   // SFX lane's "+". Held here rather than inside timelinePanel.js because
   // that module no longer owns any picker DOM — it just reports the press and
   // React decides whether a panel is showing.
+  // The welcome animation. Decided once, from the URL, on the first render
+  // — not in an effect, so the editor is never briefly visible before the
+  // splash lands on top of it.
+  const [splashing, setSplashing] = useState(shouldShowSplash);
+
   const [soundLibraryOpen, setSoundLibraryOpen] = useState(false);
   const closeSoundLibrary = useCallback(() => setSoundLibraryOpen(false), []);
   const toggleSoundLibrary = useCallback(() => setSoundLibraryOpen((open) => !open), []);
@@ -626,6 +632,11 @@ export function App() {
 
   return (
     <>
+      {/* Last in the tree by z-index, first in the file by importance: the
+          app mounts and lays out underneath this the whole time it is up,
+          so dismissing it reveals a warm editor rather than starting one. */}
+      {splashing && <SplashScreen onDone={() => setSplashing(false)} />}
+
       <input
         type="file"
         id="video-file-input"

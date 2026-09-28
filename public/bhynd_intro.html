@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>bhYnd</title>
+<style>
+  :root{ --bg:#050607; box-sizing:border-box; }
+  html,body{ height:100%; margin:0; background:var(--bg); overflow:hidden; }
+  body{ display:flex; align-items:center; justify-content:center;
+        padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px); }
+  svg{ width:min(88vmin,520px); height:min(88vmin,520px); cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  text{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; font-weight:800; font-size:120px; letter-spacing:-2px; fill:#eafff5; }
+</style>
+</head>
+<body>
+<svg id="s" viewBox="0 0 600 600" aria-label="bhYnd">
+  <defs>
+    <radialGradient id="g"><stop offset="0" stop-color="#00E599" stop-opacity=".22"/><stop offset="1" stop-color="#00E599" stop-opacity="0"/></radialGradient>
+    <linearGradient id="c1" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#00E599" stop-opacity=".62"/><stop offset="1" stop-color="#00E599" stop-opacity=".95"/></linearGradient>
+    <linearGradient id="c2" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#00E599" stop-opacity=".34"/><stop offset=".38" stop-color="#00E599" stop-opacity=".42"/><stop offset=".72" stop-color="#00E599" stop-opacity="0"/></linearGradient>
+    <linearGradient id="c3" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#00E599" stop-opacity=".2"/><stop offset=".3" stop-color="#00E599" stop-opacity=".28"/><stop offset=".55" stop-color="#00E599" stop-opacity="0"/></linearGradient>
+    <linearGradient id="e2" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7dffd0" stop-opacity=".3"/><stop offset=".4" stop-color="#7dffd0" stop-opacity=".22"/><stop offset=".72" stop-color="#7dffd0" stop-opacity="0"/></linearGradient>
+    <linearGradient id="e3" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7dffd0" stop-opacity=".26"/><stop offset=".3" stop-color="#7dffd0" stop-opacity=".2"/><stop offset=".55" stop-color="#7dffd0" stop-opacity="0"/></linearGradient>
+  </defs>
+  <circle id="glow" cx="300" cy="300" r="270" fill="url(#g)" opacity="0"/>
+  <path id="k3" fill="url(#c3)" stroke="url(#e3)" stroke-width="1.2" opacity="0"/>
+  <path id="k2" fill="url(#c2)" stroke="url(#e2)" stroke-width="1.2" opacity="0"/>
+  <path id="k1" fill="url(#c1)" stroke="#7dffd0" stroke-opacity=".3" stroke-width="1.2" opacity="0"/>
+  <g id="fin" fill="#00E599" opacity="0"><path id="tri"/><rect id="stem"/></g>
+  <polygon id="poly" fill="#00E599" opacity="0"/>
+  <text id="bh" text-anchor="end" opacity="0">bh</text>
+  <text id="nd" text-anchor="start" opacity="0">nd</text>
+</svg>
+<script>
+const G = {"tt": 25, "sb": 412, "tl": 216, "tr": 272, "sl": 238, "sr": 251, "jy": 71, "fit": {"top3": [125.49407114624502, 0.16374929418407844], "bot3": [328.60159420289824, -0.1969565217391284], "top2": [88.51545086119556, 0.2534737299174987], "bot2": [358.7929411764708, -0.22823529411764878], "top1": [35.2349176119725, 0.2808130895656505], "bot1": [397.6205140091499, -0.20169456703310482], "maxx": 392, "minx": 15}}, F = G.fit;
+const $ = id => document.getElementById(id);
+const K = 350/407, X0 = 125, Y0 = (600-430*K)/2;
+const T = (x,y) => [X0+x*K, Y0+y*K];
+
+// rounded polygon path
+function rp(p, r){
+  let d = '';
+  p.forEach((b,i) => {
+    const a = p[(i+p.length-1)%p.length], c = p[(i+1)%p.length];
+    const la = Math.hypot(a[0]-b[0],a[1]-b[1]), lc = Math.hypot(c[0]-b[0],c[1]-b[1]);
+    const rr = Math.min(r, la/2, lc/2);
+    const p1 = [b[0]+(a[0]-b[0])/la*rr, b[1]+(a[1]-b[1])/la*rr];
+    const p2 = [b[0]+(c[0]-b[0])/lc*rr, b[1]+(c[1]-b[1])/lc*rr];
+    d += (i?'L':'M')+p1[0].toFixed(2)+' '+p1[1].toFixed(2)+'Q'+b[0].toFixed(2)+' '+b[1].toFixed(2)+' '+p2[0].toFixed(2)+' '+p2[1].toFixed(2);
+  });
+  return d+'Z';
+}
+// cards as clean trapezoids from the measured edge lines
+const line = (k,x) => F['top'+k][0]+F['top'+k][1]*x, low = (k,x) => F['bot'+k][0]+F['bot'+k][1]*x;
+const card = (k,L,R) => [T(L,line(k,L)),T(R,line(k,R)),T(R,low(k,R)),T(L,low(k,L))];
+const cards = { k3: card(3,15,183), k2: card(2,66,268), k1: card(1,143,392) };
+for (const id in cards) $(id).setAttribute('d', rp(cards[id], 18));
+
+// playhead target (9 points, notch collapsed onto the top edge)
+const cxp = (G.sl+G.sr)/2;
+const P = [T(G.tl,G.tt),T(cxp,G.tt),T(cxp,G.tt),T(cxp,G.tt),T(G.tr,G.tt),T(G.sr,G.jy),T(G.sr,G.sb),T(G.sl,G.sb),T(G.sl,G.jy)];
+// final rounded playhead
+const apexY = G.tt + (cxp-G.tl)/((G.sl-G.tl)/(G.jy-G.tt));
+$('tri').setAttribute('d', rp([T(G.tl,G.tt),T(G.tr,G.tt),T(cxp,apexY)], 5));
+const s0 = T(G.sl,G.jy-14), s1 = T(G.sr,G.sb);
+Object.entries({x:s0[0],y:s0[1],width:s1[0]-s0[0],height:s1[1]-s0[1],rx:(s1[0]-s0[0])/2}).forEach(([k,v]) => $('stem').setAttribute(k,v));
+
+// wordmark layout, centered on the Y
+const H=86, Yw=84, aw=26, sw=24, yT=257, yB=yT+H, gap=3;
+const wBh=$('bh').getComputedTextLength(), wNd=$('nd').getComputedTextLength();
+const total=wBh+gap+Yw+gap+wNd, xL=300-total/2+wBh+gap, xR=xL+Yw, cx=xL+Yw/2, cy=yT+H/2;
+$('bh').setAttribute('x',xL-gap); $('bh').setAttribute('y',yB);
+$('nd').setAttribute('x',xR+gap); $('nd').setAttribute('y',yB);
+const Y = [[xL,yT],[xL+aw,yT],[cx,yT+.4*H],[xR-aw,yT],[xR,yT],[cx+sw/2,yT+.55*H],[cx+sw/2,yB],[cx-sw/2,yB],[cx-sw/2,yT+.55*H]];
+
+const c = v => Math.min(1,Math.max(0,v));
+const out = t => 1-Math.pow(1-t,3);
+const io = t => t<.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2;
+const back = t => { const a=1.70158, b=a+1; return 1+b*Math.pow(t-1,3)+a*Math.pow(t-1,2); };
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function frame(t){
+  const seg = (a,b) => c((t-a)/(b-a));
+  const ex = seg(1.35,1.65);
+  const pb = out(seg(.1,.55)), pn = out(seg(.45,.9));
+  $('bh').setAttribute('opacity', pb*(1-ex));
+  $('bh').setAttribute('transform', `translate(${-14*(1-pb)-10*ex} 0)`);
+  $('nd').setAttribute('opacity', pn*(1-ex));
+  $('nd').setAttribute('transform', `translate(${14*(1-pn)+10*ex} 0)`);
+
+  const m = io(seg(1.45,2.25)), s = .5+.5*back(seg(.3,.75));
+  $('poly').setAttribute('points', Y.map((a,i) => {
+    let x=a[0]+(P[i][0]-a[0])*m, y=a[1]+(P[i][1]-a[1])*m;
+    x=cx+(x-cx)*s; y=cy+(y-cy)*s;
+    return x.toFixed(2)+','+y.toFixed(2);
+  }).join(' '));
+  const sw2 = seg(2.15,2.4);
+  $('poly').setAttribute('opacity', seg(.3,.5)*(1-sw2));
+  $('fin').setAttribute('opacity', sw2);
+
+  [['k3',2.05],['k2',2.15],['k1',2.25]].forEach(([id,a]) => {
+    const q = out(seg(a,a+.55));
+    $(id).setAttribute('opacity', q);
+    $(id).setAttribute('transform', `translate(${28*(1-q)} 0)`);
+  });
+
+  const pulse = reduce ? 1 : .8+.2*Math.sin(Math.max(0,t-2.9)*2.4);
+  $('glow').setAttribute('opacity', out(seg(1.6,2.6))*pulse);
+}
+window.frame = frame;
+
+let start = performance.now() - (reduce ? 6000 : 0);
+(function loop(now){ frame((now-start)/1000); requestAnimationFrame(loop); })(start);
+$('s').addEventListener('click', () => { if(!reduce) start = performance.now(); });
+</script>
+</body>
+</html>

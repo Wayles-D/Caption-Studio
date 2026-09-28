@@ -12,7 +12,7 @@ import { SOUND_IDS, SOUND_CATEGORIES, listSoundsByCategory } from '../../shared/
 // Hits :5173 explicitly rather than the suite baseURL — caption fonts come
 // from the BACKEND, whose CORS allowlist covers :5173 only. Requires
 // `npm run dev:all`.
-const APP_URL = 'http://localhost:5173/';
+const APP_URL = 'http://localhost:5173/?splash=0';
 const PANEL = '#sound-library-panel';
 
 async function openLibrary(page) {

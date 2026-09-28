@@ -24,7 +24,7 @@ const SFX_CLIP = '.timeline-sfx-clip';
 
 /** Loads the demo clip and waits for the timeline to know the video's duration. */
 async function loadDemoVideo(page) {
-  await page.goto('/');
+  await page.goto('/?splash=0');
   await page.getByText('Try Demo Video').click();
   const duration = await page.evaluate(() => new Promise((resolve) => {
     const v = document.getElementById('preview-video');

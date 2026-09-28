@@ -17,7 +17,7 @@ import { test, expect } from '@playwright/test';
 // Hits :5173 explicitly rather than the suite baseURL — caption fonts come
 // from the BACKEND, whose CORS allowlist covers :5173 only. Requires
 // `npm run dev:all`.
-const APP_URL = 'http://localhost:5173/';
+const APP_URL = 'http://localhost:5173/?splash=0';
 
 /**
  * Seeds a transcript the way an upload does, then hands it to the same

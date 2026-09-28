@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
 // served by the BACKEND, whose CORS allowlist covers :5173 but not the e2e
 // server's port, and a CORS-blocked webfont renders as a silent fallback.
 // Requires `npm run dev:all`.
-const APP_URL = 'http://localhost:5173/';
+const APP_URL = 'http://localhost:5173/?splash=0';
 
 async function setup(page) {
   await page.goto(APP_URL);
