@@ -26,6 +26,7 @@ import * as textElementsApi from './js/components/textElements.js';
 import * as captionEventsApi from './js/components/captionEvents.js';
 import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
+import { SoundLibraryPanel } from './components/SoundLibraryPanel.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
@@ -229,6 +230,14 @@ export function App() {
   // panel itself.
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT_QUERY);
   const [desktopSidePanel, setDesktopSidePanel] = useState(DESKTOP_SIDE_PANEL_DEFAULT);
+
+  // The sound library (src/components/SoundLibraryPanel.jsx), opened from the
+  // SFX lane's "+". Held here rather than inside timelinePanel.js because
+  // that module no longer owns any picker DOM — it just reports the press and
+  // React decides whether a panel is showing.
+  const [soundLibraryOpen, setSoundLibraryOpen] = useState(false);
+  const closeSoundLibrary = useCallback(() => setSoundLibraryOpen(false), []);
+  const toggleSoundLibrary = useCallback(() => setSoundLibraryOpen((open) => !open), []);
   const desktopSidePanelElRef = useRef(null);
   const advancedPanelBodyRef = useRef(null);
   const timelinePanelRef = useRef(null);
@@ -679,8 +688,30 @@ export function App() {
           getPlaybackRowContainer={getPlaybackRowContainer}
           isAdvancedOpenGetter={isAdvancedOpenGetter}
           onAdvancedToggle={onAdvancedToggle}
+          onSoundLibraryToggle={toggleSoundLibrary}
+          onSoundLibraryClose={closeSoundLibrary}
         />
       </div>
+
+      {/* The sound library, on the LEFT — the one side of the workspace that
+          was otherwise empty, so it opens without displacing the preview or
+          the Video Inspector opposite it. Mirrors that panel's geometry so
+          the two read as a pair, and spans only the preview's height so it
+          never covers the timeline controls that opened it.
+
+          Mounted only while open (unlike the right panel, which stays mounted
+          so relocated DOM has a stable home) — it owns no relocated children,
+          and unmounting is what lets its own outside-press and Escape
+          listeners come and go with it. */}
+      {soundLibraryOpen && (
+        <div
+          id="sound-library-panel"
+          className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
+          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
+        >
+          <SoundLibraryPanel onClose={closeSoundLibrary} />
+        </div>
+      )}
 
       {/* Desktop-only right side panel — an always-visible anchored sidebar
           (Video Inspector by default; Advanced/Transcript temporarily take

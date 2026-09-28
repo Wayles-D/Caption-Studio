@@ -26,7 +26,7 @@ import {
 import * as audioTimeline from './audioTimeline.js';
 import { previewSound } from './audioEngine.js';
 import { promptForAudioFile } from './audioImport.js';
-import { listSounds, getSoundDefinition } from '../../../shared/soundRegistry.js';
+import { getSoundDefinition } from '../../../shared/soundRegistry.js';
 import { getAudioTrackDuration } from '../../../shared/audioTimeline.js';
 import * as textElements from './textElements.js';
 import * as captionEvents from './captionEvents.js';
@@ -1508,91 +1508,27 @@ function refreshAudioLanes(duration) {
   els.audioTrack.classList.toggle('is-empty', audioTracks.length === 0);
 }
 
-// --- "+ Sound" picker ------------------------------------------------------
-
-let soundPickerEl = null;
+// --- "+ Sound" -------------------------------------------------------------
+//
+// The list itself lives in a side panel now (src/components/SoundLibraryPanel.jsx)
+// rather than in a popover this module builds and positions.
+//
+// It was a popover anchored to the button, appended to <body> and
+// fixed-positioned because the lane gutter sits inside .timeline-scroll
+// inside a short panel — a popover opening from there was clipped by that
+// scroll container AND painted under the preview above it. That was fine for
+// eleven sounds. At thirty-eight it has to group and scroll, which a panel
+// does naturally and a popover pinned to a button does not.
+//
+// So this module no longer owns any picker DOM; it just reports the press.
+// Whether a panel is open, and where it renders, is React's business.
 
 function closeSoundPicker() {
-  if (soundPickerEl) {
-    soundPickerEl.remove();
-    soundPickerEl = null;
-  }
+  activeOptions?.onSoundLibraryClose?.();
 }
 
-/**
- * Positions the picker just above its button, in VIEWPORT coordinates.
- *
- * It is appended to <body> and fixed-positioned rather than anchored inside
- * the lane gutter, because the gutter lives inside `.timeline-scroll`
- * (overflow-y:auto) inside a short, fixed-height panel: a popover opening
- * upward from there is both clipped by that scroll container and painted
- * underneath the preview `<main>` above it — visible in a screenshot,
- * completely unclickable in practice (confirmed by the e2e suite, whose click
- * on a picker row was intercepted by <main> until this was changed).
- */
-function positionSoundPicker(picker, anchorBtn) {
-  const rect = anchorBtn.getBoundingClientRect();
-  picker.style.left = `${Math.max(8, rect.left)}px`;
-  // Flip below the button if there genuinely isn't room above it.
-  const height = picker.offsetHeight;
-  const above = rect.top - height - 6;
-  picker.style.top = above >= 8 ? `${above}px` : `${rect.bottom + 6}px`;
-}
-
-/**
- * A small popover listing every registered sound. Each row auditions on its
- * own ▶ button and places the effect at the playhead when the row is clicked
- * — so a user can hear a sound before committing to it, which is the whole
- * difference between picking a sound and guessing one.
- *
- * Built from shared/soundRegistry.js's listing rather than a hard-coded set,
- * so adding a sound to the registry adds it here with no change to this file.
- */
-function openSoundPicker(anchorBtn) {
-  if (soundPickerEl) {
-    closeSoundPicker();
-    return;
-  }
-
-  const picker = document.createElement('div');
-  picker.className = 'timeline-sound-picker';
-
-  const heading = document.createElement('div');
-  heading.className = 'timeline-sound-picker-heading';
-  heading.textContent = 'Add sound at playhead';
-  picker.appendChild(heading);
-
-  listSounds().forEach((sound) => {
-    const row = document.createElement('div');
-    row.className = 'timeline-sound-picker-row';
-
-    const play = document.createElement('button');
-    play.type = 'button';
-    play.className = 'timeline-sound-picker-play';
-    play.setAttribute('aria-label', `Preview ${sound.label}`);
-    play.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg>';
-    play.addEventListener('click', (e) => {
-      e.stopPropagation();
-      previewSound(sound.id, sound.defaultVolume);
-    });
-
-    const name = document.createElement('button');
-    name.type = 'button';
-    name.className = 'timeline-sound-picker-name';
-    name.textContent = sound.label;
-    name.addEventListener('click', () => {
-      audioTimeline.addSoundEvent(sound.id);
-      closeSoundPicker();
-    });
-
-    row.appendChild(play);
-    row.appendChild(name);
-    picker.appendChild(row);
-  });
-
-  document.body.appendChild(picker);
-  positionSoundPicker(picker, anchorBtn);
-  soundPickerEl = picker;
+function openSoundPicker() {
+  activeOptions?.onSoundLibraryToggle?.();
 }
 
 function refreshRangesForTarget(kind) {
@@ -1999,7 +1935,7 @@ export function initTimelinePanel(container, options = {}) {
 
   els.addSoundBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    openSoundPicker(els.addSoundBtn);
+    openSoundPicker();
   });
   els.addAudioBtn.addEventListener('click', () => {
     promptForAudioFile(
@@ -2023,7 +1959,8 @@ export function initTimelinePanel(container, options = {}) {
     // actually lands on, so an identity check would dismiss the picker on
     // pointerdown and let the following click immediately reopen it — making
     // the button impossible to toggle closed.
-    if (soundPickerEl && !soundPickerEl.contains(e.target) && !els.addSoundBtn.contains(e.target)) closeSoundPicker();
+    // (The sound library panel handles its own outside-press dismissal —
+    // see SoundLibraryPanel.jsx.)
   };
   document.addEventListener('pointerdown', dismissSoundPickerOnOutsideClick);
 

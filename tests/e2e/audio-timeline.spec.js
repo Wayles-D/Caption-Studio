@@ -173,13 +173,14 @@ test('a sound effect can be added, retimed by dragging, and deleted', async ({ p
   await page.evaluate(() => { document.getElementById('preview-video').currentTime = 1; });
   await page.locator('#timeline-add-sfx-btn').click();
 
-  // The picker lists the registry, and each entry can be auditioned before use.
-  const picker = page.locator('.timeline-sound-picker');
+  // The library opens in its own panel (it outgrew the popover it used to
+  // be), lists the registry, and each entry can be auditioned before use.
+  const picker = page.locator('#sound-library-panel');
   await expect(picker).toBeVisible();
-  // Derived from the registry, not a literal: the picker's contract is 'lists
+  // Derived from the registry, not a literal: the panel's contract is 'lists
   // every registered sound', so adding one must not fail this test.
-  await expect(picker.locator('.timeline-sound-picker-row')).toHaveCount(SOUND_IDS.length);
-  await picker.getByText('Tick', { exact: true }).click();
+  await expect(picker.locator('[data-sound-add]')).toHaveCount(SOUND_IDS.length);
+  await picker.locator('[data-sound-add="tick"]').click();
   await expect(picker).toHaveCount(0);
 
   await expect(page.locator(SFX_CLIP)).toHaveCount(1);
