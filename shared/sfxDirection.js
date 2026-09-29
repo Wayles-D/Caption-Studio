@@ -124,9 +124,14 @@ export function selectDirectedMoments(events, { duration, sensitivity, policy = 
   const span = Number.isFinite(duration) && duration > 0
     ? duration
     : Math.max(0, ...all.map((e) => e.timestamp)) || 0;
+  // Rounded UP, which matters more than it looks: short-form video is 15-60s,
+  // and rounding to nearest gives a 30-second edit two accents — enough for a
+  // hook and one more, so a punchline and a payoff the analysis correctly
+  // found are both thrown away. Ceiling puts 30s at three and leaves 60s at
+  // five, widening the short end without making a long video busier.
   const budget = Math.max(
     cfg.minMoments,
-    Math.min(cfg.maxMoments, Math.round((span / 60) * cfg.momentsPerMinute))
+    Math.min(cfg.maxMoments, Math.ceil((span / 60) * cfg.momentsPerMinute))
   );
 
   const rejected = [];
