@@ -21,7 +21,7 @@ import { useEditorStore } from '../store/editorStore.js';
 import * as audio from '../js/components/audioTimeline.js';
 import { previewSound, previewAudioTrack } from '../js/components/audioEngine.js';
 import { promptForAudioFile } from '../js/components/audioImport.js';
-import { listSounds, getSoundDefinition } from '../../shared/soundRegistry.js';
+import { listSoundSections, getSoundDefinition } from '../../shared/soundRegistry.js';
 import {
   listSoundProfiles,
   SEMANTIC_EVENT_TYPES,
@@ -31,6 +31,19 @@ import {
 } from '../../shared/soundProfiles.js';
 import { getAudioTrackDuration } from '../../shared/audioTimeline.js';
 import { ToggleSwitch } from './ToggleSwitch.jsx';
+
+/**
+ * The library as <option>s, grouped by section and family. A flat list stopped
+ * being usable at four hundred sounds; the groups are the same ones the sound
+ * library panel shows, from the same registry function.
+ */
+function SoundOptions() {
+  return listSoundSections().flatMap((section) => section.groups.map((group) => (
+    <optgroup key={group.id} label={`${section.label} · ${group.label}`}>
+      {group.sounds.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+    </optgroup>
+  )));
+}
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -126,7 +139,7 @@ function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVol
           onClick={(e) => e.stopPropagation()}
           onChange={(e) => audio.setSoundEventSound(event.id, e.target.value)}
         >
-          {listSounds().map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+          <SoundOptions />
         </select>
 
         <input
@@ -484,7 +497,7 @@ export function AudioInspector({ onNotify }) {
                 >
                   <option value="__auto">Auto{mapping[type] ? ` · ${getSoundDefinition(mapping[type]).label}` : ''}</option>
                   <option value="">No sound</option>
-                  {listSounds().map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  <SoundOptions />
                 </select>
               </div>
             );

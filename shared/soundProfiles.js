@@ -107,49 +107,82 @@ export function isKnownSemanticEventType(type) {
  * a rhythmic run gets the same one, which is what makes "five / home / office
  * / hacks" read as a pattern rather than four unrelated noises. Later entries
  * are the fallback if an earlier id is ever removed from the registry.
+ *
+ * The first choices are BHYND pack sounds (shared/soundPack.js), which are
+ * mastered to sit under speech; the classic assets follow as fallbacks.
+ *
+ * `wordSounds` is the same idea for a RUN — a moment covering several words.
+ * A sound with weight or a tail (an impact, a whoosh, a riser) placed on four
+ * consecutive words is four overlapping tails, however well it suits one
+ * word; so a run takes the category's dry, repeatable counterpart instead.
  */
 export const SFX_SOUND_CATEGORIES = [
   {
     id: 'ui',
     label: 'UI',
     use: 'clean digital click/tick — list markers, names, and rhythmic word-by-word runs',
-    sounds: ['click', 'tick', 'pop']
+    sounds: ['micro-click-soft', 'click', 'tick', 'pop']
   },
   {
     id: 'emphasis',
     label: 'Emphasis',
     use: 'bright pop — a single word landing with weight',
-    sounds: ['pop', 'click', 'ding']
+    sounds: ['pop-soft', 'pop', 'click', 'ding']
   },
   {
     id: 'impact',
     label: 'Impact',
     use: 'blunt hit — a hard statement, a claim that should land heavy',
-    sounds: ['hit', 'core-hit']
+    sounds: ['impact-punch', 'hit', 'core-hit'],
+    wordSounds: ['pop-punch', 'pop']
   },
   {
     id: 'transition',
     label: 'Transition',
     use: 'short whoosh — a change of topic or a cut in thought',
-    sounds: ['whoosh', 'swipe']
+    sounds: ['whoosh-short', 'whoosh', 'swipe'],
+    wordSounds: ['whoosh-tiny', 'motion-swipe-fast', 'swipe']
   },
   {
     id: 'reveal',
     label: 'Reveal',
     use: 'shimmer or sting — something being revealed or a satisfying payoff',
-    sounds: ['sparkle', 'ding', 'pop']
+    sounds: ['caption-reveal', 'sparkle', 'ding', 'pop']
   },
   {
     id: 'tension',
     label: 'Tension',
     use: 'low drone or ticking — suspense, a warning, stakes, a mistake',
-    sounds: ['tension', 'riser-metallic', 'clock-ticking']
+    sounds: ['tension-pulse', 'tension', 'riser-metallic', 'clock-ticking'],
+    wordSounds: ['micro-tick-sharp', 'tick']
   },
   {
     id: 'comedy',
     label: 'Comedy',
     use: 'meme sting — a punchline or an absurd beat',
-    sounds: ['dexter', 'faaah', 'awww']
+    sounds: ['dexter', 'faaah', 'awww'],
+    wordSounds: ['comedy-bonk-tiny', 'pop']
+  },
+  {
+    id: 'tech',
+    label: 'Tech',
+    use: 'digital blip — software, apps, AI, gadgets, anything happening on a screen',
+    sounds: ['digital-blip', 'scifi-click', 'click'],
+    wordSounds: ['digital-click', 'digital-blip', 'click']
+  },
+  {
+    id: 'cinematic',
+    label: 'Cinematic',
+    use: 'soft cinematic hit — a big line that should feel weighty without a hard punch',
+    sounds: ['cinematic-hit-soft', 'cinematic-accent', 'core-hit'],
+    wordSounds: ['pop-deep', 'pop']
+  },
+  {
+    id: 'success',
+    label: 'Success',
+    use: 'reward chime — a win, a result, a goal reached, a satisfying finish',
+    sounds: ['success-chime', 'ding', 'sparkle'],
+    wordSounds: ['chime-soft', 'ding']
   }
 ];
 
@@ -164,10 +197,13 @@ export function isKnownSfxCategory(id) {
  * still knows. Null only if every candidate has been removed, in which case
  * the caller falls back to the event type's own mapping rather than guessing.
  */
-export function resolveCategorySound(categoryId) {
+export function resolveCategorySound(categoryId, { run = false } = {}) {
   const category = SFX_CATEGORY_BY_ID.get(categoryId);
   if (!category) return null;
-  return category.sounds.find((id) => isKnownSoundId(id)) ?? null;
+  // A run takes the dry counterpart (see wordSounds above); a category with
+  // none listed is already dry throughout, so its own order serves both.
+  const order = run && category.wordSounds ? [...category.wordSounds, ...category.sounds] : category.sounds;
+  return order.find((id) => isKnownSoundId(id)) ?? null;
 }
 
 /**
@@ -310,6 +346,33 @@ export const SOUND_PROFILES = {
       entity: 'click',
       number: 'hit',
       keyword: 'pop'
+    }
+  },
+  // The BHYND pack as a profile: the same shape as the others, pointing at the
+  // pack's sounds. Offered alongside Default rather than replacing it, so an
+  // existing project keeps sounding exactly as it did until the creator
+  // chooses otherwise.
+  bhynd: {
+    id: 'bhynd',
+    label: 'BHYND Pack',
+    description: 'The BHYND sound pack — soft ticks for list beats, pops, chimes and cinematic hits mastered to sit under speech.',
+    mapping: {
+      list_start: 'whoosh-short',
+      list_item: 'micro-tick-soft',
+      hook: 'impact-soft',
+      emphasis: 'pop-soft',
+      reveal: 'caption-reveal',
+      transition: 'whoosh-short',
+      question: null,
+      answer: 'digital-confirm',
+      important_statement: 'cinematic-hit-soft',
+      dramatic: 'tension-pulse',
+      punchline: 'pop-round',
+      conclusion: 'success-chime',
+      topic: 'pop-soft',
+      entity: 'micro-click-soft',
+      number: 'micro-tick-bright',
+      keyword: 'pop-soft'
     }
   }
 };

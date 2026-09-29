@@ -490,3 +490,17 @@ export function initAudioEngine() {
     started = false;
   };
 }
+
+// DEV ONLY. This engine cannot be hot-swapped. A hot update re-runs this file
+// as a new module, but initAudioEngine is only called on mount and the video is
+// already marked bound, so the NEW copy never listens — while the OLD copy
+// keeps listening against the old copy of the editor state, which never sees
+// a clip added after the update. The result was a timeline whose sounds went
+// silent while the library's preview (which needs no listener) still played.
+// So the second time this module runs in one page (hot.data survives from the
+// old copy to the new), the page reloads instead. (hot.decline() would say the
+// same thing, but Vite implements it as a no-op.)
+if (import.meta.hot) {
+  if (import.meta.hot.data.evaluated) window.location.reload();
+  import.meta.hot.data.evaluated = true;
+}

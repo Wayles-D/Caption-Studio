@@ -12,7 +12,7 @@ import {
  * whole system is built to avoid. Words beyond it are dropped, not the event.
  */
 export const MAX_WORDS_PER_EVENT = 6;
-import { describeSoundLibraryForPrompt, isKnownSoundId, SOUND_IDS } from '../../shared/soundRegistry.js';
+import { describeSoundLibraryForPrompt, isKnownSoundId, PROMPT_SOUND_IDS } from '../../shared/soundRegistry.js';
 
 const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -99,7 +99,7 @@ Fields for each sound event:
 - "type": why — exactly one of: ${SEMANTIC_EVENT_TYPES.join(', ')}.
 - "words": indexes of the words that each get a sound, in speaking order. At most ${MAX_WORDS_PER_EVENT}.
 - "soundCategory": the style of sound — exactly one of the categories below.
-- "soundId": OPTIONAL, only when the word literally IS something a specific sound depicts (a price -> cash, a camera -> shutter, typing -> typing). Copy the id exactly from the list below, or omit it.
+- "soundId": OPTIONAL, only when the word literally IS something a specific sound depicts (a price -> cash, a camera -> camera-shutter, typing -> device-typing, drawing or underlining -> a writing- sound). Copy the id exactly from the list below, or omit it.
 - "intensity": 0 to 1, how strongly an editor would want this sound. Use the whole range honestly; events are ranked against each other.
 - "reason": two or three words in lower_snake_case, e.g. "topic_intro", "product_name", "strong_claim".
 - "index": for list_item only, its 1-based position in the list.
@@ -188,7 +188,8 @@ function buildResponseSchema() {
         type: { type: 'string', enum: SEMANTIC_EVENT_TYPES },
         words: { type: 'array', items: { type: 'integer' } },
         soundCategory: { type: 'string', enum: SFX_SOUND_CATEGORIES.map((c) => c.id) },
-        soundId: nullable({ type: 'string', enum: SOUND_IDS }),
+        // The ids the prompt names (see PROMPT_SOUND_IDS for why that is not every sound).
+        soundId: nullable({ type: 'string', enum: PROMPT_SOUND_IDS }),
         intensity: { type: 'number' },
         reason: { type: 'string' },
         index: nullable({ type: 'integer' })

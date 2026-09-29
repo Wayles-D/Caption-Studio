@@ -1,4 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { resolveCategorySound } from '../../shared/soundProfiles.js';
+
+// What the model's "ui" category means for a RUN of words today — derived, so
+// repointing a category at a different sound does not break the behaviour
+// being tested here (the category, not the profile, drives the intro).
+const UI_RUN_SOUND = resolveCategorySound('ui', { run: true });
 
 // WORD-LEVEL SFX. A sound lands on a word, not a sentence: "5 home office
 // hacks" is one idea and FOUR sounds, each on its own word's timestamp, all
@@ -106,8 +112,9 @@ test('list beats keep their profile sound; the intro uses its category — diffe
   // List beats are structure: the profile decides them, exactly as it did
   // before runs existed — the Default profile's list_item is `tick`.
   expect(new Set(list.map((c) => c.s))).toEqual(new Set(['tick']));
-  // The intro is expressive: the model's "ui" category resolves to `click`.
-  expect(intro[0].s).toBe('click');
+  // The intro is expressive: the model's "ui" category decides it.
+  expect(intro[0].s).toBe(UI_RUN_SOUND);
+  expect(UI_RUN_SOUND).not.toBe('tick');
 
   // And the profile switcher still changes the list — it did not survive the
   // first version of this change.
@@ -153,7 +160,7 @@ test('replacing one word of a run changes only that clip', async ({ page }) => {
   expect(changed[0].t).toBe(home.t);
   expect(after.length).toBe(before.length);
   // Its neighbours in the run keep their sound.
-  for (const w of ['5', 'office', 'hacks']) expect(after.find((c) => wordAt(c.t) === w).s).toBe('click');
+  for (const w of ['5', 'office', 'hacks']) expect(after.find((c) => wordAt(c.t) === w).s).toBe(UI_RUN_SOUND);
 });
 
 test('deleting one word of a run sticks through re-analysis; the rest of the run stays', async ({ page }) => {

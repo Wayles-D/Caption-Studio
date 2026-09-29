@@ -23,7 +23,8 @@ import {
   hasAnyAudio,
   isDefaultVideoAudio
 } from '../shared/audioTimeline.js';
-import { SOUND_REGISTRY, SOUND_IDS, resolveSoundUrl, getSoundDefinition, describeSoundLibraryForPrompt } from '../shared/soundRegistry.js';
+import { SOUND_REGISTRY, SOUND_IDS, PROMPT_SOUND_IDS, SOUND_SECTIONS, listSoundSections, resolveSoundUrl, getSoundDefinition, describeSoundLibraryForPrompt } from '../shared/soundRegistry.js';
+import { PACK_SOUNDS, PACK_FAMILIES, packFileName, USAGE_WORD } from '../shared/soundPack.js';
 import {
   resolveSoundMapping, SEMANTIC_EVENT_TYPES, isKnownSemanticEventType,
   SFX_SOUND_CATEGORIES, resolveCategorySound, getWordSoundKey
@@ -100,9 +101,19 @@ console.log('\n[Test 2b] The Model Picks From The Registry, And Cannot Invent An
 // The enumeration is generated, so every registered sound reaches the model
 // on the next call with no prompt edit. This is the assertion that fails if
 // someone ever pastes a fixed list into the prompt.
+// "Every sound the model may NAME" is PROMPT_SOUND_IDS: the classic library
+// plus the pack's literal foley. The rest of the pack reaches it through the
+// sound categories (checked in the pack block below) — naming all ~400 would
+// cost more than the model's whole token budget.
 const prompt = buildSystemPrompt();
-const absent = SOUND_IDS.filter((id) => !prompt.includes(id));
-assert.deepStrictEqual(absent, [], `Every registered sound must be offered to the model; missing: ${absent.join(', ')}`);
+const absent = PROMPT_SOUND_IDS.filter((id) => !prompt.includes(id));
+assert.deepStrictEqual(absent, [], `Every nameable sound must be offered to the model; missing: ${absent.join(', ')}`);
+assert.ok(PROMPT_SOUND_IDS.includes('writing-pencil-underline') && PROMPT_SOUND_IDS.includes('camera-shutter'), 'Literal pack foley is nameable');
+assert.ok(!PROMPT_SOUND_IDS.includes('pop-soft'), 'A non-literal pack sound is reached by category, not by name');
+// The library section of the prompt must stay small: the account allows
+// 8,000 tokens a minute for prompt + transcript + answer together.
+const libraryChars = describeSoundLibraryForPrompt().length;
+assert.ok(libraryChars < 6500, `The sound list stays within budget (~${Math.round(libraryChars / 3.6)} tokens)`);
 assert.ok(describeSoundLibraryForPrompt().includes('Memes & Voices'), 'Sounds reach the model grouped, so the category carries meaning an opaque id does not');
 // Every sound describes ITSELF. A name is not a description: "faaah" and
 // "core-hit" tell a model nothing it can act on, and a sound it cannot tell
@@ -111,9 +122,13 @@ assert.ok(describeSoundLibraryForPrompt().includes('Memes & Voices'), 'Sounds re
 // adds an asset without saying what it is for.
 const undescribed = Object.values(SOUND_REGISTRY).filter((s) => !s.use || s.use.length < 10);
 assert.deepStrictEqual(undescribed.map((s) => s.id), [], 'Every registered sound says what it is and when to use it');
-Object.values(SOUND_REGISTRY).forEach((s) => {
+// The classic sounds' names say nothing, so their descriptions go to the
+// model; the pack's literal ids already say what they are ("camera-shutter"),
+// and go as ids — with the label where the id does not say it.
+Object.values(SOUND_REGISTRY).filter((s) => !s.pack).forEach((s) => {
   assert.ok(prompt.includes(s.use), `"${s.id}" reaches the model with its description, not just its id`);
 });
+assert.ok(prompt.includes('comedy-fail (Sad Trombone)'), 'A literal id that does not describe itself carries its label');
 
 // A named sound survives validation and rides along with the event.
 const named = resolveEventTimestamps(
@@ -167,7 +182,7 @@ rated.forEach((e) => assert.ok(words.some((w) => Math.abs(w.start - e.timestamp)
   assert.ok(prompt.includes(type), `The prompt enumerates "${type}"`);
   assert.ok(isKnownSemanticEventType(type), `"${type}" is a known semantic type`);
 });
-console.log(`✓ All ${SOUND_IDS.length} sounds offered to the model; invented ids dropped, events kept; intensity/reason/range validated per-field`);
+console.log(`✓ All ${PROMPT_SOUND_IDS.length} nameable sounds offered to the model; invented ids dropped, events kept; intensity/reason/range validated per-field`);
 
 
 // 2c. The director — which proposed moments become sounds. This is the
@@ -354,7 +369,7 @@ const schema = buildResponseSchema();
 const ev = schema.properties.events.items.properties;
 assert.deepStrictEqual(ev.type.enum, SEMANTIC_EVENT_TYPES, 'Event types are enforced by the schema');
 assert.deepStrictEqual(ev.soundCategory.enum, SFX_SOUND_CATEGORIES.map((c) => c.id), 'Categories are enforced by the schema');
-assert.deepStrictEqual(ev.soundId.anyOf[0].enum, SOUND_IDS, 'Sound ids are enforced by the schema');
+assert.deepStrictEqual(ev.soundId.anyOf[0].enum, PROMPT_SOUND_IDS, 'Sound ids are enforced by the schema');
 assert.ok(schema.properties.events.items.required.includes('words'), 'Every event must say which words');
 
 // Rate limits: the wait the provider names is the wait we honour.
@@ -595,5 +610,47 @@ assert.ok(boosted.filterStages.join('\n').includes('volume=1.5000'), 'The video\
 assert.strictEqual(hasAnyAudio(normalizeAudioTimeline({ soundEvents: [], audioTracks: [], video: { volume: 0.5 } })), true);
 assert.strictEqual(hasAnyAudio(normalizeAudioTimeline({ soundEvents: [], audioTracks: [] })), false);
 console.log('✓ Video volume/mute participate in the mix, including with no clips present');
+
+// THE BHYND PACK. Generated files, a generated manifest and a registry built
+// from it: these are the checks that fail if the three ever disagree.
+console.log('\n[Pack] The BHYND Sound Pack Is Registered, On Disk, And Reachable');
+assert.ok(PACK_SOUNDS.length >= 300, `The pack is registered (${PACK_SOUNDS.length} sounds)`);
+const families = new Set(PACK_FAMILIES.map((f) => f.id));
+for (const s of PACK_SOUNDS) {
+  const reg = SOUND_REGISTRY[s.id];
+  assert.ok(reg && reg.pack, `${s.id} is in the registry as a pack sound`);
+  assert.strictEqual(reg.file, packFileName(s.id), `${s.id} resolves to its own file`);
+  assert.ok(families.has(s.family), `${s.id} belongs to a known family`);
+  // The manifest's duration is MEASURED from the file; a stale manifest after
+  // a regenerated sound would show here as a size that does not match.
+  const file = path.join(SOUNDS_DIR, reg.file);
+  const bytes = fs.statSync(file).size;
+  const expected = 44 + Math.round(s.duration * 48000) * s.channels * 2;
+  assert.ok(Math.abs(bytes - expected) <= 48 * s.channels * 2 + 8, `${s.id}: file length matches its measured duration`);
+  // Loudness-matched: every pack sound's measured level at the default volume
+  // is within the pack's range under speech (-17 LUFS dialogue).
+  assert.ok(s.lufsM <= -18 && s.lufsM >= -34, `${s.id} sits under speech (${s.lufsM} LUFS-M)`);
+  assert.ok(s.truePeak <= -0.9, `${s.id} keeps its true peak under -1 dBTP`);
+}
+// Word-level sounds carry no huge tail. In a run each sound is already cut
+// where the next word starts (sfxDirection.js resolveRunDurations), so a
+// tail only ever plays out on the LAST word — and there it must still be a
+// short ring, not a swell. 0.75 s is to -50 dB; the audible part is far shorter.
+const longWordSounds = PACK_SOUNDS.filter((s) => SOUND_REGISTRY[s.id].usage === USAGE_WORD && s.duration > 0.75);
+assert.deepStrictEqual(longWordSounds.map((s) => s.id), [], 'Word-level sounds are short');
+assert.ok(PACK_SOUNDS.filter((s) => SOUND_REGISTRY[s.id].usage === USAGE_WORD).length >= 60, 'There is a deep word-level subset');
+// Every section the picker shows is populated, and the classic library is kept.
+assert.deepStrictEqual(listSoundSections().map((s) => s.id), SOUND_SECTIONS.map((s) => s.id), 'Every section has sounds');
+assert.ok(['tick', 'pop', 'whoosh', 'hit', 'dexter'].every((id) => SOUND_REGISTRY[id] && !SOUND_REGISTRY[id].pack), 'The classic sounds are all still registered');
+// A run of words gets the category's dry sound; a single word its weighty one.
+for (const c of SFX_SOUND_CATEGORIES) {
+  const one = resolveCategorySound(c.id), run = resolveCategorySound(c.id, { run: true });
+  assert.ok(one && run, `${c.id} resolves for one word and for a run`);
+  const runDef = SOUND_REGISTRY[run];
+  if (runDef.pack) assert.strictEqual(runDef.usage, USAGE_WORD, `${c.id}: a run takes a word-safe sound (${run})`);
+}
+assert.strictEqual(resolveCategorySound('impact'), 'impact-punch', 'An impact on one word is a real impact');
+assert.strictEqual(resolveCategorySound('impact', { run: true }), 'pop-punch', '...and on a run of words, the dry punch');
+console.log(`✓ ${PACK_SOUNDS.length} pack sounds registered, on disk, measured, under speech; runs resolve to word-safe sounds`);
 
 console.log('\n=== ALL AUDIO TIMELINE TESTS PASSED SUCCESSFULLY! ===\n');

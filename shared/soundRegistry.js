@@ -40,7 +40,17 @@
  * one view of it — the picker, and anything else that lists sounds later,
  * should not each invent their own idea of what "ui" means.
  */
-export const SOUND_CATEGORIES = [
+import { PACK_SOUNDS, PACK_FAMILIES, PACK_SECTIONS, PACK_DEFAULT_VOLUME, packFileName, usageFor } from './soundPack.js';
+
+/**
+ * The BHYND pack's families, as picker categories. Prefixed `bh-` because
+ * several pack families share a name with a classic category (`ui`,
+ * `motion`, `impact`, `tension`, `sting`) while meaning a different group of
+ * files, and a category is how the picker buckets sounds.
+ */
+export const packCategoryId = (family) => `bh-${family}`;
+
+const CLASSIC_CATEGORIES = [
   { id: 'ui', label: 'UI & Alerts' },
   { id: 'typing', label: 'Typing & Messaging' },
   { id: 'motion', label: 'Transitions & Risers' },
@@ -50,7 +60,23 @@ export const SOUND_CATEGORIES = [
   { id: 'sting', label: 'Stings' }
 ];
 
-export const SOUND_REGISTRY = {
+/**
+ * Sections: the level above categories. The pack's own sections first (Text
+ * & Captions, Cinematic, UI, Tech, Motion, Mood, Foley), then the original
+ * library under Classic. Four hundred sounds in one flat list is "here are
+ * 400 random sounds"; a section says which KIND of sound you are looking at.
+ */
+export const SOUND_SECTIONS = [
+  ...PACK_SECTIONS.map((s) => ({ id: s.id, label: s.label })),
+  { id: 'classic', label: 'Classic' }
+];
+
+export const SOUND_CATEGORIES = [
+  ...PACK_FAMILIES.map((f) => ({ id: packCategoryId(f.id), label: f.label, section: f.section })),
+  ...CLASSIC_CATEGORIES.map((c) => ({ ...c, section: 'classic' }))
+];
+
+const CLASSIC_SOUNDS = {
   // --- UI & Alerts ---------------------------------------------------------
   tick: { id: 'tick', label: 'Tick', file: 'tick.mp3', category: 'ui', defaultVolume: 0.7, use: 'tiny dry tick; beat under each item of a list' },
   pop: { id: 'pop', label: 'Pop', file: 'pop.mp3', category: 'ui', defaultVolume: 0.7, use: 'small bright pop; a word landing, a quick reveal' },
@@ -115,7 +141,55 @@ export const SOUND_REGISTRY = {
   'netflix-intro-long': { id: 'netflix-intro-long', label: 'Netflix Intro (Long)', file: 'netflix-original-long-intro.mp3', category: 'sting', defaultVolume: 0.55, use: 'full-length Netflix intro; a big title moment, used sparingly' }
 };
 
+/**
+ * The BHYND pack, registered from its generated manifest
+ * (shared/soundPackManifest.js) rather than typed out here: its files, labels,
+ * descriptions, tiers and MEASURED durations come from the generator
+ * (backend/scripts/generate-sound-pack.js), so a regenerated pack can never
+ * disagree with the registry about what it contains.
+ *
+ * Every pack sound shares one default volume, because the pack IS
+ * loudness-matched — each family is mastered to its own level under speech
+ * at that volume (see soundPack.js), which is the difference from the classic
+ * assets above, each of which needed its own number.
+ */
+const PACK_REGISTRY = Object.fromEntries(PACK_SOUNDS.map((s) => [s.id, {
+  id: s.id,
+  label: s.label,
+  file: packFileName(s.id),
+  category: packCategoryId(s.family),
+  defaultVolume: PACK_DEFAULT_VOLUME,
+  use: s.use,
+  pack: true,
+  family: s.family,
+  tier: s.tier,
+  // 'word' — dry and tail-free, safe on consecutive words; 'moment' — for the
+  // few beats that deserve weight or a tail.
+  usage: usageFor(s),
+  tags: s.tags,
+  ...(s.literal ? { literal: true } : {}),
+  duration: s.duration
+}]));
+
+const CLASSIC_SECTION = Object.fromEntries(Object.keys(CLASSIC_SOUNDS).map((id) => [id, { ...CLASSIC_SOUNDS[id], section: 'classic' }]));
+
+export const SOUND_REGISTRY = { ...PACK_REGISTRY, ...CLASSIC_SECTION };
+
 export const SOUND_IDS = Object.keys(SOUND_REGISTRY);
+
+/**
+ * The ids the ANALYSIS MODEL is told about by name: the classic library plus
+ * the pack's LITERAL sounds (foley — a pencil, a camera shutter, a keyboard:
+ * things a word can literally be).
+ *
+ * Not the whole pack, and deliberately. The model runs under a budget of
+ * 8,000 tokens a minute (see keywordAnalysisService.js), and describing all
+ * ~400 sounds would cost more than that on its own. It does not need to: it
+ * picks a STYLE of sound per moment (a category — see soundProfiles.js), and
+ * the category resolves to pack sounds here in BHYND. Names are only for the
+ * literal case, where the word IS the thing a specific sound depicts.
+ */
+export const PROMPT_SOUND_IDS = SOUND_IDS.filter((id) => !SOUND_REGISTRY[id].pack || SOUND_REGISTRY[id].literal);
 
 /** Fallback for an unknown/removed sound ID, so a stale project never renders silence with no explanation. */
 export const FALLBACK_SOUND_ID = 'tick';
@@ -158,10 +232,18 @@ export function listSoundsByCategory() {
     else extras.push(sound);
   });
   const groups = SOUND_CATEGORIES
-    .map((c) => ({ id: c.id, label: c.label, sounds: byCategory.get(c.id) }))
+    .map((c) => ({ id: c.id, label: c.label, section: c.section, sounds: byCategory.get(c.id) }))
     .filter((group) => group.sounds.length > 0);
-  if (extras.length) groups.push({ id: 'other', label: 'Other', sounds: extras });
+  if (extras.length) groups.push({ id: 'other', label: 'Other', section: 'classic', sounds: extras });
   return groups;
+}
+
+/** The grouped library one level up: `[{ id, label, groups }]` in SOUND_SECTIONS order, empty sections skipped. */
+export function listSoundSections() {
+  const groups = listSoundsByCategory();
+  return SOUND_SECTIONS
+    .map((s) => ({ id: s.id, label: s.label, groups: groups.filter((g) => g.section === s.id) }))
+    .filter((s) => s.groups.length > 0);
 }
 
 /**
@@ -191,11 +273,23 @@ export function listSoundsByCategory() {
  * in step with the registry by hand.
  */
 export function describeSoundLibraryForPrompt() {
+  const offered = new Set(PROMPT_SOUND_IDS);
   return listSoundsByCategory()
     .map((group) => {
-      const lines = group.sounds.map((s) => `  ${s.id} — ${s.use || s.label}`);
+      const sounds = group.sounds.filter((s) => offered.has(s.id));
+      if (!sounds.length) return null;
+      // The pack's literal sounds are listed by id alone, grouped: their ids
+      // already say what they depict ("camera-shutter", "writing-pencil-underline"),
+      // and a description apiece would spend the model's token budget
+      // restating the name. The classic assets keep theirs — "faaah" says nothing.
+      // Where an id does NOT say it ("comedy-awkward" is crickets), its label rides along.
+      const says = (s) => s.label.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2).every((w) => s.id.includes(w.slice(0, 4)));
+      const named = (s) => (says(s) ? s.id : `${s.id} (${s.label})`);
+      if (sounds.every((s) => s.pack)) return `${group.label}: ${sounds.map(named).join(', ')}`;
+      const lines = sounds.map((s) => `  ${s.id} — ${s.use || s.label}`);
       return `${group.label}:\n${lines.join('\n')}`;
     })
+    .filter(Boolean)
     .join('\n');
 }
 

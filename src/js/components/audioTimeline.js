@@ -528,10 +528,13 @@ export function applySemanticEvents(semanticEvents, { force = false } = {}) {
     // into `click` and making Punchy indistinguishable from Default. The
     // category drives the EXPRESSIVE moments, which is where it is for.
     const userPinned = Object.prototype.hasOwnProperty.call(appState.soundEventMapping || {}, moment.type);
+    const words = momentWords(moment);
     const soundId = (userPinned || !isDirected)
       ? mapped
       : (isKnownSoundId(moment.soundId) ? moment.soundId
-        : (resolveCategorySound(moment.soundCategory) || mapped));
+        // A run of several words takes the category's dry, repeatable sound
+        // (see SFX_SOUND_CATEGORIES' wordSounds).
+        : (resolveCategorySound(moment.soundCategory, { run: words.length > 1 }) || mapped));
 
     // Level and length. Only DIRECTED moments get re-levelled: a list beat keeps
     // the sound's own default volume, because changing how the original
@@ -542,7 +545,6 @@ export function applySemanticEvents(semanticEvents, { force = false } = {}) {
       ? resolveDirectedPlacement(getSoundDefinition(soundId).defaultVolume, moment.intensity)
       : null;
 
-    const words = momentWords(moment);
     // A run's sounds are cut where the next word's begins, so a longer sound
     // chosen for a run cannot stack four copies on top of each other. Null for
     // a single word, which leaves a lone list beat exactly as it always was.
