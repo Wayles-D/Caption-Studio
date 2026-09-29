@@ -266,3 +266,88 @@ test('the director agrees with the shared policy module', async ({ page }) => {
   console.log('node says:', expectedTypes.join(', '));
   expect(placed.map((e) => e.eventType)).toEqual(expectedTypes);
 });
+
+test('Replace on the capsule swaps the sound in place, keeping everything else', async ({ page }) => {
+  const placed = await loadWithAnalysis(page);
+  const hook = placed.find((e) => e.eventType === 'hook');
+
+  // The capsule's own Replace button — the point being that this is where you
+  // are looking when you hear the wrong sound, not the inspector list.
+  const capsule = page.locator(`.timeline-sfx-clip[data-clip-id="${hook.id}"]`);
+  await capsule.hover();
+  await capsule.locator('.timeline-sfx-clip-replace').click();
+
+  // It opens the SAME library panel, in replace mode — one picker, not two.
+  await expect(page.locator('#sound-library-panel')).toBeVisible();
+  await expect(page.locator('#sound-library-panel')).toContainText('Replace Sound');
+  // Selecting the clip is part of the gesture, so the inspector follows.
+  expect(await page.evaluate(() => window.__appState.selectedAudioClipId)).toBe(hook.id);
+
+  await page.locator('[data-sound-add="cash"]').click();
+  await page.waitForTimeout(300);
+
+  const after = (await soundEvents(page)).find((e) => e.id === hook.id);
+  console.log('replaced in place:', JSON.stringify(after));
+  // Swapped, not deleted and re-added: same clip, same instant, same level,
+  // same capped length, and no second clip left behind.
+  expect(after.soundId).toBe('cash');
+  expect(after.t).toBe(hook.t);
+  expect(after.volume).toBeCloseTo(hook.volume, 4);
+  expect(after.duration).toBe(hook.duration);
+  expect((await soundEvents(page)).length).toBe(placed.length);
+  await expect(page.locator('#sound-library-panel')).toHaveCount(0);
+});
+
+test('the "+" still adds rather than replacing, after a replace has been used', async ({ page }) => {
+  const placed = await loadWithAnalysis(page);
+  const hook = placed.find((e) => e.eventType === 'hook');
+
+  await page.locator(`.timeline-sfx-clip[data-clip-id="${hook.id}"]`).hover();
+  await page.locator(`.timeline-sfx-clip[data-clip-id="${hook.id}"] .timeline-sfx-clip-replace`).click();
+  await expect(page.locator('#sound-library-panel')).toContainText('Replace Sound');
+
+  // Pressing the lane's "+" while a replace is pending must mean ADD. The
+  // target is dropped rather than left armed, or the next pick would silently
+  // overwrite a clip the user is no longer thinking about.
+  await page.locator('#timeline-add-sfx-btn').click();
+  await page.locator('#timeline-add-sfx-btn').click();
+  await expect(page.locator('#sound-library-panel')).toContainText('Sound Effects');
+  await page.locator('[data-sound-add="ding"]').click();
+  await page.waitForTimeout(300);
+
+  const events = await soundEvents(page);
+  console.log('after add:', events.length, 'clips; hook still', events.find((e) => e.id === hook.id)?.soundId);
+  expect(events.length).toBe(placed.length + 1);
+  expect(events.find((e) => e.id === hook.id).soundId).toBe(hook.soundId);
+});
+
+test('a volume change applies to the ticked effects, or to all when none are ticked', async ({ page }) => {
+  await loadWithAnalysis(page);
+  await page.getByRole('button', { name: 'Audio', exact: true }).click();
+
+  const ids = (await soundEvents(page)).map((e) => e.id);
+  expect(ids.length).toBeGreaterThanOrEqual(4);
+  const [source, picked, unpicked] = ids;
+
+  // Give the source a distinctive level, then copy it to ONE chosen effect.
+  await page.evaluate((id) => window.__audioTimeline.updateSoundEvent(id, { volume: 1.55 }), source);
+  await page.locator(`[data-sfx-pick="${picked}"]`).check();
+  await page.locator(`[data-sfx-apply="${source}"]`).click();
+  await page.waitForTimeout(300);
+
+  let after = await soundEvents(page);
+  const vol = (id) => after.find((e) => e.id === id).volume;
+  console.log('scoped apply:', ids.map((id) => vol(id).toFixed(2)).join(', '));
+  expect(vol(picked)).toBeCloseTo(1.55, 3);
+  // The whole point of scoping: an effect nobody ticked is untouched.
+  expect(vol(unpicked)).not.toBeCloseTo(1.55, 3);
+
+  // With nothing ticked the same button means what it always did.
+  await page.locator('#sfx-pick-clear').click();
+  await page.locator(`[data-sfx-apply="${source}"]`).click();
+  await page.waitForTimeout(300);
+
+  after = await soundEvents(page);
+  console.log('apply to all:', ids.map((id) => vol(id).toFixed(2)).join(', '));
+  for (const id of ids) expect(vol(id)).toBeCloseTo(1.55, 3);
+});

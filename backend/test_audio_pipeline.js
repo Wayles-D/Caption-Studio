@@ -101,6 +101,16 @@ const prompt = buildSystemPrompt();
 const absent = SOUND_IDS.filter((id) => !prompt.includes(id));
 assert.deepStrictEqual(absent, [], `Every registered sound must be offered to the model; missing: ${absent.join(', ')}`);
 assert.ok(describeSoundLibraryForPrompt().includes('Memes & Voices'), 'Sounds reach the model grouped, so the category carries meaning an opaque id does not');
+// Every sound describes ITSELF. A name is not a description: "faaah" and
+// "core-hit" tell a model nothing it can act on, and a sound it cannot tell
+// apart from its label is functionally missing from the library however
+// carefully it is registered. This is the assertion that fails when someone
+// adds an asset without saying what it is for.
+const undescribed = Object.values(SOUND_REGISTRY).filter((s) => !s.use || s.use.length < 10);
+assert.deepStrictEqual(undescribed.map((s) => s.id), [], 'Every registered sound says what it is and when to use it');
+Object.values(SOUND_REGISTRY).forEach((s) => {
+  assert.ok(prompt.includes(s.use), `"${s.id}" reaches the model with its description, not just its id`);
+});
 
 // A named sound survives validation and rides along with the event.
 const named = resolveEventTimestamps(

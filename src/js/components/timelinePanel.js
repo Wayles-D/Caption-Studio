@@ -1235,6 +1235,30 @@ function buildSoundClip(event, duration, isSelected) {
   el.appendChild(dot);
   el.appendChild(label);
 
+  // Replace, on the capsule itself. The same action already existed in the
+  // Audio inspector's list, but that is not where you are looking when you
+  // hear the wrong sound — you are looking at the clip that made it. Opens
+  // the library panel in replace mode (see SoundLibraryPanel), so it is the
+  // same picker and the same list, not a second workflow.
+  //
+  // pointerdown is stopped, not just click: attachClipPointerHandlers starts a
+  // drag on pointerdown, so without this, pressing the button would begin
+  // retiming the clip under the cursor.
+  const replaceBtn = document.createElement('button');
+  replaceBtn.type = 'button';
+  replaceBtn.className = 'timeline-sfx-clip-replace';
+  replaceBtn.title = `Replace ${definition.label}`;
+  replaceBtn.setAttribute('aria-label', `Replace ${definition.label}`);
+  replaceBtn.dataset.replaceClip = event.id;
+  replaceBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>';
+  replaceBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  replaceBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    audioTimeline.selectClip(event.id);
+    activeOptions?.onSoundReplace?.(event.id);
+  });
+  el.appendChild(replaceBtn);
+
   attachClipPointerHandlers(el, event, 'sound', 'move');
   el.addEventListener('dblclick', (e) => {
     e.stopPropagation();

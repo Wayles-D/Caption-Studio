@@ -23,9 +23,15 @@ const ROW = `w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm
   text-left cursor-pointer transition-colors duration-150
   hover:border-[var(--accent-color)] hover:bg-[rgba(0,246,172,0.06)]`;
 
-export function SoundLibraryPanel({ onClose }) {
+export function SoundLibraryPanel({ onClose, replaceTargetId = null }) {
   const rootRef = useRef(null);
   const groups = listSoundsByCategory();
+  // REPLACE MODE. Deliberately this same panel rather than a second surface:
+  // "which sound do I want" is one question, and the answer already lives
+  // here, grouped and scrollable and auditionable. A separate replace picker
+  // would be the same list with a different verb, and would then have to be
+  // kept in step with this one every time the library changed.
+  const replacing = typeof replaceTargetId === 'string' && replaceTargetId;
 
   useEffect(() => {
     // Closing on an outside press is registered on POINTERDOWN, matching how
@@ -51,7 +57,7 @@ export function SoundLibraryPanel({ onClose }) {
     <div ref={rootRef} className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
         <span className="text-xs font-bold uppercase tracking-wide text-[var(--text-secondary)]">
-          Sound Effects
+          {replacing ? 'Replace Sound' : 'Sound Effects'}
         </span>
         <button
           type="button"
@@ -70,7 +76,9 @@ export function SoundLibraryPanel({ onClose }) {
           list scroll rather than stretch the panel past the viewport. */}
       <div id="sound-library-list" className="flex-1 min-h-0 overflow-y-auto px-3 pb-3">
         <p className="text-[11px] text-[var(--text-muted)] m-0 pt-3">
-          Plays at the playhead. ▶ auditions it without adding anything.
+          {replacing
+            ? 'Swaps the sound on the selected effect. Its timing, volume and fades stay as they are.'
+            : 'Plays at the playhead. ▶ auditions it without adding anything.'}
         </p>
 
         {groups.map((group) => (
@@ -101,7 +109,12 @@ export function SoundLibraryPanel({ onClose }) {
                     className="flex-1 min-w-0 text-left bg-transparent border-0 cursor-pointer p-0
                       text-[12px] text-[var(--text-primary)] truncate"
                     onClick={() => {
-                      audioTimeline.addSoundEvent(sound.id);
+                      // Replace swaps the sound ON the existing clip rather
+                      // than deleting and re-adding, which is what preserves
+                      // its time, level, fades and provenance — and what keeps
+                      // "I picked the wrong sound" from costing the placement.
+                      if (replacing) audioTimeline.setSoundEventSound(replaceTargetId, sound.id);
+                      else audioTimeline.addSoundEvent(sound.id);
                       onClose();
                     }}
                   >

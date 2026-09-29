@@ -121,14 +121,22 @@ export function updateSoundEvent(id, patch, { recordHistory = true } = {}) {
  *
  * @param {string} sourceId - The effect whose CURRENT volume should become every other effect's volume.
  */
-export function applySoundEventVolumeToAll(sourceId) {
+export function applySoundEventVolumeToAll(sourceId, targetIds = null) {
   const events = getSoundEvents();
   const source = events.find((e) => e.id === sourceId);
   if (!source) return events;
   const volume = source.volume;
+  // `targetIds` narrows the copy to a chosen few; null keeps the original
+  // "every other effect" behaviour, which is still the common case. One
+  // function rather than two, because "which effects does this apply to" is a
+  // parameter of the gesture, not a different gesture — and because a second
+  // entry point would be a second place for the history/promotion rules below
+  // to drift out of step.
+  const scope = Array.isArray(targetIds) ? new Set(targetIds) : null;
   let changed = false;
   const next = events.map((e) => {
     if (e.id === sourceId || e.volume === volume) return e;
+    if (scope && !scope.has(e.id)) return e;
     changed = true;
     return normalizeSoundEvent({
       ...e,

@@ -79,7 +79,7 @@ const ApplyAllIcon = () => (
 );
 
 /** One row of the Sound Effects list. */
-function SoundEventRow({ event, isSelected }) {
+function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVolume, pickedCount }) {
   const definition = getSoundDefinition(event.soundId);
   // The moment this clip came from, for the provenance line below. Looked up
   // by eventKey rather than copied onto the clip: the analysis is the durable
@@ -99,6 +99,20 @@ function SoundEventRow({ event, isSelected }) {
       onClick={() => audio.selectClip(event.id)}
     >
       <div className="flex items-center gap-2">
+        {/* Picks this effect out for a bulk change. Separate from SELECTION,
+            which is "the clip I am looking at" and is shared with the
+            timeline — one is a cursor, the other is a basket, and conflating
+            them would mean scrubbing to a clip silently changed what a bulk
+            apply would hit. */}
+        <input
+          type="checkbox"
+          className="shrink-0 w-3.5 h-3.5 accent-[var(--accent-color)] cursor-pointer"
+          checked={isPicked}
+          data-sfx-pick={event.id}
+          title="Include this effect when applying a change to several"
+          onClick={(e) => e.stopPropagation()}
+          onChange={() => onTogglePicked(event.id)}
+        />
         <button
           type="button" className={ICON_BTN} title={`Preview ${definition.label}`}
           onClick={(e) => { e.stopPropagation(); previewSound(event.soundId, event.volume); }}
@@ -152,9 +166,16 @@ function SoundEventRow({ event, isSelected }) {
         <span className="text-[10px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
           {Math.round(event.volume * 100)}%
         </span>
+        {/* Applies THIS volume to the ticked effects, or to every other one
+            when nothing is ticked. Same button, same gesture — the tick boxes
+            only narrow it, so the original one-press "apply to all" is
+            unchanged for anyone not using them. */}
         <button
-          type="button" className={ICON_BTN} title="Apply this volume to all Sound Effects"
-          onClick={(e) => { e.stopPropagation(); audio.applySoundEventVolumeToAll(event.id); }}
+          type="button" className={ICON_BTN} data-sfx-apply={event.id}
+          title={pickedCount > 0
+            ? `Apply this volume to the ${pickedCount} selected effect${pickedCount === 1 ? '' : 's'}`
+            : 'Apply this volume to all Sound Effects'}
+          onClick={(e) => { e.stopPropagation(); onApplyVolume(event.id); }}
         ><ApplyAllIcon /></button>
       </div>
 
@@ -271,6 +292,23 @@ export function AudioInspector({ onNotify }) {
   const words = useEditorStore((s) => s.words);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // Which effects a bulk change should reach. Component state, not appState:
+  // a basket is a thing you are doing right now, not part of the project, so
+  // it must not land in undo history or the export payload.
+  const [pickedIds, setPickedIds] = useState(() => new Set());
+  const togglePicked = (id) => setPickedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  // Ticked effects narrow the copy; nothing ticked keeps the original
+  // "apply to every other effect" behaviour. The source is never included in
+  // its own target list — it already has the value.
+  const applyVolumeFrom = (sourceId) => {
+    const targets = pickedIds.size > 0 ? [...pickedIds].filter((id) => id !== sourceId) : null;
+    audio.applySoundEventVolumeToAll(sourceId, targets);
+  };
   const mapping = resolveSoundMapping(soundProfileId, soundEventMapping);
 
   /**
@@ -457,8 +495,26 @@ export function AudioInspector({ onNotify }) {
           ? <p className={HINT}>None yet. Use the <strong>+</strong> on the timeline’s SFX strip to place one at the playhead.</p>
           : (
             <div className="flex flex-col gap-2">
+              {pickedIds.size > 0 && (
+                <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] px-0.5">
+                  <span>{pickedIds.size} selected — a volume change applies to these</span>
+                  <button
+                    type="button" id="sfx-pick-clear"
+                    className="bg-transparent border-0 p-0 text-[var(--accent-color)] font-semibold cursor-pointer underline"
+                    onClick={() => setPickedIds(new Set())}
+                  >Clear</button>
+                </div>
+              )}
               {soundEvents.map((event) => (
-                <SoundEventRow key={event.id} event={event} isSelected={event.id === selectedId} />
+                <SoundEventRow
+                  key={event.id}
+                  event={event}
+                  isSelected={event.id === selectedId}
+                  isPicked={pickedIds.has(event.id)}
+                  pickedCount={pickedIds.size}
+                  onTogglePicked={togglePicked}
+                  onApplyVolume={applyVolumeFrom}
+                />
               ))}
             </div>
           )}

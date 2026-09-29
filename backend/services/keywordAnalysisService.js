@@ -92,7 +92,7 @@ JUDGEMENT — this matters more than coverage:
 - Pick for MEANING, not novelty. A meme or music sting is right only when the speech is actually doing that thing; most moments want something small or nothing at all.
 - Never put the same loud sting on more than a couple of moments in one video.
 
-AVAILABLE SOUNDS (id, then its display name in brackets — return the id):
+AVAILABLE SOUNDS — return the id on the left, exactly as written. The text after the dash is what the sound is and when it fits:
 ${describeSoundLibraryForPrompt()}
 
 (3) VISUAL SUGGESTIONS — moments where a supporting image/graphic would help.
