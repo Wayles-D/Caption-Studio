@@ -27,8 +27,14 @@ import {
   normalizeAudioTrack,
   getAudioTrackDuration
 } from '../../../shared/audioTimeline.js';
-import { resolveSoundMapping, isKnownSemanticEventType , getSemanticEventKey } from '../../../shared/soundProfiles.js';
-import { selectDirectedMoments, resolveDirectedPlacement } from '../../../shared/sfxDirection.js';
+import {
+  resolveSoundMapping,
+  isKnownSemanticEventType,
+  resolveCategorySound,
+  getWordSoundKey,
+  momentWords
+} from '../../../shared/soundProfiles.js';
+import { selectDirectedMoments, resolveDirectedPlacement, resolveRunDurations } from '../../../shared/sfxDirection.js';
 import { getSoundDefinition, isKnownSoundId } from '../../../shared/soundRegistry.js';
 
 /** The playhead — the same `#preview-video` element every other part of the editor treats as the single source of time. */
@@ -426,11 +432,13 @@ export function removeSelectedClip() {
  *   - a suggestion the creator DELETED, which stays deleted: its key is
  *     tombstoned in `dismissedEventKeys` so re-analysis cannot resurrect it
  *
- * Identity is the moment's own key (type + resolved timestamp — see
- * getSemanticEventKey), never the clip id, because both the analysis objects
- * and the placed clips are recreated on every run. That is also what makes
- * this idempotent: re-running with the same speech re-derives the same keys,
- * finds them already handled, and places nothing new.
+ * Identity is THE WORD a sound sits on (its start time — see
+ * getWordSoundKey), never the clip id and never the moment's type or grouping,
+ * because the analysis is not perfectly repeatable: the same phrase can come
+ * back as a list_start one run and a topic the next. Keying on the word is
+ * what makes a deletion stick ("no sound on this word") and what makes this
+ * idempotent: re-running derives the same word keys, finds them already
+ * handled, and places nothing new.
  *
  * A no-op when Auto Sound Effects is off: the semantic events are still
  * stored (the suggestions stay browsable, and the user can place any of them
@@ -472,55 +480,94 @@ export function applySemanticEvents(semanticEvents, { force = false } = {}) {
     duration: getVideoDuration(),
     sensitivity: appState.sfxSensitivity
   });
-  const directedKeys = new Set(directed.map((e) => getSemanticEventKey(e)).filter(Boolean));
-  const placeable = [...structural, ...directed].sort((a, b) => a.timestamp - b.timestamp);
+  // PRIORITY order, not time order, because it decides who keeps a word two
+  // moments both claimed: list beats first (they are structure), then accents
+  // strongest-first. The placed clips are time-sorted by writeSoundEvents
+  // regardless of the order they are built in.
+  const plan = [
+    ...structural.map((moment) => ({ moment, directed: false })),
+    ...directed
+      .slice()
+      .sort((a, b) => (Number(b.intensity) || 0.5) - (Number(a.intensity) || 0.5))
+      .map((moment) => ({ moment, directed: true }))
+  ];
 
-  const generated = placeable
-    .map((event) => {
-      const key = getSemanticEventKey(event);
-      if (!key || dismissed.has(key) || claimed.has(key)) return null;
+  // Words already given a sound on THIS pass. See getWordSoundKey: the word is
+  // the de-duplication unit, so a product the model reported as both a
+  // list_item and an entity gets one sound, while four adjacent words sharing
+  // the same sound id stay four sounds.
+  const sounded = new Set();
+  const generated = [];
 
-      const mapped = mapping[event.type];
-      // Silence wins outright. A null mapping is somebody saying "this kind of
-      // moment makes no sound" — either the profile (Minimal exists to say
-      // exactly that) or the user muting a type — and a sound the model
-      // suggested is not grounds to overrule either of them.
-      if (!mapped) return null;
+  for (const { moment, directed: isDirected } of plan) {
+    const mapped = mapping[moment.type];
+    // Silence wins outright. A null mapping is somebody saying "this kind of
+    // moment makes no sound" — either the profile (Minimal exists to say
+    // exactly that) or the user muting a type — and a sound the model
+    // suggested is not grounds to overrule either of them.
+    if (!mapped) continue;
 
-      // Otherwise the model's own suggestion is preferred, because it was
-      // chosen for THIS moment while the mapping is a default for every
-      // moment of that type. The exception is a type the user has personally
-      // re-pointed: that is a deliberate instruction about what this kind of
-      // moment should sound like, and it outranks a per-moment guess.
-      const userPinned = Object.prototype.hasOwnProperty.call(appState.soundEventMapping || {}, event.type);
-      const soundId = (!userPinned && isKnownSoundId(event.soundId)) ? event.soundId : mapped;
+    // ONE sound for the whole run, chosen once. That is what makes "five /
+    // home / office / hacks" a pattern: every word in it gets the same sound,
+    // rather than four independent choices that could each land somewhere
+    // different.
+    //
+    // Precedence, strongest first:
+    //   a type the user re-pointed   — a standing instruction; beats any guess
+    //   LIST BEATS: the profile      — see below
+    //   a sound id the model named   — chosen for THIS moment (literal matches)
+    //   the model's sound category   — BHYND's pick for that style of accent
+    //   the profile's type default   — what this kind of moment usually means
+    //
+    // List beats take their sound from the PROFILE, never from the model's
+    // category or sound id. They are structure: every item of a list should
+    // sound alike, which is the whole rhythm of "first / next / last". They
+    // are also the original feature, with a documented sound (`tick`) and a
+    // profile switcher that changes it — and letting the category win here
+    // silently broke both on the real test video, turning every list beat
+    // into `click` and making Punchy indistinguishable from Default. The
+    // category drives the EXPRESSIVE moments, which is where it is for.
+    const userPinned = Object.prototype.hasOwnProperty.call(appState.soundEventMapping || {}, moment.type);
+    const soundId = (userPinned || !isDirected)
+      ? mapped
+      : (isKnownSoundId(moment.soundId) ? moment.soundId
+        : (resolveCategorySound(moment.soundCategory) || mapped));
 
-      // Level and length. Only DIRECTED moments get them: a list beat is left
-      // exactly as it was placed before this feature existed — the sound's own
-      // default volume and its natural length — because changing how the
-      // original behaviour sounds is not what widening the analysis was for.
-      //
-      // For an accent, the level follows the model's confidence and the length
-      // is capped, which is what keeps a micro-SFX micro: the library holds
-      // beds and stings several seconds long, and the analysis is allowed to
-      // name one. Both are ordinary starting values on an ordinary clip, so
-      // the creator can stretch or re-level it afterwards like any other.
-      const placement = directedKeys.has(key)
-        ? resolveDirectedPlacement(getSoundDefinition(soundId).defaultVolume, event.intensity)
-        : null;
+    // Level and length. Only DIRECTED moments get re-levelled: a list beat keeps
+    // the sound's own default volume, because changing how the original
+    // behaviour sounds is not what widening the analysis was for. For an
+    // accent the level follows the model's confidence and the length is capped
+    // to a beat. Both are ordinary starting values on an ordinary clip.
+    const base = isDirected
+      ? resolveDirectedPlacement(getSoundDefinition(soundId).defaultVolume, moment.intensity)
+      : null;
 
-      return createSoundEvent(soundId, event.timestamp, {
+    const words = momentWords(moment);
+    // A run's sounds are cut where the next word's begins, so a longer sound
+    // chosen for a run cannot stack four copies on top of each other. Null for
+    // a single word, which leaves a lone list beat exactly as it always was.
+    const runLengths = resolveRunDurations(words);
+
+    words.forEach((word, i) => {
+      const key = getWordSoundKey(word.timestamp);
+      // Already handled: the creator holds an edited clip on this word, or
+      // deleted one here and does not want it back, or a higher-priority
+      // moment on this same pass already sounded it.
+      if (!key || dismissed.has(key) || claimed.has(key) || sounded.has(key)) return;
+      sounded.add(key);
+      generated.push(createSoundEvent(soundId, word.timestamp, {
         source: 'ai',
-        eventType: event.type,
+        eventType: moment.type,
         eventKey: key,
-        ...(placement || {})
-      });
-    })
-    .filter(Boolean);
+        ...(base || {}),
+        ...(runLengths ? runLengths[i] : {})
+      }));
+    });
+  }
 
   updateState({ semanticEvents: stored }, { recordHistory: false });
   writeSoundEvents([...kept, ...generated]);
-  return generated;
+  return generated.sort((a, b) => a.startTime - b.startTime);
 }
 
 /** Re-derives the automatic effects from the already-stored analysis — no model call. Used when the profile or a per-event-type mapping changes. */

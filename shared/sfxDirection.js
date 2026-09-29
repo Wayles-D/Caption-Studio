@@ -40,6 +40,8 @@
  * intentional, and a creator who says "here are five things" expects five
  * beats, not the two the director would otherwise judge to be the strongest.
  */
+import { momentWords } from './soundProfiles.js';
+
 export const STRUCTURAL_MOMENT_TYPES = ['list_start', 'list_item'];
 
 export function isStructuralMomentType(type) {
@@ -144,7 +146,13 @@ export function selectDirectedMoments(events, { duration, sensitivity, policy = 
 
   // Structural moments are already on the timeline as far as spacing is
   // concerned: this is what stops an accent landing on a list beat.
-  const taken = structural.map((e) => e.timestamp);
+  //
+  // Spacing is measured between RUNS, edge to edge — never between the words
+  // inside one. "five / home / office / hacks" puts four sounds inside ~0.7s
+  // on purpose; judged word by word against a 1.5s gap, three of them would be
+  // thrown away as too close to the first, and the rhythm this system exists
+  // to produce would be deleted by the rule meant to protect the edit.
+  const taken = structural.map(spanOf);
   const directed = [];
 
   for (const event of candidates) {
@@ -163,17 +171,82 @@ export function selectDirectedMoments(events, { duration, sensitivity, policy = 
       rejected.push({ event, reason: 'over-budget' });
       continue;
     }
-    if (taken.some((t) => Math.abs(t - event.timestamp) < cfg.minGapSeconds)) {
+    // A run that brushes against something already placed loses ONLY the
+    // words that collide, not the run. This was all-or-nothing, and on the
+    // real test video it deleted the single most important moment: the model
+    // correctly marked "5 home office hacks" and then ran on into
+    // "productive … great", and because "great" landed 0.74s before the first
+    // list beat, the whole intro was rejected over one word at its tail.
+    // A one-word accent still behaves exactly as before — its only word either
+    // survives or it is rejected.
+    const words = momentWords(event);
+    const clear = words.filter((w) => taken.every((t) => distanceTo(t, w.timestamp) >= cfg.minGapSeconds));
+    if (!clear.length) {
       rejected.push({ event, reason: 'too-close' });
       continue;
     }
-    taken.push(event.timestamp);
-    directed.push(event);
+    const placed = clear.length === words.length
+      ? event
+      : {
+        ...event,
+        words: clear,
+        timestamp: clear[0].timestamp,
+        endTimestamp: clear.length > 1 ? clear[clear.length - 1].timestamp : undefined,
+        // Kept so the UI and the tests can say which words were given up and
+        // why, instead of a run silently arriving shorter than it was proposed.
+        trimmedWords: words.filter((w) => !clear.includes(w))
+      };
+    taken.push(spanOf(placed));
+    directed.push(placed);
   }
 
   directed.sort((a, b) => a.timestamp - b.timestamp);
   return { structural, directed, rejected, budget, threshold };
 }
+
+/** A run's extent in time: its first word's start to its last word's start. */
+function spanOf(event) {
+  const times = momentWords(event).map((w) => w.timestamp).filter(Number.isFinite);
+  if (!times.length) return { start: event.timestamp, end: event.timestamp };
+  return { start: Math.min(...times), end: Math.max(...times) };
+}
+
+/** Seconds from a single word's time to a placed run; 0 when it falls inside it. */
+function distanceTo(span, t) {
+  if (t >= span.start && t <= span.end) return 0;
+  return Math.min(Math.abs(t - span.start), Math.abs(t - span.end));
+}
+
+/**
+ * How long each sound in a run may last, so the sounds of a rhythmic run
+ * follow each other instead of piling up.
+ *
+ * A click is shorter than the gap between spoken words, so for the usual case
+ * this changes nothing audible. It exists for the other case: the analysis may
+ * choose a longer sound for a run, and four copies of a two-second sting
+ * starting a quarter-second apart are not four accents, they are one noise.
+ * Each sound is cut where the next word's sound begins; the last keeps the
+ * normal accent length.
+ *
+ * Returns null for a one-word moment — its length is left as whatever the
+ * caller would otherwise give it, which is what keeps single list beats
+ * sounding exactly as they did before runs existed.
+ */
+export function resolveRunDurations(words) {
+  const times = (Array.isArray(words) ? words : []).map((w) => w.timestamp);
+  if (times.length < 2) return null;
+  return times.map((t, i) => {
+    const duration = i < times.length - 1
+      ? Math.max(MIN_RUN_SOUND_SECONDS, Math.min(MICRO_MAX_DURATION, times[i + 1] - t))
+      : MICRO_MAX_DURATION;
+    return { duration, fadeOut: Math.min(MICRO_FADE_OUT, duration / 3) };
+  });
+}
+
+// A floor, because transcripts sometimes give two words the same start (or
+// even a later word an EARLIER one — the test video has one), and a zero-
+// length sound is silence the creator would never be able to explain.
+const MIN_RUN_SOUND_SECONDS = 0.08;
 
 /**
  * The sound's level and length for one directed moment.

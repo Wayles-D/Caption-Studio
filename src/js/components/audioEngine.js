@@ -44,6 +44,25 @@ let activeSources = [];
 let started = false;
 let rescheduleQueued = false;
 
+/**
+ * Which reschedule is current. Every reschedule() takes a new number, and a
+ * buffer that finishes loading for an OLDER one is dropped instead of played.
+ *
+ * Without it, the first play of a project played every sound effect twice.
+ * `play` and `playing` arrive in different animation frames, so
+ * queueReschedule's per-frame coalescing lets both through; on a first play
+ * the buffers are still loading, so the second reschedule's stopAll() runs
+ * while nothing is scheduled yet, and then BOTH reschedules' callbacks fire on
+ * the same resolved load — two sources per effect, same instant, same phase:
+ * every SFX ~6dB louder in the preview than in the export. Measured on the
+ * home-office test video: 19 clips, 38 sources started. It stops once buffers
+ * are cached, which is why it only showed on the first press of play.
+ *
+ * stopAll() cannot fix this on its own — it can only stop what has already
+ * been scheduled, and the duplicates are scheduled after it has run.
+ */
+let scheduleGeneration = 0;
+
 function getVideo() {
   return document.getElementById('preview-video');
 }
@@ -197,6 +216,7 @@ function scheduleBuffer(buffer, when, offset, playDuration, opts) {
  */
 function reschedule() {
   stopAll();
+  const generation = ++scheduleGeneration;
 
   const video = getVideo();
   if (!video || video.paused || video.ended) return;
@@ -219,7 +239,7 @@ function reschedule() {
     if (!event.enabled) return;
     const url = resolveSoundUrl(event.soundId, SOUNDS_BASE_URL);
     loadBuffer(url).then((buffer) => {
-      if (!buffer) return;
+      if (!buffer || generation !== scheduleGeneration) return;
       // The schedule this buffer was requested for may have been torn down
       // while the fetch/decode was in flight (a seek, a pause). Re-checking
       // the video's state here is what stops a late decode from playing a
@@ -248,7 +268,7 @@ function reschedule() {
   (appState.audioTracks || []).forEach((track) => {
     if (!track.enabled || !track.url) return;
     loadBuffer(track.url).then((buffer) => {
-      if (!buffer) return;
+      if (!buffer || generation !== scheduleGeneration) return;
       const v = getVideo();
       if (!v || v.paused || Math.abs(v.currentTime - videoTime) > 0.5) return;
 

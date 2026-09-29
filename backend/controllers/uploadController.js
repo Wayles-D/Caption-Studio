@@ -197,6 +197,10 @@ export async function uploadAndExtractAudio(req, res, next) {
     words = analysis.words;
     const contentEvents = analysis.contentEvents;
     const visualSuggestions = analysis.visualSuggestions;
+    // Why there are no events, when there are none — so the editor can say
+    // "the analysis was rate-limited" rather than implying the video has no
+    // sound-worthy moments. Null when the analysis ran.
+    const analysisError = analysis.analysisError || null;
     console.log(`[Pipeline] [${baseName}] Stage: AI Content Analysis Completed (Duration: ${Date.now() - keywordAnalysisStart}ms)`);
 
     mergeWordsIntoTranscription(transcriptionJSON, words);
@@ -295,6 +299,7 @@ export async function uploadAndExtractAudio(req, res, next) {
       // editor — not the model — decides which sound, if any, each of these
       // produces; see shared/soundProfiles.js.
       contentEvents,
+      analysisError,
       // Moments a supporting image would help. Surfaced as empty slots for the
       // user to fill; nothing is ever placed into one automatically.
       visualSuggestions,
@@ -392,7 +397,8 @@ export async function analyzeContent(req, res) {
     success: true,
     words: analysis.words,
     contentEvents: analysis.contentEvents,
-    visualSuggestions: analysis.visualSuggestions
+    visualSuggestions: analysis.visualSuggestions,
+    analysisError: analysis.analysisError || null
   });
 }
 

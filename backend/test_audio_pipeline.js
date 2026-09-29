@@ -24,9 +24,12 @@ import {
   isDefaultVideoAudio
 } from '../shared/audioTimeline.js';
 import { SOUND_REGISTRY, SOUND_IDS, resolveSoundUrl, getSoundDefinition, describeSoundLibraryForPrompt } from '../shared/soundRegistry.js';
-import { resolveSoundMapping, SEMANTIC_EVENT_TYPES, isKnownSemanticEventType } from '../shared/soundProfiles.js';
-import { resolveEventTimestamps, buildSystemPrompt } from './services/keywordAnalysisService.js';
-import { selectDirectedMoments, resolveDirectedPlacement, isStructuralMomentType, MICRO_MAX_DURATION } from '../shared/sfxDirection.js';
+import {
+  resolveSoundMapping, SEMANTIC_EVENT_TYPES, isKnownSemanticEventType,
+  SFX_SOUND_CATEGORIES, resolveCategorySound, getWordSoundKey
+} from '../shared/soundProfiles.js';
+import { resolveEventTimestamps, buildSystemPrompt, buildResponseSchema, encodeTranscriptForModel, parseRetryAfterMs } from './services/keywordAnalysisService.js';
+import { selectDirectedMoments, resolveDirectedPlacement, resolveRunDurations, isStructuralMomentType, MICRO_MAX_DURATION } from '../shared/sfxDirection.js';
 import { buildAudioMixGraph, SOUNDS_DIR, resolveAudioAssetPath } from './utils/audioMixFilter.js';
 
 console.log('--- Starting Caption Studio Audio Timeline Verification ---');
@@ -266,6 +269,155 @@ assert.strictEqual(loud.duration, MICRO_MAX_DURATION, 'A micro-SFX is capped to 
 assert.ok(loud.fadeOut > 0, 'The cap comes with a fade, or truncation clicks');
 assert.ok(resolveDirectedPlacement(0.7, 5).volume <= 2, 'An out-of-range intensity cannot exceed the volume ceiling');
 console.log(`✓ ${directed.structural.length} list beats kept; ${directed.directed.length} of 8 accents placed (${directed.rejected.map((r) => r.reason).join(', ')})`);
+
+
+// 2d. WORD-LEVEL. A sound lands on a word, not a sentence. "Five home office
+// hacks" is one idea and four sounds, each on its own word's timestamp.
+console.log('\n[Test 2d] Sounds Are Placed Per Word, And A Run Is One Decision');
+
+// Real timings from the home-office test video's opening, including its one
+// genuinely backwards pair (word 8 starts before word 7), which Whisper does
+// produce and which the pipeline must survive rather than trust blindly.
+const intro = [
+  { word: 'Here', start: 0.00 }, { word: 'are', start: 0.24 }, { word: '5', start: 0.38 },
+  { word: 'home', start: 0.62 }, { word: 'office', start: 0.76 }, { word: 'hacks', start: 1.06 },
+  { word: 'to', start: 1.32 }, { word: 'your', start: 7.24 }, { word: 'monitor', start: 6.96 },
+  { word: 'the', start: 7.90 }, { word: 'of', start: 8.00 }, { word: 'desk', start: 8.10 }
+];
+
+const run = resolveEventTimestamps(
+  [{ type: 'topic', words: [2, 3, 4, 5], soundCategory: 'ui', intensity: 0.8, reason: 'topic_intro' }],
+  intro, { allowSoundId: true }
+);
+assert.strictEqual(run.length, 1, 'One idea is one event...');
+assert.deepStrictEqual(
+  run[0].words.map((w) => [w.word, w.timestamp]),
+  [['5', 0.38], ['home', 0.62], ['office', 0.76], ['hacks', 1.06]],
+  '...carrying four words, each on ITS OWN transcript timestamp'
+);
+assert.strictEqual(run[0].timestamp, 0.38, 'The event-level time is its first word');
+assert.strictEqual(run[0].endTimestamp, 1.06, 'and its end is its last word');
+assert.strictEqual(run[0].soundCategory, 'ui', 'The category rides along for BHYND to resolve');
+
+// Speaking order and per-word validation: out-of-range, duplicate and
+// non-integer indexes each cost only themselves.
+const messy = resolveEventTimestamps(
+  [{ type: 'entity', words: [5, 3, 999, 3, 'x', 4], soundCategory: 'ui' }],
+  intro, { allowSoundId: true }
+);
+assert.deepStrictEqual(messy[0].words.map((w) => w.wordIndex), [3, 4, 5], 'Bad indexes are dropped one by one; the run is sorted into speaking order');
+
+// The guard on function words. The model's index slips by a word — on the
+// test video it placed sounds on "of", "the", "your" — and no editor puts a
+// click on "of". Removed from a run; a run of nothing but them is dropped.
+const slipped = resolveEventTimestamps(
+  [
+    { type: 'emphasis', words: [9, 10, 11], soundCategory: 'emphasis' },
+    { type: 'emphasis', words: [10], soundCategory: 'emphasis' }
+  ],
+  intro, { allowSoundId: true }
+);
+assert.strictEqual(slipped.length, 1, 'A run of only function words is dropped outright');
+assert.deepStrictEqual(slipped[0].words.map((w) => w.word), ['desk'], 'Function words are stripped from a run; the content word keeps its sound');
+
+// A run is bounded in length AND time, so it cannot be used to walk a
+// sentence's worth of sounds past the director's budget.
+const long = Array.from({ length: 20 }, (_, i) => ({ word: `w${i}`, start: i * 0.3 }));
+const capped = resolveEventTimestamps([{ type: 'topic', words: long.map((_, i) => i), soundCategory: 'ui' }], long, { allowSoundId: true });
+assert.ok(capped[0].words.length <= 6, 'A run carries at most six words');
+const spread = [{ word: 'alpha', start: 0 }, { word: 'beta', start: 2 }, { word: 'gamma', start: 30 }];
+const windowed = resolveEventTimestamps([{ type: 'entity', words: [0, 1, 2], soundCategory: 'ui' }], spread, { allowSoundId: true });
+assert.deepStrictEqual(windowed[0].words.map((w) => w.word), ['alpha', 'beta'], 'A word far outside the time window of its run is dropped');
+
+// A category the model invented costs the category, not the event.
+const badCategory = resolveEventTimestamps([{ type: 'topic', words: [3], soundCategory: 'explosion' }], intro, { allowSoundId: true });
+assert.strictEqual(badCategory.length, 1, 'An unknown category keeps the event');
+assert.strictEqual(badCategory[0].soundCategory, undefined, '...without the category');
+
+// The old one-word answer shape still places, as a one-word run.
+const legacyShape = resolveEventTimestamps([{ type: 'list_item', wordIndex: 3, index: 1 }], intro, { allowSoundId: true });
+assert.deepStrictEqual(legacyShape[0].words.map((w) => w.word), ['home'], 'A single wordIndex is a one-word run');
+
+// BHYND picks the sound for a category, and every category resolves.
+SFX_SOUND_CATEGORIES.forEach((c) => {
+  const id = resolveCategorySound(c.id);
+  assert.ok(id && SOUND_REGISTRY[id], `Category "${c.id}" resolves to a registered sound (${id})`);
+});
+
+// The model is sent the compact form, and it still carries every index.
+const encoded = encodeTranscriptForModel(intro);
+assert.ok(encoded.startsWith('0:Here 1:are 2:5 3:home'), 'The transcript goes to the model as index:word pairs');
+assert.strictEqual(encoded.split(' ').length, intro.length, 'One pair per word, so every index still lines up');
+
+// The schema the provider enforces names exactly the vocabulary this app knows.
+const schema = buildResponseSchema();
+const ev = schema.properties.events.items.properties;
+assert.deepStrictEqual(ev.type.enum, SEMANTIC_EVENT_TYPES, 'Event types are enforced by the schema');
+assert.deepStrictEqual(ev.soundCategory.enum, SFX_SOUND_CATEGORIES.map((c) => c.id), 'Categories are enforced by the schema');
+assert.deepStrictEqual(ev.soundId.anyOf[0].enum, SOUND_IDS, 'Sound ids are enforced by the schema');
+assert.ok(schema.properties.events.items.required.includes('words'), 'Every event must say which words');
+
+// Rate limits: the wait the provider names is the wait we honour.
+const fakeResponse = (retryAfter) => ({ headers: { get: (h) => (h === 'retry-after' ? retryAfter : null) } });
+assert.strictEqual(parseRetryAfterMs(fakeResponse('7'), ''), 7000, 'The retry-after header is read in seconds');
+assert.strictEqual(parseRetryAfterMs(fakeResponse(null), 'Please try again in 18.5475s. Need more'), 18548, 'The wait is read from the message body');
+assert.strictEqual(parseRetryAfterMs(fakeResponse(null), 'try again in 1m2.5s'), 62500, 'Minutes are understood');
+assert.strictEqual(parseRetryAfterMs(fakeResponse(null), 'no hint here'), null, 'No hint means no wait');
+
+// A RUN is one editorial decision to the director — it counts once against
+// the budget, and the gap rule measures between runs, never inside one.
+const directedRuns = selectDirectedMoments([
+  { type: 'topic', timestamp: 0.38, intensity: 0.8, words: run[0].words },
+  { type: 'emphasis', timestamp: 20, intensity: 0.7, words: [{ timestamp: 20 }] }
+], { duration: 30, sensitivity: 0.5 });
+assert.strictEqual(directedRuns.directed.length, 2, 'A four-word run and a one-word accent both place');
+assert.strictEqual(directedRuns.directed[0].words.length, 4, 'The run is not split by the spacing rule: its words sit 0.14-0.30s apart on purpose');
+
+// THE REAL FAILURE, verbatim from the test video. The model marked the intro
+// correctly and ran on into "productive … great"; "great" lands 0.74s before
+// the first list beat, and the director used to reject the ENTIRE run over
+// that one tail word — so the single most important moment in the video got
+// no sound at all. A run now loses only the words that collide.
+const realIntro = selectDirectedMoments([
+  { type: 'list_item', timestamp: 3.64, words: [{ word: 'First,', timestamp: 3.64 }, { word: 'monitor', timestamp: 4.34 }] },
+  {
+    type: 'topic', timestamp: 0.38, intensity: 0.9,
+    words: [
+      { word: '5', timestamp: 0.38 }, { word: 'home', timestamp: 0.62 }, { word: 'office', timestamp: 0.76 },
+      { word: 'hacks', timestamp: 1.06 }, { word: 'productive', timestamp: 1.8 }, { word: 'great', timestamp: 2.9 }
+    ]
+  }
+], { duration: 39.28, sensitivity: 0.5 });
+const introPlaced = realIntro.directed.find((e) => e.type === 'topic');
+assert.ok(introPlaced, 'The intro run is placed, not rejected over one colliding word');
+assert.ok(['5', 'home', 'office', 'hacks'].every((w) => introPlaced.words.some((x) => x.word === w)), 'All four topic words keep their sound');
+assert.ok(!introPlaced.words.some((x) => x.word === 'great'), 'Only the colliding word is given up');
+assert.deepStrictEqual(introPlaced.trimmedWords.map((w) => w.word), ['great'], 'And the trim is reported, not silent');
+
+// ...but a run that lands on a list beat is still rejected as a whole.
+const collides = selectDirectedMoments([
+  { type: 'list_item', timestamp: 3.6, words: [{ timestamp: 3.6 }, { timestamp: 3.9 }] },
+  { type: 'entity', timestamp: 3.9, intensity: 0.9, words: [{ timestamp: 3.9 }, { timestamp: 4.2 }] }
+], { duration: 30, sensitivity: 0.5 });
+assert.strictEqual(collides.directed.length, 0, 'An accent overlapping a list beat is dropped rather than layered');
+
+// Sounds in a run follow each other rather than piling up.
+const lengths = resolveRunDurations(run[0].words);
+run[0].words.forEach((w, i) => {
+  if (i === run[0].words.length - 1) return;
+  const next = run[0].words[i + 1].timestamp;
+  assert.ok(w.timestamp + lengths[i].duration <= next + 1e-9, `A sound in a run ends before the next word begins (${w.word})`);
+});
+assert.strictEqual(resolveRunDurations([{ timestamp: 3 }]), null, 'A single word keeps its natural length, as list beats always have');
+// The backwards pair from the real transcript must not produce silence.
+const backwards = resolveRunDurations([{ timestamp: 7.24 }, { timestamp: 6.96 }]);
+assert.ok(backwards[0].duration > 0, 'Out-of-order transcript timings still give an audible sound');
+
+// DE-DUPLICATION is by WORD. Adjacent words sharing a sound id are separate
+// sounds; the same word reported twice is one.
+assert.notStrictEqual(getWordSoundKey(0.62), getWordSoundKey(0.76), 'Two adjacent words are two sounds, even with the same sound id');
+assert.strictEqual(getWordSoundKey(0.62), getWordSoundKey(0.620), 'The same word is the same sound, however it was reported');
+console.log(`✓ "5 home office hacks" -> ${run[0].words.length} per-word sounds at ${run[0].words.map((w) => w.timestamp + 's').join(', ')}; run counts once; function-word slips stripped; runs never stack`);
 
 // 3. The editor — not the model — decides what a moment sounds like.
 console.log('\n[Test 3] Semantic Event -> Sound Mapping Is Owned By The Editor');

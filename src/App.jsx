@@ -452,9 +452,15 @@ export function App() {
       updateState({ visualSuggestions: data.visualSuggestions || [] }, { recordHistory: false });
       const placed = applySemanticEvents(data.contentEvents || []);
 
-      showToast(placed.length > 0
-        ? `Subtitles generated — and ${placed.length} sound effect${placed.length === 1 ? '' : 's'} placed from the transcript.`
-        : 'Subtitles generated successfully!');
+      // Three different outcomes that used to share one message. A rate-limited
+      // or failed analysis reported "Subtitles generated successfully!" — true,
+      // and exactly as quiet as a video with no moments in it, so there was no
+      // way to tell "BHYND found nothing" from "BHYND never looked".
+      showToast(data.analysisError
+        ? `Subtitles generated. Sound effects weren't placed — ${data.analysisError.message}`
+        : placed.length > 0
+          ? `Subtitles generated — and ${placed.length} sound effect${placed.length === 1 ? '' : 's'} placed from the transcript.`
+          : 'Subtitles generated successfully!');
       // Transcript chips rebuild reactively inside RightInspector's own
       // effect (keyed on the `words` field this updateState call just set).
     } catch (err) {

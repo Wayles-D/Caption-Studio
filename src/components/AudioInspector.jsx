@@ -26,7 +26,7 @@ import {
   listSoundProfiles,
   SEMANTIC_EVENT_TYPES,
   SEMANTIC_EVENT_LABELS,
-  getSemanticEventKey,
+  findMomentForSoundKey,
   resolveSoundMapping
 } from '../../shared/soundProfiles.js';
 import { getAudioTrackDuration } from '../../shared/audioTimeline.js';
@@ -88,7 +88,7 @@ function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVol
   // re-analysed away simply shows less.
   const moment = useAudioStore((s) =>
     (event.source === 'ai' && event.eventKey
-      ? s.semanticEvents?.find((m) => getSemanticEventKey(m) === event.eventKey)
+      ? findMomentForSoundKey(s.semanticEvents, event.eventKey)
       : null) || null
   );
   return (
@@ -331,10 +331,17 @@ export function AudioInspector({ onNotify }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
 
+      // A failed analysis must not be applied: an empty event list would be
+      // read as "this video has no moments" and would clear the automatic
+      // effects the LAST successful analysis placed.
+      if (data.analysisError) {
+        onNotify?.(data.analysisError.message);
+        return;
+      }
       const placed = audio.applySemanticEvents(data.contentEvents || []);
       onNotify?.(data.contentEvents?.length
         ? `Found ${data.contentEvents.length} moment${data.contentEvents.length === 1 ? '' : 's'} — placed ${placed.length} sound effect${placed.length === 1 ? '' : 's'}.`
-        : 'No clear structural moments found in this transcript.');
+        : 'No sound-worthy moments found in this transcript.');
     } catch (err) {
       console.error('[AudioInspector] Content analysis failed:', err);
       onNotify?.(`Transcript analysis failed: ${err.message}`);

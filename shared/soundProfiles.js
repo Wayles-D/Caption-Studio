@@ -54,7 +54,15 @@ export const SEMANTIC_EVENT_TYPES = [
   'important_statement',
   'dramatic',
   'punchline',
-  'conclusion'
+  'conclusion',
+  // NAMED THINGS — the words a short-form editor accents because of WHAT
+  // they are rather than what the sentence is doing: the topic being
+  // introduced, a product or person or tool, a number that carries the point,
+  // a keyword the sentence turns on.
+  'topic',
+  'entity',
+  'number',
+  'keyword'
 ];
 
 /** Human-facing labels for the event types above — used wherever an event is shown in the UI. */
@@ -70,11 +78,139 @@ export const SEMANTIC_EVENT_LABELS = {
   important_statement: 'Key statement',
   dramatic: 'Dramatic beat',
   punchline: 'Punchline',
-  conclusion: 'Payoff'
+  conclusion: 'Payoff',
+  topic: 'Topic',
+  entity: 'Name / product',
+  number: 'Number',
+  keyword: 'Keyword'
 };
 
 export function isKnownSemanticEventType(type) {
   return SEMANTIC_EVENT_TYPES.includes(type);
+}
+
+/**
+ * THE SOUND CATEGORIES the analysis chooses between — a style of accent, not a
+ * file. The model says "this word wants a `ui` sound"; BHYND decides that
+ * means `click`.
+ *
+ * Why a category rather than a sound id as the contract: the model is good at
+ * telling a punchline from a product name and bad at remembering which of
+ * forty filenames is the short one, so asking it for the judgement it is good
+ * at and keeping the lookup here is both more reliable and cheaper — the
+ * category list is a few lines of prompt, and the library can change without
+ * the model hearing about it. It may still name a specific sound id when the
+ * word literally IS that thing ("cash register" for a price); that is an
+ * optional refinement layered on top, validated like everything else.
+ *
+ * `sounds` is an ORDER, not a set: the first is the default and every word in
+ * a rhythmic run gets the same one, which is what makes "five / home / office
+ * / hacks" read as a pattern rather than four unrelated noises. Later entries
+ * are the fallback if an earlier id is ever removed from the registry.
+ */
+export const SFX_SOUND_CATEGORIES = [
+  {
+    id: 'ui',
+    label: 'UI',
+    use: 'clean digital click/tick — list markers, names, and rhythmic word-by-word runs',
+    sounds: ['click', 'tick', 'pop']
+  },
+  {
+    id: 'emphasis',
+    label: 'Emphasis',
+    use: 'bright pop — a single word landing with weight',
+    sounds: ['pop', 'click', 'ding']
+  },
+  {
+    id: 'impact',
+    label: 'Impact',
+    use: 'blunt hit — a hard statement, a claim that should land heavy',
+    sounds: ['hit', 'core-hit']
+  },
+  {
+    id: 'transition',
+    label: 'Transition',
+    use: 'short whoosh — a change of topic or a cut in thought',
+    sounds: ['whoosh', 'swipe']
+  },
+  {
+    id: 'reveal',
+    label: 'Reveal',
+    use: 'shimmer or sting — something being revealed or a satisfying payoff',
+    sounds: ['sparkle', 'ding', 'pop']
+  },
+  {
+    id: 'tension',
+    label: 'Tension',
+    use: 'low drone or ticking — suspense, a warning, stakes, a mistake',
+    sounds: ['tension', 'riser-metallic', 'clock-ticking']
+  },
+  {
+    id: 'comedy',
+    label: 'Comedy',
+    use: 'meme sting — a punchline or an absurd beat',
+    sounds: ['dexter', 'faaah', 'awww']
+  }
+];
+
+const SFX_CATEGORY_BY_ID = new Map(SFX_SOUND_CATEGORIES.map((c) => [c.id, c]));
+
+export function isKnownSfxCategory(id) {
+  return SFX_CATEGORY_BY_ID.has(id);
+}
+
+/**
+ * The sound a category means right now: its first entry that the registry
+ * still knows. Null only if every candidate has been removed, in which case
+ * the caller falls back to the event type's own mapping rather than guessing.
+ */
+export function resolveCategorySound(categoryId) {
+  const category = SFX_CATEGORY_BY_ID.get(categoryId);
+  if (!category) return null;
+  return category.sounds.find((id) => isKnownSoundId(id)) ?? null;
+}
+
+/**
+ * A placed sound's identity: THE WORD it sits on, by that word's start time.
+ *
+ * Deliberately neither the moment's type nor its grouping. The analysis is not
+ * perfectly repeatable — the same sentence can come back as a `list_start` one
+ * run and a `topic` the next, or grouped [2..5] one run and [3..5] the next — and
+ * a key that included either would treat those as different sounds. Then a
+ * sound the creator deleted from "home" would reappear the moment the model
+ * re-grouped the phrase. "Don't put a sound on this word again" is what a
+ * deletion means, so the word is the key.
+ *
+ * This is also the whole de-duplication rule: two proposals for the same word
+ * are one sound, and two different words are two sounds even when they are
+ * adjacent and share the same sound id. Matching sound ids is never grounds to
+ * merge — that is exactly the rhythmic case this system exists to produce.
+ *
+ * Timestamp rather than word index, because an edit to the transcript's text
+ * shifts every later index while leaving the spoken timing where it was.
+ */
+export function getWordSoundKey(timestamp) {
+  return Number.isFinite(timestamp) ? `word@${timestamp.toFixed(3)}` : null;
+}
+
+/** The analysed moment a placed sound came from, for provenance in the UI. */
+export function findMomentForSoundKey(moments, key) {
+  if (!key || !Array.isArray(moments)) return null;
+  return moments.find((m) => momentWords(m).some((w) => getWordSoundKey(w.timestamp) === key)) || null;
+}
+
+/**
+ * The words a moment covers, each with its own timestamp. A moment from an
+ * analysis that predates word-level output carries only a single `timestamp`;
+ * it is treated as a one-word moment on that instant rather than being
+ * dropped, so older results still place.
+ */
+export function momentWords(moment) {
+  if (Array.isArray(moment?.words) && moment.words.length) return moment.words;
+  if (Number.isFinite(moment?.timestamp)) {
+    return [{ wordIndex: moment.wordIndex ?? null, timestamp: moment.timestamp }];
+  }
+  return [];
 }
 
 /**
@@ -123,7 +259,11 @@ export const SOUND_PROFILES = {
       // UI one — so the default is a neutral beat and the analysis is left to
       // name a meme by id when the content actually earns one.
       punchline: 'pop',
-      conclusion: 'sparkle'
+      conclusion: 'sparkle',
+      topic: 'click',
+      entity: 'click',
+      number: 'tick',
+      keyword: 'pop'
     }
   },
   minimal: {
@@ -142,7 +282,11 @@ export const SOUND_PROFILES = {
       important_statement: null,
       dramatic: null,
       punchline: null,
-      conclusion: null
+      conclusion: null,
+      topic: null,
+      entity: null,
+      number: null,
+      keyword: null
     }
   },
   punchy: {
@@ -161,7 +305,11 @@ export const SOUND_PROFILES = {
       important_statement: 'hit',
       dramatic: 'tension',
       punchline: 'pop',
-      conclusion: 'cash'
+      conclusion: 'cash',
+      topic: 'pop',
+      entity: 'click',
+      number: 'hit',
+      keyword: 'pop'
     }
   }
 };
