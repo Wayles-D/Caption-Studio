@@ -36,26 +36,41 @@ import { isKnownSoundId } from './soundRegistry.js';
  * actually useful" constraint.
  */
 export const SEMANTIC_EVENT_TYPES = [
+  // STRUCTURE — the speech announcing and walking a list. These are the
+  // original feature and are still placed unconditionally; see
+  // shared/sfxDirection.js's STRUCTURAL_MOMENT_TYPES for why they sit outside
+  // the budget that governs everything below them.
   'list_start',
   'list_item',
+  // EXPRESSION — moments worth an accent. Every one of these competes for a
+  // small per-video budget, so adding a type here widens what the analysis can
+  // NOTICE without widening how much ends up in the edit.
+  'hook',
   'emphasis',
   'reveal',
   'transition',
   'question',
   'answer',
-  'important_statement'
+  'important_statement',
+  'dramatic',
+  'punchline',
+  'conclusion'
 ];
 
 /** Human-facing labels for the event types above — used wherever an event is shown in the UI. */
 export const SEMANTIC_EVENT_LABELS = {
   list_start: 'List starts',
   list_item: 'List item',
+  hook: 'Hook',
   emphasis: 'Emphasis',
   reveal: 'Reveal',
   transition: 'Transition',
   question: 'Question',
   answer: 'Answer',
-  important_statement: 'Key statement'
+  important_statement: 'Key statement',
+  dramatic: 'Dramatic beat',
+  punchline: 'Punchline',
+  conclusion: 'Payoff'
 };
 
 export function isKnownSemanticEventType(type) {
@@ -95,12 +110,20 @@ export const SOUND_PROFILES = {
     mapping: {
       list_start: 'whoosh',
       list_item: 'tick',
+      hook: 'hit',
       emphasis: 'pop',
       reveal: 'pop',
       transition: 'whoosh',
       question: null,
       answer: 'click',
-      important_statement: 'hit'
+      important_statement: 'hit',
+      dramatic: 'tension',
+      // Comedy is the one category where the RIGHT sound is usually a specific
+      // reference rather than a generic accent, and this profile is the clean
+      // UI one — so the default is a neutral beat and the analysis is left to
+      // name a meme by id when the content actually earns one.
+      punchline: 'pop',
+      conclusion: 'sparkle'
     }
   },
   minimal: {
@@ -110,12 +133,16 @@ export const SOUND_PROFILES = {
     mapping: {
       list_start: null,
       list_item: 'tick',
+      hook: null,
       emphasis: null,
       reveal: null,
       transition: null,
       question: null,
       answer: null,
-      important_statement: null
+      important_statement: null,
+      dramatic: null,
+      punchline: null,
+      conclusion: null
     }
   },
   punchy: {
@@ -125,12 +152,16 @@ export const SOUND_PROFILES = {
     mapping: {
       list_start: 'whoosh',
       list_item: 'pop',
+      hook: 'core-hit',
       emphasis: 'hit',
       reveal: 'pop',
       transition: 'swipe',
       question: 'click',
       answer: 'notification',
-      important_statement: 'hit'
+      important_statement: 'hit',
+      dramatic: 'tension',
+      punchline: 'pop',
+      conclusion: 'cash'
     }
   }
 };

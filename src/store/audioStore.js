@@ -45,6 +45,14 @@ export const AUDIO_DEFAULTS = {
   // the AUTOMATIC placement of effects is suppressed.
   autoSoundEffects: true,
 
+  // How freely the director places expressive accents (0 = only standout
+  // moments, 1 = generous). It moves an intensity THRESHOLD, not a count, and
+  // even at 1 stays well clear of "place everything" — see
+  // shared/sfxDirection.js's thresholdForSensitivity. Held as state, not a
+  // constant, so the creator can re-judge the whole video from the stored
+  // analysis without another model call.
+  sfxSensitivity: 0.5,
+
   // What the content analysis reported about the speech, verbatim: semantic
   // moments with timestamps already resolved from the transcript's own word
   // timings (see backend/services/keywordAnalysisService.js). This is the
@@ -74,6 +82,7 @@ export const AUDIO_DOCUMENT_KEYS = [
   'soundProfileId',
   'soundEventMapping',
   'autoSoundEffects',
+  'sfxSensitivity',
   'semanticEvents',
   'dismissedEventKeys',
   'visualSuggestions'

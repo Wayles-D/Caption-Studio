@@ -28,6 +28,7 @@ import {
   getAudioTrackDuration
 } from '../../../shared/audioTimeline.js';
 import { resolveSoundMapping, isKnownSemanticEventType , getSemanticEventKey } from '../../../shared/soundProfiles.js';
+import { selectDirectedMoments, resolveDirectedPlacement } from '../../../shared/sfxDirection.js';
 import { getSoundDefinition, isKnownSoundId } from '../../../shared/soundRegistry.js';
 
 /** The playhead — the same `#preview-video` element every other part of the editor treats as the single source of time. */
@@ -449,7 +450,24 @@ export function applySemanticEvents(semanticEvents, { force = false } = {}) {
   const dismissed = new Set(appState.dismissedEventKeys || []);
   const claimed = new Set(kept.map((e) => e.eventKey).filter(Boolean));
 
-  const generated = stored
+  // THE DIRECTOR (shared/sfxDirection.js). The analysis reports every moment
+  // it noticed; this is where a shortlist becomes an edit. List beats come
+  // back untouched — they are the original behaviour and their repetition is
+  // the point — while expressive moments compete for a per-video budget and
+  // are held apart from each other and from the list beats.
+  //
+  // Deliberately re-run on every call rather than cached: switching profile,
+  // toggling auto effects and moving the sensitivity slider all route through
+  // here, and all three must re-decide from the stored analysis without
+  // another model call.
+  const { structural, directed } = selectDirectedMoments(stored, {
+    duration: getVideoDuration(),
+    sensitivity: appState.sfxSensitivity
+  });
+  const directedKeys = new Set(directed.map((e) => getSemanticEventKey(e)).filter(Boolean));
+  const placeable = [...structural, ...directed].sort((a, b) => a.timestamp - b.timestamp);
+
+  const generated = placeable
     .map((event) => {
       const key = getSemanticEventKey(event);
       if (!key || dismissed.has(key) || claimed.has(key)) return null;
@@ -469,10 +487,25 @@ export function applySemanticEvents(semanticEvents, { force = false } = {}) {
       const userPinned = Object.prototype.hasOwnProperty.call(appState.soundEventMapping || {}, event.type);
       const soundId = (!userPinned && isKnownSoundId(event.soundId)) ? event.soundId : mapped;
 
+      // Level and length. Only DIRECTED moments get them: a list beat is left
+      // exactly as it was placed before this feature existed — the sound's own
+      // default volume and its natural length — because changing how the
+      // original behaviour sounds is not what widening the analysis was for.
+      //
+      // For an accent, the level follows the model's confidence and the length
+      // is capped, which is what keeps a micro-SFX micro: the library holds
+      // beds and stings several seconds long, and the analysis is allowed to
+      // name one. Both are ordinary starting values on an ordinary clip, so
+      // the creator can stretch or re-level it afterwards like any other.
+      const placement = directedKeys.has(key)
+        ? resolveDirectedPlacement(getSoundDefinition(soundId).defaultVolume, event.intensity)
+        : null;
+
       return createSoundEvent(soundId, event.timestamp, {
         source: 'ai',
         eventType: event.type,
-        eventKey: key
+        eventKey: key,
+        ...(placement || {})
       });
     })
     .filter(Boolean);
@@ -496,6 +529,21 @@ export function setAutoSoundEffects(enabled) {
   updateState({ autoSoundEffects: !!enabled }, { recordHistory: true });
   if (enabled) regenerateAutoSoundEffects();
   else clearAutoSoundEffects();
+}
+
+/**
+ * How freely the director places accents. Re-derives immediately from the
+ * STORED analysis — no model call, same as switching profile.
+ *
+ * `recordHistory` is false while the slider is being dragged and true on
+ * release, the same drag/commit split every other continuous control here
+ * uses; without it a single drag would push a history entry per pixel.
+ */
+export function setSfxSensitivity(value, { recordHistory = true } = {}) {
+  const next = Math.min(1, Math.max(0, Number(value)));
+  if (!Number.isFinite(next)) return;
+  updateState({ sfxSensitivity: next }, { recordHistory });
+  if (appState.autoSoundEffects) regenerateAutoSoundEffects();
 }
 
 export function setSoundProfile(profileId) {

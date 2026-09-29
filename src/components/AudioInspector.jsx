@@ -26,6 +26,7 @@ import {
   listSoundProfiles,
   SEMANTIC_EVENT_TYPES,
   SEMANTIC_EVENT_LABELS,
+  getSemanticEventKey,
   resolveSoundMapping
 } from '../../shared/soundProfiles.js';
 import { getAudioTrackDuration } from '../../shared/audioTimeline.js';
@@ -80,6 +81,16 @@ const ApplyAllIcon = () => (
 /** One row of the Sound Effects list. */
 function SoundEventRow({ event, isSelected }) {
   const definition = getSoundDefinition(event.soundId);
+  // The moment this clip came from, for the provenance line below. Looked up
+  // by eventKey rather than copied onto the clip: the analysis is the durable
+  // record (see audioStore.js) and `reason`/`intensity` are things it said,
+  // not properties of the audio. A clip whose moment has since been
+  // re-analysed away simply shows less.
+  const moment = useAudioStore((s) =>
+    (event.source === 'ai' && event.eventKey
+      ? s.semanticEvents?.find((m) => getSemanticEventKey(m) === event.eventKey)
+      : null) || null
+  );
   return (
     <div
       className={`flex flex-col gap-2 p-2.5 rounded-[var(--radius-sm)] border bg-[var(--bg-input)] cursor-pointer
@@ -154,6 +165,8 @@ function SoundEventRow({ event, isSelected }) {
       {event.source === 'ai' && event.eventType && (
         <span className="text-[10px] text-[var(--text-muted)]">
           Auto · {SEMANTIC_EVENT_LABELS[event.eventType] || event.eventType}
+          {moment?.reason ? ` · ${moment.reason.replace(/_/g, ' ')}` : ''}
+          {Number.isFinite(moment?.intensity) ? ` · ${Math.round(moment.intensity * 100)}%` : ''}
         </span>
       )}
     </div>
@@ -247,6 +260,7 @@ export function AudioInspector({ onNotify }) {
   const soundEvents = useAudioStore((s) => s.soundEvents);
   const audioTracks = useAudioStore((s) => s.audioTracks);
   const autoSoundEffects = useAudioStore((s) => s.autoSoundEffects);
+  const sfxSensitivity = useAudioStore((s) => s.sfxSensitivity);
   const soundProfileId = useAudioStore((s) => s.soundProfileId);
   const soundEventMapping = useAudioStore((s) => s.soundEventMapping);
   const semanticEvents = useAudioStore((s) => s.semanticEvents);
@@ -334,9 +348,9 @@ export function AudioInspector({ onNotify }) {
           />
         </div>
         <p className={HINT}>
-          Reads the transcript — never the video — for moments like list items and reveals,
-          then places an effect at each one. Turning this off keeps the analysis; it only
-          stops effects being placed for you.
+          Reads the transcript — never the video — for moments worth marking: list items,
+          reveals, hooks, payoffs. It places an effect at only the strongest of them.
+          Turning this off keeps the analysis; it only stops effects being placed for you.
         </p>
 
         <label className="flex flex-col gap-1.5">
@@ -344,6 +358,29 @@ export function AudioInspector({ onNotify }) {
           <select className={SELECT} value={soundProfileId} onChange={(e) => audio.setSoundProfile(e.target.value)}>
             {listSoundProfiles().map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
+        </label>
+
+        {/* How much emphasis. This moves a confidence THRESHOLD, not a count —
+            which is why even "More" stays sparse, and why the slider can
+            re-judge the whole video from the stored analysis with no second
+            model call. List beats are unaffected by it on purpose: they are
+            structure, and a list with half its items marked is worse than
+            either extreme. */}
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]">
+            How much emphasis
+          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-[var(--text-muted)] shrink-0">Rare</span>
+            <input
+              id="sfx-sensitivity"
+              type="range" min="0" max="100" step="5" className={SLIDER}
+              value={Math.round(sfxSensitivity * 100)}
+              onChange={(e) => audio.setSfxSensitivity(Number(e.target.value) / 100, { recordHistory: false })}
+              onPointerUp={(e) => audio.setSfxSensitivity(Number(e.target.value) / 100)}
+            />
+            <span className="text-[10px] text-[var(--text-muted)] shrink-0">More</span>
+          </div>
         </label>
 
         <div className="grid grid-cols-2 gap-2">

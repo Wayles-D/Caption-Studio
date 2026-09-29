@@ -39,8 +39,16 @@ const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
  *     into that word's own real `start`, so an effect lands exactly on the
  *     word rather than near it.
  *
+ *   - It rates each moment's INTENSITY but does not decide how many survive.
+ *     A model told to "be selective" is being asked to hold a budget across a
+ *     whole transcript, which it cannot check and nobody can test. It proposes
+ *     candidates with confidences; shared/sfxDirection.js does the arithmetic
+ *     that turns those into a handful. The prompt still argues for restraint,
+ *     because a better-judged shortlist makes the director's job easier — but
+ *     nothing depends on it complying.
+ *
  *   - It never sees the video. Everything here is derived from the spoken
- *     content, deliberately.
+ *     content, deliberately. No frames are sent anywhere.
  */
 /**
  * Built per call rather than once at module load, so the sound enumeration
@@ -57,17 +65,29 @@ You have three jobs:
 (1) KEYWORDS — identify which words deserve visual emphasis when displayed as captions.
 - Favor concrete nouns, numbers, strong verbs, and emotionally/thematically significant words. Avoid common filler words (the, a, is, and, etc.).
 
-(2) EVENTS — identify structural/semantic moments in what is being SAID.
+(2) EVENTS — identify moments in what is being SAID that an editor would mark with a short sound.
 - Allowed "type" values, and nothing else: ${SEMANTIC_EVENT_TYPES.join(', ')}.
 - "list_start": the moment the speaker announces a list ("here are five things you need to know").
 - "list_item": the beginning of each individual item ("number one", "number two", "first", "second"). Give each one a 1-based "index".
-- "emphasis": a word the speaker is clearly stressing.
+- "hook": the opening line that makes someone keep watching.
+- "emphasis": a phrase carrying real rhetorical weight.
 - "reveal": the moment something new is presented or shown.
-- "transition": a shift between topics or sections.
+- "transition": a shift between topics, or a turn in the speaker's thinking.
 - "question" / "answer": a question being posed, and where it gets answered.
 - "important_statement": a standout claim or takeaway.
+- "dramatic": a surprising, tense or high-stakes beat.
+- "punchline": the landing of a joke or a comedic turn.
+- "conclusion": the payoff, or the line the whole video was building to.
 - Point at the FIRST word of the moment using "wordIndex". Never output a timestamp — you are not given any and must not infer one.
-- Be conservative. Only report a moment you would actually mark up. An empty list is a valid, good answer.
+- Add "endWordIndex" for the last word of the phrase the moment covers, when the moment is a phrase rather than a single word.
+- Give every event an "intensity" from 0 to 1: how strongly you believe this moment deserves emphasis. Use the whole range and be honest — 0.9 means "an editor would certainly mark this", 0.5 means "arguable". These are compared against each other, so do not rate everything highly.
+- Give every event a "reason": two or three words on why, in lower_snake_case (e.g. "opening_hook", "surprising_claim", "list_transition").
+
+JUDGEMENT — this matters more than coverage:
+- Sound effects work by being rare. A whole video usually deserves only a HANDFUL of these moments outside of list items. Five sentences with five sounds is a worse edit than five sentences with one.
+- Judge the phrase in context, not the word on its own. "I bought a new chair yesterday" has no moment in it; "here's the one thing nobody tells you about buying a chair" opens with a hook.
+- Do not mark a moment merely because it contains an important-sounding noun. A significant word matters only when the surrounding sentence gives it rhetorical weight.
+- An empty list is a valid, good answer for content that is simply informative.
 - You MAY also suggest a sound effect for a moment, as "soundId". It must be copied EXACTLY from the library below — never invent one, never translate it, never use the display name in brackets. Omit "soundId" entirely when no sound in the library genuinely fits; a moment with no sound is better than a wrong one.
 - Pick for MEANING, not novelty. A meme or music sting is right only when the speech is actually doing that thing; most moments want something small or nothing at all.
 - Never put the same loud sting on more than a couple of moments in one video.
@@ -86,7 +106,7 @@ Strict rules:
 - Match every reference strictly by "wordIndex" from the input — never by matching text.
 - Respond with ONLY a JSON object of the exact shape:
   {"keywords":[{"wordIndex":<int>,"confidence":<0-1 number>}],
-   "events":[{"type":"<allowed type>","wordIndex":<int>,"index":<optional 1-based int>,"soundId":"<optional id from the library>"}],
+   "events":[{"type":"<allowed type>","wordIndex":<int>,"endWordIndex":<optional int>,"index":<optional 1-based int>,"intensity":<0-1 number>,"reason":"<lower_snake_case>","soundId":"<optional id from the library>"}],
    "visualSuggestions":[{"type":"<allowed type>","wordIndex":<int>,"index":<optional 1-based int>}]}
 - No prose, no markdown, no explanation — JSON only.`;
 }
@@ -156,6 +176,36 @@ function resolveEventTimestamps(rawList, words, { allowSoundId = false } = {}) {
     // pictures — so they do not even look.
     const soundId = allowSoundId && isKnownSoundId(entry.soundId) ? entry.soundId : null;
 
+    // How strongly the model rates this moment, which is what the director
+    // ranks and thresholds on (shared/sfxDirection.js). Out-of-range is
+    // clamped rather than dropped — a model answering 1.5 still means "very
+    // confident", and discarding that reads as the moment not existing.
+    // Absent means absent: the director treats a missing intensity as
+    // middling, and writing a default in here would erase the difference
+    // between "rated 0.5" and "not rated".
+    const rawIntensity = Number(entry.intensity);
+    const intensity = Number.isFinite(rawIntensity)
+      ? Math.min(1, Math.max(0, rawIntensity))
+      : null;
+
+    // Why the model marked it, shown to the creator as provenance. Free text
+    // from a model, so it is length-capped and stripped of anything that is
+    // not a word — it is a label, never markup and never a sound id.
+    const reason = typeof entry.reason === 'string'
+      ? entry.reason.trim().toLowerCase().replace(/[^a-z0-9_ -]/g, '').slice(0, 40) || null
+      : null;
+
+    // The phrase the moment covers. Only kept when it is a real range inside
+    // the transcript; a backwards or out-of-range end is dropped and the
+    // moment stays anchored to its single start word.
+    const rawEnd = Number(entry.endWordIndex);
+    const endWordIndex = Number.isInteger(rawEnd) && rawEnd >= wordIndex && rawEnd < words.length
+      ? rawEnd
+      : null;
+    const endTimestamp = endWordIndex != null
+      ? Number(words[endWordIndex]?.end ?? words[endWordIndex]?.start)
+      : null;
+
     resolved.push({
       type: entry.type,
       wordIndex,
@@ -165,6 +215,10 @@ function resolveEventTimestamps(rawList, words, { allowSoundId = false } = {}) {
       word: (word.word || word.text || '').trim(),
       timestamp: start,
       ...(Number.isInteger(index) && index > 0 ? { index } : {}),
+      ...(intensity != null ? { intensity } : {}),
+      ...(reason ? { reason } : {}),
+      ...(endWordIndex != null ? { endWordIndex } : {}),
+      ...(Number.isFinite(endTimestamp) && endTimestamp > start ? { endTimestamp } : {}),
       ...(soundId ? { soundId } : {})
     });
   }

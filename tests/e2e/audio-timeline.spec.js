@@ -512,10 +512,16 @@ test('re-analysis is idempotent and never duplicates a handled moment', async ({
   await loadDemoVideo(page);
 
   const counts = await page.evaluate(() => {
+    // The emphasis sits well clear of the list beats on purpose. The director
+    // (shared/sfxDirection.js) drops an accent landing within ~1.5s of an
+    // already-placed beat, so at 3.0 it would be rejected as too-close and
+    // this test would be asserting the spacing rule instead of idempotency,
+    // which is what it is here to check. The spacing rule has its own coverage
+    // in micro-sfx.spec.js and backend/test_audio_pipeline.js.
     const analysis = [
       { type: 'list_item', index: 1, timestamp: 1.0 },
       { type: 'list_item', index: 2, timestamp: 2.0 },
-      { type: 'emphasis', timestamp: 3.0 }
+      { type: 'emphasis', timestamp: 6.0 }
     ];
     const seen = [];
     for (let i = 0; i < 4; i++) {

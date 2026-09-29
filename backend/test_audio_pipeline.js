@@ -26,6 +26,7 @@ import {
 import { SOUND_REGISTRY, SOUND_IDS, resolveSoundUrl, getSoundDefinition, describeSoundLibraryForPrompt } from '../shared/soundRegistry.js';
 import { resolveSoundMapping, SEMANTIC_EVENT_TYPES, isKnownSemanticEventType } from '../shared/soundProfiles.js';
 import { resolveEventTimestamps, buildSystemPrompt } from './services/keywordAnalysisService.js';
+import { selectDirectedMoments, resolveDirectedPlacement, isStructuralMomentType, MICRO_MAX_DURATION } from '../shared/sfxDirection.js';
 import { buildAudioMixGraph, SOUNDS_DIR, resolveAudioAssetPath } from './utils/audioMixFilter.js';
 
 console.log('--- Starting Caption Studio Audio Timeline Verification ---');
@@ -120,7 +121,141 @@ assert.strictEqual(named[2].soundId, undefined, 'An event with no suggestion sim
 // model volunteers one.
 const visual = resolveEventTimestamps([{ type: 'reveal', wordIndex: 9, soundId: 'netflix-intro' }], words);
 assert.strictEqual(visual[0].soundId, undefined, 'Visual suggestions never carry a sound id');
-console.log(`✓ All ${SOUND_IDS.length} sounds offered to the model; invented ids dropped, events kept`);
+// Intensity, reason and the phrase range. Each is validated INDEPENDENTLY: a
+// malformed one costs its own field, never the moment, because a moment the
+// model correctly spotted should not vanish over a stray confidence value.
+const rated = resolveEventTimestamps(
+  [
+    { type: 'hook', wordIndex: 8, intensity: 0.92, reason: 'Opening_Hook!!', endWordIndex: 11 },
+    { type: 'emphasis', wordIndex: 13, intensity: 1.8 },           // out of range
+    { type: 'reveal', wordIndex: 17, intensity: 'very', reason: 42 }, // wrong types
+    { type: 'dramatic', wordIndex: 9, endWordIndex: 2 }             // backwards range
+  ],
+  words,
+  { allowSoundId: true }
+);
+const byType = Object.fromEntries(rated.map((e) => [e.type, e]));
+assert.strictEqual(rated.length, 4, 'A bad intensity or range costs the FIELD, not the moment');
+assert.strictEqual(byType.hook.intensity, 0.92, 'A stated confidence is carried through');
+assert.strictEqual(byType.hook.reason, 'opening_hook', 'The reason is normalized to a plain lower-case label');
+assert.strictEqual(byType.hook.endWordIndex, 11, 'A valid phrase range is kept');
+assert.ok(byType.hook.endTimestamp > byType.hook.timestamp, 'The range resolves to real transcript times, same as the start');
+assert.strictEqual(byType.emphasis.intensity, 1, 'An out-of-range confidence is clamped, not discarded');
+assert.strictEqual(byType.reveal.intensity, undefined, 'A non-numeric confidence is absent, not defaulted — "unrated" and "rated 0.5" differ');
+assert.strictEqual(byType.reveal.reason, undefined, 'A non-string reason is dropped');
+assert.strictEqual(byType.dramatic.endWordIndex, undefined, 'A backwards range is dropped; the moment stays anchored to its start word');
+// Every timestamp still comes from the transcript — the new fields change
+// nothing about the single clock.
+rated.forEach((e) => assert.ok(words.some((w) => Math.abs(w.start - e.timestamp) < 1e-9), 'Every moment still lands on a real word start'));
+
+// The expressive vocabulary the director ranks must actually be sayable by the
+// model, or the whole category is unreachable.
+['hook', 'dramatic', 'punchline', 'conclusion'].forEach((type) => {
+  assert.ok(prompt.includes(type), `The prompt enumerates "${type}"`);
+  assert.ok(isKnownSemanticEventType(type), `"${type}" is a known semantic type`);
+});
+console.log(`✓ All ${SOUND_IDS.length} sounds offered to the model; invented ids dropped, events kept; intensity/reason/range validated per-field`);
+
+
+// 2c. The director — which proposed moments become sounds. This is the
+// arithmetic that keeps an edit sparse, and it is the reason the model is not
+// asked to hold a budget it cannot check.
+console.log('\n[Test 2c] The Director Keeps The Edit Sparse');
+
+// A 60-second video: one three-item list, plus eight expressive moments the
+// analysis rated differently.
+const proposed = [
+  { type: 'list_start', timestamp: 2.6 },
+  { type: 'list_item', timestamp: 3.4, index: 1 },
+  { type: 'list_item', timestamp: 7.1, index: 2 },
+  { type: 'list_item', timestamp: 11.5, index: 3 },
+  { type: 'hook', timestamp: 0.8, intensity: 0.92, reason: 'opening_hook' },
+  { type: 'emphasis', timestamp: 3.9, intensity: 0.70 },   // lands on a list beat
+  { type: 'emphasis', timestamp: 18.0, intensity: 0.60 },
+  { type: 'important_statement', timestamp: 24.0, intensity: 0.85 },
+  { type: 'emphasis', timestamp: 30.0, intensity: 0.40 },  // weak
+  { type: 'dramatic', timestamp: 36.0, intensity: 0.80 },
+  { type: 'punchline', timestamp: 42.0, intensity: 0.50 }, // weak
+  { type: 'conclusion', timestamp: 55.0, intensity: 0.90 }
+];
+
+const directed = selectDirectedMoments(proposed, { duration: 60, sensitivity: 0.5 });
+
+// THE LIST IS UNTOUCHED. This is the behaviour that existed before the
+// director and the one thing it must never thin out: a creator who says "here
+// are five things" expects five beats, not the two strongest.
+assert.deepStrictEqual(
+  directed.structural.map((e) => e.timestamp),
+  [2.6, 3.4, 7.1, 11.5],
+  'Every list moment survives, in order, regardless of budget'
+);
+directed.structural.forEach((e) => assert.ok(isStructuralMomentType(e.type), 'Only list moments are exempt'));
+
+// Sparse: a 60s video does not get eight accents just because eight were
+// proposed.
+assert.ok(directed.directed.length < 8, 'Not every proposed moment is placed');
+assert.strictEqual(directed.directed.length, 5, 'A 60s video takes five accents at the default budget');
+assert.deepStrictEqual(
+  directed.directed.map((e) => e.timestamp),
+  [0.8, 18.0, 24.0, 36.0, 55.0],
+  'Placed in time order, whatever order they were ranked in'
+);
+
+// ...and it dropped the RIGHT ones, for stated reasons.
+const why = Object.fromEntries(directed.rejected.map((r) => [r.event.timestamp, r.reason]));
+assert.strictEqual(why[30.0], 'below-threshold', 'A weakly-rated moment is not placed');
+assert.strictEqual(why[42.0], 'below-threshold', 'Nor is a middling one');
+// The one that matters most: an accent must never stack on a list beat.
+assert.strictEqual(why[3.9], 'too-close', 'A moment landing on a list beat is dropped, not layered');
+
+// No two sounds closer than the minimum gap — across BOTH kinds, which is what
+// makes the check above general rather than a special case for lists.
+const allTimes = [...directed.structural, ...directed.directed].map((e) => e.timestamp).sort((a, b) => a - b);
+for (let i = 1; i < allTimes.length; i++) {
+  const gap = allTimes[i] - allTimes[i - 1];
+  assert.ok(gap >= 0.7, `Placed sounds stay apart (${allTimes[i - 1]} -> ${allTimes[i]} = ${gap.toFixed(2)}s)`);
+}
+
+// Sensitivity moves the threshold, never the structure — and "more" is still
+// not "everything".
+const rare = selectDirectedMoments(proposed, { duration: 60, sensitivity: 0 });
+const more = selectDirectedMoments(proposed, { duration: 60, sensitivity: 1 });
+assert.ok(rare.directed.length <= directed.directed.length, 'Rare places no more than the default');
+assert.ok(more.directed.length >= directed.directed.length, 'More places no fewer');
+assert.ok(more.directed.length < 8, 'Even at maximum sensitivity it does not place everything proposed');
+assert.strictEqual(more.structural.length, 4, 'Sensitivity never touches the list beats');
+
+// A long video does not get a proportional flood; a short one still gets
+// something. Both are the per-minute rate hitting its cap and its floor.
+const many = Array.from({ length: 200 }, (_, i) => ({ type: 'emphasis', timestamp: i * 3, intensity: 0.95 }));
+assert.ok(selectDirectedMoments(many, { duration: 600 }).directed.length <= 12, 'A 10-minute video is capped, not scaled');
+assert.ok(selectDirectedMoments(many.slice(0, 4), { duration: 8 }).directed.length >= 1, 'A very short clip still gets an accent');
+
+// Unknown duration must not mean unlimited.
+assert.ok(selectDirectedMoments(many, {}).directed.length <= 12, 'An unmeasured video still gets a cap');
+
+// An analysis from before intensity existed is treated as middling, not
+// dropped — otherwise upgrading would look like the feature breaking.
+const legacy = [{ type: 'emphasis', timestamp: 5 }, { type: 'reveal', timestamp: 20 }];
+assert.strictEqual(selectDirectedMoments(legacy, { duration: 60, sensitivity: 1 }).directed.length, 2, 'Moments with no intensity still place');
+// ...including at the STRICTEST setting, which is the real regression guard:
+// the threshold judges a confidence the model stated, and an analysis stored
+// before intensity existed never had the chance to state one.
+assert.strictEqual(selectDirectedMoments(legacy, { duration: 60, sensitivity: 0 }).directed.length, 2, 'An unrated moment is never thresholded out, however strict the setting');
+// But it is still governed by the budget and the spacing, which is where
+// sparseness comes from for old and new analyses alike.
+const legacyFlood = Array.from({ length: 40 }, (_, i) => ({ type: 'emphasis', timestamp: i * 4 }));
+assert.ok(selectDirectedMoments(legacyFlood, { duration: 160 }).directed.length <= 12, 'An unrated flood is still capped');
+
+// Level follows confidence; length is capped so an accent stays an accent.
+const loud = resolveDirectedPlacement(0.7, 0.9);
+const soft = resolveDirectedPlacement(0.7, 0.2);
+assert.ok(loud.volume > soft.volume, 'A more confident moment is louder');
+assert.ok(loud.volume <= 0.7 * 1.1 + 1e-9, 'Intensity scales around the sound\'s own default rather than replacing it');
+assert.strictEqual(loud.duration, MICRO_MAX_DURATION, 'A micro-SFX is capped to a beat');
+assert.ok(loud.fadeOut > 0, 'The cap comes with a fade, or truncation clicks');
+assert.ok(resolveDirectedPlacement(0.7, 5).volume <= 2, 'An out-of-range intensity cannot exceed the volume ceiling');
+console.log(`✓ ${directed.structural.length} list beats kept; ${directed.directed.length} of 8 accents placed (${directed.rejected.map((r) => r.reason).join(', ')})`);
 
 // 3. The editor — not the model — decides what a moment sounds like.
 console.log('\n[Test 3] Semantic Event -> Sound Mapping Is Owned By The Editor');
