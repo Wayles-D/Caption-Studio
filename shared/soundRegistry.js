@@ -40,7 +40,17 @@
  * one view of it — the picker, and anything else that lists sounds later,
  * should not each invent their own idea of what "ui" means.
  */
-export const SOUND_CATEGORIES = [
+import { PACK_SOUNDS, PACK_FAMILIES, PACK_SECTIONS, PACK_DEFAULT_VOLUME, packFileName, usageFor } from './soundPack.js';
+
+/**
+ * The BHYND pack's families, as picker categories. Prefixed `bh-` because
+ * several pack families share a name with a classic category (`ui`,
+ * `motion`, `impact`, `tension`, `sting`) while meaning a different group of
+ * files, and a category is how the picker buckets sounds.
+ */
+export const packCategoryId = (family) => `bh-${family}`;
+
+const CLASSIC_CATEGORIES = [
   { id: 'ui', label: 'UI & Alerts' },
   { id: 'typing', label: 'Typing & Messaging' },
   { id: 'motion', label: 'Transitions & Risers' },
@@ -50,15 +60,31 @@ export const SOUND_CATEGORIES = [
   { id: 'sting', label: 'Stings' }
 ];
 
-export const SOUND_REGISTRY = {
+/**
+ * Sections: the level above categories. The pack's own sections first (Text
+ * & Captions, Cinematic, UI, Tech, Motion, Mood, Foley), then the original
+ * library under Classic. Four hundred sounds in one flat list is "here are
+ * 400 random sounds"; a section says which KIND of sound you are looking at.
+ */
+export const SOUND_SECTIONS = [
+  ...PACK_SECTIONS.map((s) => ({ id: s.id, label: s.label })),
+  { id: 'classic', label: 'Classic' }
+];
+
+export const SOUND_CATEGORIES = [
+  ...PACK_FAMILIES.map((f) => ({ id: packCategoryId(f.id), label: f.label, section: f.section })),
+  ...CLASSIC_CATEGORIES.map((c) => ({ ...c, section: 'classic' }))
+];
+
+const CLASSIC_SOUNDS = {
   // --- UI & Alerts ---------------------------------------------------------
-  tick: { id: 'tick', label: 'Tick', file: 'tick.mp3', category: 'ui', defaultVolume: 0.7 },
-  pop: { id: 'pop', label: 'Pop', file: 'pop.mp3', category: 'ui', defaultVolume: 0.7 },
-  click: { id: 'click', label: 'Click', file: 'click.mp3', category: 'ui', defaultVolume: 0.6 },
-  notification: { id: 'notification', label: 'Notification', file: 'notification.mp3', category: 'ui', defaultVolume: 0.55 },
-  ding: { id: 'ding', label: 'Ding', file: 'ding-sound-effect.mp3', category: 'ui', defaultVolume: 0.55 },
-  sparkle: { id: 'sparkle', label: 'Sparkle', file: 'sparkle.mp3', category: 'ui', defaultVolume: 0.5 },
-  'whatsapp-send': { id: 'whatsapp-send', label: 'WhatsApp Send', file: 'whatsapp-send.mp3', category: 'ui', defaultVolume: 0.6 },
+  tick: { id: 'tick', label: 'Tick', file: 'tick.mp3', category: 'ui', defaultVolume: 0.7, use: 'tiny dry tick; beat under each item of a list' },
+  pop: { id: 'pop', label: 'Pop', file: 'pop.mp3', category: 'ui', defaultVolume: 0.7, use: 'small bright pop; a word landing, a quick reveal' },
+  click: { id: 'click', label: 'Click', file: 'click.mp3', category: 'ui', defaultVolume: 0.6, use: 'soft UI click; a choice being made, an answer arriving' },
+  notification: { id: 'notification', label: 'Notification', file: 'notification.mp3', category: 'ui', defaultVolume: 0.55, use: 'phone notification chime; a message or alert being mentioned' },
+  ding: { id: 'ding', label: 'Ding', file: 'ding-sound-effect.mp3', category: 'ui', defaultVolume: 0.55, use: 'single clear bell; a correct answer, a point made' },
+  sparkle: { id: 'sparkle', label: 'Sparkle', file: 'sparkle.mp3', category: 'ui', defaultVolume: 0.5, use: 'light shimmer; something pleasing, a finishing touch' },
+  'whatsapp-send': { id: 'whatsapp-send', label: 'WhatsApp Send', file: 'whatsapp-send.mp3', category: 'ui', defaultVolume: 0.6, use: 'WhatsApp sent blip; a message being sent' },
 
   // --- Typing & Messaging --------------------------------------------------
   // These are TEXTURES rather than one-shots — several run for seconds of
@@ -66,50 +92,104 @@ export const SOUND_REGISTRY = {
   // per-use via `event.duration` + `fadeOut` (see
   // backend/utils/audioMixFilter.js), and their defaults sit low because a
   // bed under speech has to duck out of the way.
-  typing: { id: 'typing', label: 'Keyboard Typing', file: 'typing.mp3', category: 'typing', defaultVolume: 0.45 },
-  'typing-fast': { id: 'typing-fast', label: 'Typing (Fast)', file: 'typingssss.mp3', category: 'typing', defaultVolume: 0.45 },
-  'whatsapp-type': { id: 'whatsapp-type', label: 'WhatsApp Typing', file: 'whatsapp-type.mp3', category: 'typing', defaultVolume: 0.45 },
-  'iphone-typing': { id: 'iphone-typing', label: 'iPhone Typing', file: 'iphone-typing-text.mp3', category: 'typing', defaultVolume: 0.5 },
-  'iphone-delete': { id: 'iphone-delete', label: 'iPhone Delete', file: 'iphone-typing-text-deleting-letter.mp3', category: 'typing', defaultVolume: 0.5 },
+  typing: { id: 'typing', label: 'Keyboard Typing', file: 'typing.mp3', category: 'typing', defaultVolume: 0.45, use: 'seconds of keyboard typing; someone writing or coding' },
+  'typing-fast': { id: 'typing-fast', label: 'Typing (Fast)', file: 'typingssss.mp3', category: 'typing', defaultVolume: 0.45, use: 'fast frantic keystrokes; rushing, urgency at a keyboard' },
+  'whatsapp-type': { id: 'whatsapp-type', label: 'WhatsApp Typing', file: 'whatsapp-type.mp3', category: 'typing', defaultVolume: 0.45, use: 'WhatsApp typing bubble; a reply being written' },
+  'iphone-typing': { id: 'iphone-typing', label: 'iPhone Typing', file: 'iphone-typing-text.mp3', category: 'typing', defaultVolume: 0.5, use: 'iPhone keyboard taps; texting on a phone' },
+  'iphone-delete': { id: 'iphone-delete', label: 'iPhone Delete', file: 'iphone-typing-text-deleting-letter.mp3', category: 'typing', defaultVolume: 0.5, use: 'iPhone delete key; deleting or correcting a message' },
 
   // --- Transitions & Risers ------------------------------------------------
-  whoosh: { id: 'whoosh', label: 'Whoosh', file: 'whoosh.mp3', category: 'motion', defaultVolume: 0.5 },
-  swipe: { id: 'swipe', label: 'Swipe', file: 'swipe.mp3', category: 'motion', defaultVolume: 0.5 },
-  rewind: { id: 'rewind', label: 'Rewind', file: 'rewind.mp3', category: 'motion', defaultVolume: 0.5 },
-  'riser-metallic': { id: 'riser-metallic', label: 'Metallic Riser', file: 'ES_Riser Metallic - SFX Producer.mp3', category: 'motion', defaultVolume: 0.45 },
-  'riser-reverse': { id: 'riser-reverse', label: 'Reverse Riser', file: 'Reverse riser 02 - ( Sound Effects Transition )_25032024.m4a', category: 'motion', defaultVolume: 0.45 },
+  whoosh: { id: 'whoosh', label: 'Whoosh', file: 'whoosh.mp3', category: 'motion', defaultVolume: 0.5, use: 'short air whoosh; a cut, a scene change, a list opening' },
+  swipe: { id: 'swipe', label: 'Swipe', file: 'swipe.mp3', category: 'motion', defaultVolume: 0.5, use: 'quick swipe; moving between items or screens' },
+  rewind: { id: 'rewind', label: 'Rewind', file: 'rewind.mp3', category: 'motion', defaultVolume: 0.5, use: 'tape rewind; going back, replaying, a callback' },
+  'riser-metallic': { id: 'riser-metallic', label: 'Metallic Riser', file: 'ES_Riser Metallic - SFX Producer.mp3', category: 'motion', defaultVolume: 0.45, use: 'metallic riser building tension; leads INTO a reveal' },
+  'riser-reverse': { id: 'riser-reverse', label: 'Reverse Riser', file: 'Reverse riser 02 - ( Sound Effects Transition )_25032024.m4a', category: 'motion', defaultVolume: 0.45, use: 'reverse riser sucking inwards; leads into a cut or reveal' },
+  // Two takes of the same effect, kept as separate entries rather than one
+  // "Flicker" picking a winner — which take cuts better is a per-edit call,
+  // and an unpicked variant sitting unreachable on disk is the exact problem
+  // this registry exists to prevent.
+  'flicker-1': { id: 'flicker-1', label: 'Flicker (1)', file: 'flicker v1.mp3', category: 'motion', defaultVolume: 0.5, use: 'glitchy flicker; a glitch, a switch, a jarring beat' },
+  'flicker-2': { id: 'flicker-2', label: 'Flicker (2)', file: 'flicker v2.mp3', category: 'motion', defaultVolume: 0.5, use: 'glitchy flicker, second take; alternative to flicker-1' },
 
   // --- Impacts -------------------------------------------------------------
-  hit: { id: 'hit', label: 'Hit', file: 'hit.mp3', category: 'impact', defaultVolume: 0.6 },
-  shutter: { id: 'shutter', label: 'Camera Shutter', file: 'shutter.mp3', category: 'impact', defaultVolume: 0.6 },
-  cash: { id: 'cash', label: 'Cash Register', file: 'cash.mp3', category: 'impact', defaultVolume: 0.6 },
-  'core-hit': { id: 'core-hit', label: 'Core Hit', file: 'core-sound-effect.mp3', category: 'impact', defaultVolume: 0.55 },
+  hit: { id: 'hit', label: 'Hit', file: 'hit.mp3', category: 'impact', defaultVolume: 0.6, use: 'blunt impact; a hard statement landing' },
+  shutter: { id: 'shutter', label: 'Camera Shutter', file: 'shutter.mp3', category: 'impact', defaultVolume: 0.6, use: 'camera shutter; a photo, a camera, capturing something' },
+  cash: { id: 'cash', label: 'Cash Register', file: 'cash.mp3', category: 'impact', defaultVolume: 0.6, use: 'cash register ka-ching; money, price, profit, a sale' },
+  'core-hit': { id: 'core-hit', label: 'Core Hit', file: 'core-sound-effect.mp3', category: 'impact', defaultVolume: 0.55, use: 'deep cinematic boom; the heaviest statement in the video' },
 
   // --- Tension & Drama -----------------------------------------------------
-  tension: { id: 'tension', label: 'Tension', file: 'tension.mp3', category: 'tension', defaultVolume: 0.45 },
-  'clock-ticking': { id: 'clock-ticking', label: 'Clock Ticking', file: 'clock_ticking_edited-2.mp3', category: 'tension', defaultVolume: 0.45 },
-  'clock-fast': { id: 'clock-fast', label: 'Clock Ticking (Fast)', file: 'clock-ticking-fast.mp3', category: 'tension', defaultVolume: 0.5 },
-  'sad-violin': { id: 'sad-violin', label: 'Sad Violin', file: 'sad-violin.mp3', category: 'tension', defaultVolume: 0.5 },
-  'this-is-the-end': { id: 'this-is-the-end', label: 'This Is The End', file: 'this-is-the-end-adele.mp3', category: 'tension', defaultVolume: 0.5 },
+  tension: { id: 'tension', label: 'Tension', file: 'tension.mp3', category: 'tension', defaultVolume: 0.45, use: 'low tense drone; suspense, stakes, something worrying' },
+  'clock-ticking': { id: 'clock-ticking', label: 'Clock Ticking', file: 'clock_ticking_edited-2.mp3', category: 'tension', defaultVolume: 0.45, use: 'steady clock tick; time passing, a deadline' },
+  'clock-fast': { id: 'clock-fast', label: 'Clock Ticking (Fast)', file: 'clock-ticking-fast.mp3', category: 'tension', defaultVolume: 0.5, use: 'fast ticking clock; running out of time, urgency' },
+  'sad-violin': { id: 'sad-violin', label: 'Sad Violin', file: 'sad-violin.mp3', category: 'tension', defaultVolume: 0.5, use: 'tiny sad violin; mock pity, a small misfortune' },
+  'this-is-the-end': { id: 'this-is-the-end', label: 'This Is The End', file: 'this-is-the-end-adele.mp3', category: 'tension', defaultVolume: 0.5, use: 'Adele "this is the end"; something ending dramatically' },
 
   // --- Memes & Voices ------------------------------------------------------
-  'a-few-moments-later': { id: 'a-few-moments-later', label: 'A Few Moments Later', file: 'a-few-moments-later-sponge-bob-meme.mp3', category: 'meme', defaultVolume: 0.6 },
-  dexter: { id: 'dexter', label: 'Dexter', file: 'dexter-meme.mp3', category: 'meme', defaultVolume: 0.6 },
-  spiderman: { id: 'spiderman', label: 'Spider-Man Theme', file: 'spiderman-meme-song.mp3', category: 'meme', defaultVolume: 0.55 },
-  'let-him-cook': { id: 'let-him-cook', label: 'Let Him Cook', file: 'let-him-cook-now.mp3', category: 'meme', defaultVolume: 0.6 },
-  'who-are-you': { id: 'who-are-you', label: 'Who Are You', file: 'who-r-u-1.mp3', category: 'meme', defaultVolume: 0.6 },
-  'yep-thats-me': { id: 'yep-thats-me', label: "Yep, That's Me", file: 'yep_-that_s-me-you_re-probably-wondering.mp3', category: 'meme', defaultVolume: 0.6 },
-  faaah: { id: 'faaah', label: 'Faaah', file: 'faaah.mp3', category: 'meme', defaultVolume: 0.6 },
-  awww: { id: 'awww', label: 'Awww', file: 'awwwww.mp3', category: 'meme', defaultVolume: 0.6 },
-  romance: { id: 'romance', label: 'Romance', file: 'romanceeeeeeeeeeeeee.mp3', category: 'meme', defaultVolume: 0.55 },
-  'indian-song': { id: 'indian-song', label: 'Indian Song', file: 'indian-song.mp3', category: 'meme', defaultVolume: 0.5 },
+  'a-few-moments-later': { id: 'a-few-moments-later', label: 'A Few Moments Later', file: 'a-few-moments-later-sponge-bob-meme.mp3', category: 'meme', defaultVolume: 0.6, use: 'SpongeBob "a few moments later"; a time skip' },
+  dexter: { id: 'dexter', label: 'Dexter', file: 'dexter-meme.mp3', category: 'meme', defaultVolume: 0.6, use: 'Dexter meme sting; a comedic reveal or smug moment' },
+  spiderman: { id: 'spiderman', label: 'Spider-Man Theme', file: 'spiderman-meme-song.mp3', category: 'meme', defaultVolume: 0.55, use: 'Spider-Man theme; heroic or comedic triumph' },
+  'let-him-cook': { id: 'let-him-cook', label: 'Let Him Cook', file: 'let-him-cook-now.mp3', category: 'meme', defaultVolume: 0.6, use: '"let him cook"; someone doing something impressive' },
+  'who-are-you': { id: 'who-are-you', label: 'Who Are You', file: 'who-r-u-1.mp3', category: 'meme', defaultVolume: 0.6, use: '"who are you?"; a surprising identity or reveal' },
+  'yep-thats-me': { id: 'yep-thats-me', label: "Yep, That's Me", file: 'yep_-that_s-me-you_re-probably-wondering.mp3', category: 'meme', defaultVolume: 0.6, use: '"yep, that’s me, you’re probably wondering"; freeze-frame self-intro' },
+  faaah: { id: 'faaah', label: 'Faaah', file: 'faaah.mp3', category: 'meme', defaultVolume: 0.6, use: 'loud comedic "faaah"; an absurd or shocking beat' },
+  awww: { id: 'awww', label: 'Awww', file: 'awwwww.mp3', category: 'meme', defaultVolume: 0.6, use: 'crowd "awww"; something sweet or disappointing' },
+  romance: { id: 'romance', label: 'Romance', file: 'romanceeeeeeeeeeeeee.mp3', category: 'meme', defaultVolume: 0.55, use: 'swooning romance sting; a romantic or fawning beat' },
+  'indian-song': { id: 'indian-song', label: 'Indian Song', file: 'indian-song.mp3', category: 'meme', defaultVolume: 0.5, use: 'Indian song clip; comedic cultural punchline' },
 
   // --- Stings --------------------------------------------------------------
-  'netflix-intro': { id: 'netflix-intro', label: 'Netflix Intro', file: 'netflix-intro.mp3', category: 'sting', defaultVolume: 0.55 },
-  'netflix-intro-long': { id: 'netflix-intro-long', label: 'Netflix Intro (Long)', file: 'netflix-original-long-intro.mp3', category: 'sting', defaultVolume: 0.55 }
+  'netflix-intro': { id: 'netflix-intro', label: 'Netflix Intro', file: 'netflix-intro.mp3', category: 'sting', defaultVolume: 0.55, use: 'Netflix "ta-dum"; a dramatic reveal or title moment' },
+  'netflix-intro-long': { id: 'netflix-intro-long', label: 'Netflix Intro (Long)', file: 'netflix-original-long-intro.mp3', category: 'sting', defaultVolume: 0.55, use: 'full-length Netflix intro; a big title moment, used sparingly' }
 };
 
+/**
+ * The BHYND pack, registered from its generated manifest
+ * (shared/soundPackManifest.js) rather than typed out here: its files, labels,
+ * descriptions, tiers and MEASURED durations come from the generator
+ * (backend/scripts/generate-sound-pack.js), so a regenerated pack can never
+ * disagree with the registry about what it contains.
+ *
+ * Every pack sound shares one default volume, because the pack IS
+ * loudness-matched — each family is mastered to its own level under speech
+ * at that volume (see soundPack.js), which is the difference from the classic
+ * assets above, each of which needed its own number.
+ */
+const PACK_REGISTRY = Object.fromEntries(PACK_SOUNDS.map((s) => [s.id, {
+  id: s.id,
+  label: s.label,
+  file: packFileName(s.id),
+  category: packCategoryId(s.family),
+  defaultVolume: PACK_DEFAULT_VOLUME,
+  use: s.use,
+  pack: true,
+  family: s.family,
+  tier: s.tier,
+  // 'word' — dry and tail-free, safe on consecutive words; 'moment' — for the
+  // few beats that deserve weight or a tail.
+  usage: usageFor(s),
+  tags: s.tags,
+  ...(s.literal ? { literal: true } : {}),
+  duration: s.duration
+}]));
+
+const CLASSIC_SECTION = Object.fromEntries(Object.keys(CLASSIC_SOUNDS).map((id) => [id, { ...CLASSIC_SOUNDS[id], section: 'classic' }]));
+
+export const SOUND_REGISTRY = { ...PACK_REGISTRY, ...CLASSIC_SECTION };
+
 export const SOUND_IDS = Object.keys(SOUND_REGISTRY);
+
+/**
+ * The ids the ANALYSIS MODEL is told about by name: the classic library plus
+ * the pack's LITERAL sounds (foley — a pencil, a camera shutter, a keyboard:
+ * things a word can literally be).
+ *
+ * Not the whole pack, and deliberately. The model runs under a budget of
+ * 8,000 tokens a minute (see keywordAnalysisService.js), and describing all
+ * ~400 sounds would cost more than that on its own. It does not need to: it
+ * picks a STYLE of sound per moment (a category — see soundProfiles.js), and
+ * the category resolves to pack sounds here in BHYND. Names are only for the
+ * literal case, where the word IS the thing a specific sound depicts.
+ */
+export const PROMPT_SOUND_IDS = SOUND_IDS.filter((id) => !SOUND_REGISTRY[id].pack || SOUND_REGISTRY[id].literal);
 
 /** Fallback for an unknown/removed sound ID, so a stale project never renders silence with no explanation. */
 export const FALLBACK_SOUND_ID = 'tick';
@@ -152,10 +232,65 @@ export function listSoundsByCategory() {
     else extras.push(sound);
   });
   const groups = SOUND_CATEGORIES
-    .map((c) => ({ id: c.id, label: c.label, sounds: byCategory.get(c.id) }))
+    .map((c) => ({ id: c.id, label: c.label, section: c.section, sounds: byCategory.get(c.id) }))
     .filter((group) => group.sounds.length > 0);
-  if (extras.length) groups.push({ id: 'other', label: 'Other', sounds: extras });
+  if (extras.length) groups.push({ id: 'other', label: 'Other', section: 'classic', sounds: extras });
   return groups;
+}
+
+/** The grouped library one level up: `[{ id, label, groups }]` in SOUND_SECTIONS order, empty sections skipped. */
+export function listSoundSections() {
+  const groups = listSoundsByCategory();
+  return SOUND_SECTIONS
+    .map((s) => ({ id: s.id, label: s.label, groups: groups.filter((g) => g.section === s.id) }))
+    .filter((s) => s.groups.length > 0);
+}
+
+/**
+ * The library written out for the content-analysis prompt, grouped by
+ * category: the exact, closed set of sound IDs the model may name.
+ *
+ * GENERATED, never hand-written. That is the whole point. The original design
+ * kept sound names out of the prompt because hard-coding them would mean
+ * re-prompting and re-validating the model every time the sound design
+ * changed — a real cost, and the reason the model was only ever told about
+ * meaning. Deriving the list from the registry removes that cost: adding an
+ * asset here offers it to the model on the very next call, with no prompt
+ * edit and nothing to keep in sync. What remains true is that the model
+ * cannot invent an ID, because everything it returns is checked back against
+ * this same registry (see isKnownSoundId).
+ *
+ * Each entry carries its `use` — what the sound IS and when to reach for it —
+ * because a name is not a description. "faaah (Faaah)" and "core-hit (Core
+ * Hit)" tell a model nothing it can act on, so it was picking by whichever id
+ * looked vaguely apt and defaulting to the three or four with self-evident
+ * names. A sound nobody can tell apart from its label is functionally missing
+ * from the library however carefully it is registered, which is the same
+ * failure as not registering it at all.
+ *
+ * Still generated, so the cost of describing a sound is paid once, here, next
+ * to the asset it describes — not in a prompt that would then have to be kept
+ * in step with the registry by hand.
+ */
+export function describeSoundLibraryForPrompt() {
+  const offered = new Set(PROMPT_SOUND_IDS);
+  return listSoundsByCategory()
+    .map((group) => {
+      const sounds = group.sounds.filter((s) => offered.has(s.id));
+      if (!sounds.length) return null;
+      // The pack's literal sounds are listed by id alone, grouped: their ids
+      // already say what they depict ("camera-shutter", "writing-pencil-underline"),
+      // and a description apiece would spend the model's token budget
+      // restating the name. The classic assets keep theirs — "faaah" says nothing.
+      // Where an id does NOT say it ("comedy-awkward" is crickets), its label rides along.
+      const says = (s) => s.label.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2).every((w) => s.id.includes(w.slice(0, 4)));
+      const named = (s) => (says(s) ? s.id : `${s.id} (${s.label})`);
+      if (sounds.every((s) => s.pack)) return `${group.label}: ${sounds.map(named).join(', ')}`;
+      const lines = sounds.map((s) => `  ${s.id} — ${s.use || s.label}`);
+      return `${group.label}:\n${lines.join('\n')}`;
+    })
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**

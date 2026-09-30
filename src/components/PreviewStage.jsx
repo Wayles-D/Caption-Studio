@@ -110,7 +110,7 @@ export function PreviewStage({
               />
             )}
             <h3 id="preview-processing-title">{processingTitle}</h3>
-            <p id="preview-processing-text">Whisper AI extracting word timestamps</p>
+            <p id="preview-processing-text">Extracting word timestamps</p>
           </div>
         </div>
 

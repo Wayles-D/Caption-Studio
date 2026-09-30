@@ -242,8 +242,24 @@ export function App() {
   const [splashing, setSplashing] = useState(shouldShowSplash);
 
   const [soundLibraryOpen, setSoundLibraryOpen] = useState(false);
-  const closeSoundLibrary = useCallback(() => setSoundLibraryOpen(false), []);
-  const toggleSoundLibrary = useCallback(() => setSoundLibraryOpen((open) => !open), []);
+  // Which clip the library is REPLACING the sound on, or null when it is
+  // simply browsing. One panel, two jobs — see SoundLibraryPanel for why that
+  // is one surface rather than two.
+  const [soundReplaceTargetId, setSoundReplaceTargetId] = useState(null);
+  const closeSoundLibrary = useCallback(() => {
+    setSoundLibraryOpen(false);
+    setSoundReplaceTargetId(null);
+  }, []);
+  const toggleSoundLibrary = useCallback(() => {
+    // The "+" always means "add", so re-pressing it while a replace is open
+    // drops the target rather than silently replacing with the next pick.
+    setSoundReplaceTargetId(null);
+    setSoundLibraryOpen((open) => !open);
+  }, []);
+  const openSoundReplace = useCallback((clipId) => {
+    setSoundReplaceTargetId(clipId);
+    setSoundLibraryOpen(true);
+  }, []);
   const desktopSidePanelElRef = useRef(null);
   const advancedPanelBodyRef = useRef(null);
   const timelinePanelRef = useRef(null);
@@ -436,9 +452,15 @@ export function App() {
       updateState({ visualSuggestions: data.visualSuggestions || [] }, { recordHistory: false });
       const placed = applySemanticEvents(data.contentEvents || []);
 
-      showToast(placed.length > 0
-        ? `Subtitles generated — and ${placed.length} sound effect${placed.length === 1 ? '' : 's'} placed from the transcript.`
-        : 'Subtitles generated successfully!');
+      // Three different outcomes that used to share one message. A rate-limited
+      // or failed analysis reported "Subtitles generated successfully!" — true,
+      // and exactly as quiet as a video with no moments in it, so there was no
+      // way to tell "BHYND found nothing" from "BHYND never looked".
+      showToast(data.analysisError
+        ? `Subtitles generated. Sound effects weren't placed — ${data.analysisError.message}`
+        : placed.length > 0
+          ? `Subtitles generated — and ${placed.length} sound effect${placed.length === 1 ? '' : 's'} placed from the transcript.`
+          : 'Subtitles generated successfully!');
       // Transcript chips rebuild reactively inside RightInspector's own
       // effect (keyed on the `words` field this updateState call just set).
     } catch (err) {
@@ -701,6 +723,7 @@ export function App() {
           onAdvancedToggle={onAdvancedToggle}
           onSoundLibraryToggle={toggleSoundLibrary}
           onSoundLibraryClose={closeSoundLibrary}
+          onSoundReplace={openSoundReplace}
         />
       </div>
 
@@ -720,7 +743,7 @@ export function App() {
           className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
           style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
         >
-          <SoundLibraryPanel onClose={closeSoundLibrary} />
+          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} />
         </div>
       )}
 

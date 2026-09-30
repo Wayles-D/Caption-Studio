@@ -1484,6 +1484,42 @@ body.light-theme {
   text-overflow: ellipsis;
 }
 
+/* Replace, on the capsule. Hidden until the clip is hovered, focused or
+   selected — a lane of effects each wearing a permanent button is unreadable,
+   and the capsule's job at rest is to show WHEN something happens. It still
+   has a real hit area whenever it is showing, and keyboard focus reveals it,
+   so it is not a hover-only affordance. */
+.timeline-sfx-clip-replace {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 1px;
+  padding: 0;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.28);
+  color: inherit;
+  cursor: pointer;
+}
+
+.timeline-sfx-clip:hover .timeline-sfx-clip-replace,
+.timeline-sfx-clip:focus-within .timeline-sfx-clip-replace,
+.timeline-sfx-clip.selected .timeline-sfx-clip-replace {
+  display: inline-flex;
+}
+
+.timeline-sfx-clip-replace:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.timeline-sfx-clip-replace svg {
+  width: 10px;
+  height: 10px;
+}
+
 /* --- Audio track clip --- */
 .timeline-audio-clip {
   position: absolute;

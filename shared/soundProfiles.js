@@ -1,21 +1,26 @@
 /**
- * THE semantic-event -> sound-effect mapping — the editor's own decision
- * layer, deliberately kept out of the AI prompt.
+ * THE semantic-event -> sound-effect mapping: what a KIND of moment sounds
+ * like by default, and the editor's answer whenever the model has not named
+ * something better for one particular moment.
  *
- * The content analysis (backend/services/keywordAnalysisService.js) reports
- * only what is happening in the speech: "this is a list item", "this is a
- * reveal". It has no idea that a list item currently sounds like a tick, and
- * it must not: baking sound names into the prompt would mean every future
- * sound-design change required re-prompting (and re-validating) the model,
- * and would let the model invent sound IDs that don't exist.
+ * The layers, weakest to strongest:
+ *   profile -> list_item generally means `tick`               (this file)
+ *   model   -> "...but THIS moment wants `netflix-intro`"     (per moment)
+ *   user    -> "...no, list items are `pop` to me"            (soundEventMapping)
+ *   mute    -> "...list items make no sound at all"           (null, either source)
  *
- * So the contract is one-way and narrow:
- *   AI      -> "type": "list_item"     (semantic, from SEMANTIC_EVENT_TYPES)
- *   editor  -> list_item currently means the `tick` sound   (this file)
- *   user    -> ...unless they changed it (appState.soundEventMapping)
+ * applySemanticEvents resolves that order. Note the direction: a per-moment
+ * pick beats a per-type default because it was chosen with more information,
+ * but anything the USER said beats both, because they are the only party who
+ * is not guessing.
  *
- * That's what makes alternative sound profiles/presets possible later without
- * touching the analysis at all — a profile is just another mapping object.
+ * This file originally existed to keep sound names out of the prompt
+ * entirely — hard-coding them there would have meant re-prompting and
+ * re-validating the model on every sound-design change. That cost is gone
+ * now that the model's list is GENERATED from the registry
+ * (describeSoundLibraryForPrompt), but the mapping layer is not: it is still
+ * what a profile is, what a user override acts on, and what every moment the
+ * model declines to name falls back to.
  */
 import { isKnownSoundId } from './soundRegistry.js';
 
@@ -31,30 +36,217 @@ import { isKnownSoundId } from './soundRegistry.js';
  * actually useful" constraint.
  */
 export const SEMANTIC_EVENT_TYPES = [
+  // STRUCTURE — the speech announcing and walking a list. These are the
+  // original feature and are still placed unconditionally; see
+  // shared/sfxDirection.js's STRUCTURAL_MOMENT_TYPES for why they sit outside
+  // the budget that governs everything below them.
   'list_start',
   'list_item',
+  // EXPRESSION — moments worth an accent. Every one of these competes for a
+  // small per-video budget, so adding a type here widens what the analysis can
+  // NOTICE without widening how much ends up in the edit.
+  'hook',
   'emphasis',
   'reveal',
   'transition',
   'question',
   'answer',
-  'important_statement'
+  'important_statement',
+  'dramatic',
+  'punchline',
+  'conclusion',
+  // NAMED THINGS — the words a short-form editor accents because of WHAT
+  // they are rather than what the sentence is doing: the topic being
+  // introduced, a product or person or tool, a number that carries the point,
+  // a keyword the sentence turns on.
+  'topic',
+  'entity',
+  'number',
+  'keyword'
 ];
 
 /** Human-facing labels for the event types above — used wherever an event is shown in the UI. */
 export const SEMANTIC_EVENT_LABELS = {
   list_start: 'List starts',
   list_item: 'List item',
+  hook: 'Hook',
   emphasis: 'Emphasis',
   reveal: 'Reveal',
   transition: 'Transition',
   question: 'Question',
   answer: 'Answer',
-  important_statement: 'Key statement'
+  important_statement: 'Key statement',
+  dramatic: 'Dramatic beat',
+  punchline: 'Punchline',
+  conclusion: 'Payoff',
+  topic: 'Topic',
+  entity: 'Name / product',
+  number: 'Number',
+  keyword: 'Keyword'
 };
 
 export function isKnownSemanticEventType(type) {
   return SEMANTIC_EVENT_TYPES.includes(type);
+}
+
+/**
+ * THE SOUND CATEGORIES the analysis chooses between — a style of accent, not a
+ * file. The model says "this word wants a `ui` sound"; BHYND decides that
+ * means `click`.
+ *
+ * Why a category rather than a sound id as the contract: the model is good at
+ * telling a punchline from a product name and bad at remembering which of
+ * forty filenames is the short one, so asking it for the judgement it is good
+ * at and keeping the lookup here is both more reliable and cheaper — the
+ * category list is a few lines of prompt, and the library can change without
+ * the model hearing about it. It may still name a specific sound id when the
+ * word literally IS that thing ("cash register" for a price); that is an
+ * optional refinement layered on top, validated like everything else.
+ *
+ * `sounds` is an ORDER, not a set: the first is the default and every word in
+ * a rhythmic run gets the same one, which is what makes "five / home / office
+ * / hacks" read as a pattern rather than four unrelated noises. Later entries
+ * are the fallback if an earlier id is ever removed from the registry.
+ *
+ * The first choices are BHYND pack sounds (shared/soundPack.js), which are
+ * mastered to sit under speech; the classic assets follow as fallbacks.
+ *
+ * `wordSounds` is the same idea for a RUN — a moment covering several words.
+ * A sound with weight or a tail (an impact, a whoosh, a riser) placed on four
+ * consecutive words is four overlapping tails, however well it suits one
+ * word; so a run takes the category's dry, repeatable counterpart instead.
+ */
+export const SFX_SOUND_CATEGORIES = [
+  {
+    id: 'ui',
+    label: 'UI',
+    use: 'clean digital click/tick — list markers, names, and rhythmic word-by-word runs',
+    sounds: ['micro-click-soft', 'click', 'tick', 'pop']
+  },
+  {
+    id: 'emphasis',
+    label: 'Emphasis',
+    use: 'bright pop — a single word landing with weight',
+    sounds: ['pop-soft', 'pop', 'click', 'ding']
+  },
+  {
+    id: 'impact',
+    label: 'Impact',
+    use: 'blunt hit — a hard statement, a claim that should land heavy',
+    sounds: ['impact-punch', 'hit', 'core-hit'],
+    wordSounds: ['pop-punch', 'pop']
+  },
+  {
+    id: 'transition',
+    label: 'Transition',
+    use: 'short whoosh — a change of topic or a cut in thought',
+    sounds: ['whoosh-short', 'whoosh', 'swipe'],
+    wordSounds: ['whoosh-tiny', 'motion-swipe-fast', 'swipe']
+  },
+  {
+    id: 'reveal',
+    label: 'Reveal',
+    use: 'shimmer or sting — something being revealed or a satisfying payoff',
+    sounds: ['caption-reveal', 'sparkle', 'ding', 'pop']
+  },
+  {
+    id: 'tension',
+    label: 'Tension',
+    use: 'low drone or ticking — suspense, a warning, stakes, a mistake',
+    sounds: ['tension-pulse', 'tension', 'riser-metallic', 'clock-ticking'],
+    wordSounds: ['micro-tick-sharp', 'tick']
+  },
+  {
+    id: 'comedy',
+    label: 'Comedy',
+    use: 'meme sting — a punchline or an absurd beat',
+    sounds: ['dexter', 'faaah', 'awww'],
+    wordSounds: ['comedy-bonk-tiny', 'pop']
+  },
+  {
+    id: 'tech',
+    label: 'Tech',
+    use: 'digital blip — software, apps, AI, gadgets, anything happening on a screen',
+    sounds: ['digital-blip', 'scifi-click', 'click'],
+    wordSounds: ['digital-click', 'digital-blip', 'click']
+  },
+  {
+    id: 'cinematic',
+    label: 'Cinematic',
+    use: 'soft cinematic hit — a big line that should feel weighty without a hard punch',
+    sounds: ['cinematic-hit-soft', 'cinematic-accent', 'core-hit'],
+    wordSounds: ['pop-deep', 'pop']
+  },
+  {
+    id: 'success',
+    label: 'Success',
+    use: 'reward chime — a win, a result, a goal reached, a satisfying finish',
+    sounds: ['success-chime', 'ding', 'sparkle'],
+    wordSounds: ['chime-soft', 'ding']
+  }
+];
+
+const SFX_CATEGORY_BY_ID = new Map(SFX_SOUND_CATEGORIES.map((c) => [c.id, c]));
+
+export function isKnownSfxCategory(id) {
+  return SFX_CATEGORY_BY_ID.has(id);
+}
+
+/**
+ * The sound a category means right now: its first entry that the registry
+ * still knows. Null only if every candidate has been removed, in which case
+ * the caller falls back to the event type's own mapping rather than guessing.
+ */
+export function resolveCategorySound(categoryId, { run = false } = {}) {
+  const category = SFX_CATEGORY_BY_ID.get(categoryId);
+  if (!category) return null;
+  // A run takes the dry counterpart (see wordSounds above); a category with
+  // none listed is already dry throughout, so its own order serves both.
+  const order = run && category.wordSounds ? [...category.wordSounds, ...category.sounds] : category.sounds;
+  return order.find((id) => isKnownSoundId(id)) ?? null;
+}
+
+/**
+ * A placed sound's identity: THE WORD it sits on, by that word's start time.
+ *
+ * Deliberately neither the moment's type nor its grouping. The analysis is not
+ * perfectly repeatable — the same sentence can come back as a `list_start` one
+ * run and a `topic` the next, or grouped [2..5] one run and [3..5] the next — and
+ * a key that included either would treat those as different sounds. Then a
+ * sound the creator deleted from "home" would reappear the moment the model
+ * re-grouped the phrase. "Don't put a sound on this word again" is what a
+ * deletion means, so the word is the key.
+ *
+ * This is also the whole de-duplication rule: two proposals for the same word
+ * are one sound, and two different words are two sounds even when they are
+ * adjacent and share the same sound id. Matching sound ids is never grounds to
+ * merge — that is exactly the rhythmic case this system exists to produce.
+ *
+ * Timestamp rather than word index, because an edit to the transcript's text
+ * shifts every later index while leaving the spoken timing where it was.
+ */
+export function getWordSoundKey(timestamp) {
+  return Number.isFinite(timestamp) ? `word@${timestamp.toFixed(3)}` : null;
+}
+
+/** The analysed moment a placed sound came from, for provenance in the UI. */
+export function findMomentForSoundKey(moments, key) {
+  if (!key || !Array.isArray(moments)) return null;
+  return moments.find((m) => momentWords(m).some((w) => getWordSoundKey(w.timestamp) === key)) || null;
+}
+
+/**
+ * The words a moment covers, each with its own timestamp. A moment from an
+ * analysis that predates word-level output carries only a single `timestamp`;
+ * it is treated as a one-word moment on that instant rather than being
+ * dropped, so older results still place.
+ */
+export function momentWords(moment) {
+  if (Array.isArray(moment?.words) && moment.words.length) return moment.words;
+  if (Number.isFinite(moment?.timestamp)) {
+    return [{ wordIndex: moment.wordIndex ?? null, timestamp: moment.timestamp }];
+  }
+  return [];
 }
 
 /**
@@ -90,12 +282,24 @@ export const SOUND_PROFILES = {
     mapping: {
       list_start: 'whoosh',
       list_item: 'tick',
+      hook: 'hit',
       emphasis: 'pop',
       reveal: 'pop',
       transition: 'whoosh',
       question: null,
       answer: 'click',
-      important_statement: 'hit'
+      important_statement: 'hit',
+      dramatic: 'tension',
+      // Comedy is the one category where the RIGHT sound is usually a specific
+      // reference rather than a generic accent, and this profile is the clean
+      // UI one — so the default is a neutral beat and the analysis is left to
+      // name a meme by id when the content actually earns one.
+      punchline: 'pop',
+      conclusion: 'sparkle',
+      topic: 'click',
+      entity: 'click',
+      number: 'tick',
+      keyword: 'pop'
     }
   },
   minimal: {
@@ -105,12 +309,20 @@ export const SOUND_PROFILES = {
     mapping: {
       list_start: null,
       list_item: 'tick',
+      hook: null,
       emphasis: null,
       reveal: null,
       transition: null,
       question: null,
       answer: null,
-      important_statement: null
+      important_statement: null,
+      dramatic: null,
+      punchline: null,
+      conclusion: null,
+      topic: null,
+      entity: null,
+      number: null,
+      keyword: null
     }
   },
   punchy: {
@@ -120,12 +332,47 @@ export const SOUND_PROFILES = {
     mapping: {
       list_start: 'whoosh',
       list_item: 'pop',
+      hook: 'core-hit',
       emphasis: 'hit',
       reveal: 'pop',
       transition: 'swipe',
       question: 'click',
       answer: 'notification',
-      important_statement: 'hit'
+      important_statement: 'hit',
+      dramatic: 'tension',
+      punchline: 'pop',
+      conclusion: 'cash',
+      topic: 'pop',
+      entity: 'click',
+      number: 'hit',
+      keyword: 'pop'
+    }
+  },
+  // The BHYND pack as a profile: the same shape as the others, pointing at the
+  // pack's sounds. Offered alongside Default rather than replacing it, so an
+  // existing project keeps sounding exactly as it did until the creator
+  // chooses otherwise.
+  bhynd: {
+    id: 'bhynd',
+    label: 'BHYND Pack',
+    description: 'The BHYND sound pack — soft ticks for list beats, pops, chimes and cinematic hits mastered to sit under speech.',
+    mapping: {
+      list_start: 'whoosh-short',
+      list_item: 'micro-tick-soft',
+      hook: 'impact-soft',
+      emphasis: 'pop-soft',
+      reveal: 'caption-reveal',
+      transition: 'whoosh-short',
+      question: null,
+      answer: 'digital-confirm',
+      important_statement: 'cinematic-hit-soft',
+      dramatic: 'tension-pulse',
+      punchline: 'pop-round',
+      conclusion: 'success-chime',
+      topic: 'pop-soft',
+      entity: 'micro-click-soft',
+      number: 'micro-tick-bright',
+      keyword: 'pop-soft'
     }
   }
 };
