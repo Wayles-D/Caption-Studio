@@ -16,13 +16,15 @@
  * is still the untouched appState + preview.js/canvasTransform.js pipeline
  * this state simply gates visibility for.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { appState, updateState, DEFAULT_DEMO_VIDEO_URL, getStyleParams } from './js/state.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { appState, updateState, subscribe, DEFAULT_DEMO_VIDEO_URL, getStyleParams } from './js/state.js';
 import { fetchJson, describeFetchError } from './js/utils/apiRequest.js';
 import { collectEditedWords } from './js/components/transcriptEditorState.js';
 import { applySemanticEvents } from './js/components/audioTimeline.js';
 import * as audioTimelineApi from './js/components/audioTimeline.js';
 import * as textElementsApi from './js/components/textElements.js';
+import { isTextElementRenderable } from '../shared/textElement.js';
+import { startProjectAutosave, restoreSavedProject, startProjectWithVideo, ensureServerHasProjectFiles } from './js/projectPersistence.js';
 import * as captionEventsApi from './js/components/captionEvents.js';
 import { Toolbar } from './components/Toolbar.jsx';
 import { SidebarInspector } from './components/SidebarInspector.jsx';
@@ -122,7 +124,10 @@ const MOBILE_TOOLS = [
 // DaVinci/CapCut Desktop keep certain properties panels docked to a side
 // rather than as a bottom sheet. Below the desktop breakpoint this key
 // behaves exactly like every other MOBILE_TOOLS entry (bottom sheet).
-const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript']);
+// 'text-overlay' (the Text / Cinematic panel) lives here too on desktop: it
+// is what a selected cinematic interlude or overlay is edited in, and as a
+// bottom sheet it covered the very timeline clip being edited.
+const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay']);
 
 // The desktop side panel's default/home content — always visible (an
 // anchored sidebar, like the app's original layout), showing Video
@@ -151,6 +156,22 @@ const SHEET_DEFAULT_HEIGHT_VH = 34;
 const SHEET_MIN_HEIGHT_PX = 160;
 const SHEET_MAX_HEIGHT_VH = 85;
 
+/**
+ * Text overlays and cinematic interludes exist only in the advanced (graphics)
+ * renderer. A render that falls back composites them on in a second pass
+ * (see uploadController.js's addTextElementsToFallbackRender); only if THAT
+ * failed are they missing, and the message has to say so rather than let the
+ * file look complete. Empty when the project has none.
+ */
+function textLossNote() {
+  const els = (appState.textElements || []).filter(isTextElementRenderable);
+  if (!els.length) return '';
+  const interludes = els.filter((el) => el.kind === 'interlude').length;
+  return interludes
+    ? ' — and your text overlays and cinematic text are NOT in this file'
+    : ' — and your text overlays are NOT in this file';
+}
+
 export function App() {
   const videoFileInputRef = useRef(null);
   // null = no sheet open (matches CapCut's default: full preview, nothing
@@ -169,7 +190,6 @@ export function App() {
   }, []);
 
   const closeMobilePanel = useCallback(() => setMobileActivePanel(null), []);
-
   // Bottom-sheet height: lazy-initialized once from the viewport (a real
   // `useState` initializer, not a render-time computation, so it isn't
   // re-derived — and doesn't fight a user's own drag — on every re-render).
@@ -246,15 +266,30 @@ export function App() {
   // simply browsing. One panel, two jobs — see SoundLibraryPanel for why that
   // is one surface rather than two.
   const [soundReplaceTargetId, setSoundReplaceTargetId] = useState(null);
+  // Which text element (a cinematic interlude) the next pick is LINKED to, or
+  // null when adding an ordinary effect at the playhead.
+  const [soundAttachTargetId, setSoundAttachTargetId] = useState(null);
   const closeSoundLibrary = useCallback(() => {
     setSoundLibraryOpen(false);
     setSoundReplaceTargetId(null);
+    setSoundAttachTargetId(null);
   }, []);
   const toggleSoundLibrary = useCallback(() => {
     // The "+" always means "add", so re-pressing it while a replace is open
     // drops the target rather than silently replacing with the next pick.
     setSoundReplaceTargetId(null);
+    setSoundAttachTargetId(null);
     setSoundLibraryOpen((open) => !open);
+  }, []);
+  // An interlude's "+ Sound at start": the playhead goes to its first frame
+  // (so what you hear while choosing is in context) and the ordinary library
+  // opens; the pick lands at the interlude's start, LINKED to it.
+  const openSoundLibraryAt = useCallback((time, attachToTextElementId = null) => {
+    const video = document.getElementById('preview-video');
+    if (video && Number.isFinite(time)) video.currentTime = time;
+    setSoundReplaceTargetId(null);
+    setSoundAttachTargetId(attachToTextElementId);
+    setSoundLibraryOpen(true);
   }, []);
   const openSoundReplace = useCallback((clipId) => {
     setSoundReplaceTargetId(clipId);
@@ -312,8 +347,33 @@ export function App() {
   // the sidebar itself is always visible on desktop.
   const closeDesktopSidePanel = useCallback(() => setDesktopSidePanel(DESKTOP_SIDE_PANEL_DEFAULT), []);
 
+  // Creating or selecting a CINEMATIC TEXT interlude brings its settings up —
+  // on desktop, in the side panel beside the preview, where it covers
+  // nothing. (Below the desktop breakpoint the panel is a bottom sheet over
+  // the timeline, so there it stays one tap away on the Overlay tool rather
+  // than opening over the clip you were about to resize.)
+  useEffect(() => {
+    let lastId = appState.selectedTextElementId;
+    return subscribe('selectedTextElementId', () => {
+      const id = appState.selectedTextElementId;
+      if (id === lastId) return;
+      lastId = id;
+      const selected = (appState.textElements || []).find((el) => el.id === id);
+      if (selected?.kind === 'interlude' && isDesktopRef.current) setDesktopSidePanel('text-overlay');
+    });
+  }, []);
+
+  // While the Text & Cinematic panel is open, two more surfaces count as
+  // "inside": the sound library it opens itself ("+ Sound at start"), and the
+  // video, where you drag and resize the very text you are editing. Pressing
+  // either used to close the panel mid-edit. Read lazily: both mount later.
+  const soundLibraryElRef = useMemo(() => ({ get current() { return document.getElementById('sound-library-panel'); } }), []);
+  const previewElRef = useMemo(() => ({ get current() { return document.getElementById('state-video'); } }), []);
+  const sidePanelInsideRefs = useMemo(() => (desktopSidePanel === 'text-overlay'
+    ? [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, soundLibraryElRef, previewElRef]
+    : [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef]), [desktopSidePanel, soundLibraryElRef, previewElRef]);
   useClickOutside(
-    [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef],
+    sidePanelInsideRefs,
     closeDesktopSidePanel,
     isDesktop && desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT
   );
@@ -367,6 +427,22 @@ export function App() {
   }, []);
 
   const [viewState, setViewState] = useState('upload'); // 'upload' | 'processing' | 'video'
+
+  // REOPEN THE LAST PROJECT. Everything is saved as it changes (see
+  // src/js/projectPersistence.js) — the document, the original video and any
+  // imported audio — so a reload, a closed tab or a crash reopens exactly
+  // where it was. Uploading a new video starts a new project.
+  useEffect(() => {
+    startProjectAutosave();
+    let cancelled = false;
+    restoreSavedProject({ demoVideoUrl: DEFAULT_DEMO_VIDEO_URL }).then((restored) => {
+      if (cancelled || !restored) return;
+      setVideoSrc(restored.videoUrl);
+      setViewState('video');
+      showToast(`Reopened your last project${restored.name ? ' — ' + restored.name : ''}.`);
+    });
+    return () => { cancelled = true; };
+  }, []);
   const [processingTitle, setProcessingTitle] = useState('Transcribing Audio...');
   const [videoSrc, setVideoSrc] = useState(undefined);
   const [toastMessage, setToastMessage] = useState('');
@@ -439,6 +515,8 @@ export function App() {
       // addresses word indices that no longer mean anything.
       captionEventsApi.captureCaptionEventsFromPhrases(data.phrases || [], { force: true });
 
+      // A new project: keep THIS video (for reopening later) in place of the last one's.
+      startProjectWithVideo(data.baseName, file);
       setVideoSrc(URL.createObjectURL(file));
       setViewState('video');
 
@@ -485,6 +563,7 @@ export function App() {
       ]
     }, { recordHistory: false });
 
+    startProjectWithVideo('demo', null);
     setVideoSrc(DEFAULT_DEMO_VIDEO_URL);
     setViewState('video');
     showToast('Loaded demo video.');
@@ -521,7 +600,9 @@ export function App() {
     }
 
     const editedWords = collectEditedWords(appState);
-    if (editedWords.length === 0) {
+    // A video with no speech can still carry cinematic text and overlays,
+    // which only need the render, not a transcript.
+    if (editedWords.length === 0 && !(appState.textElements || []).some(isTextElementRenderable)) {
       showToast("No transcript words to render.");
       return { ok: false, renderedWithEffects: true };
     }
@@ -531,6 +612,9 @@ export function App() {
     setViewState('processing');
 
     try {
+      // A reopened (or long-edited) project: the server may have purged its
+      // copy of the video or of imported audio — send them back first.
+      await ensureServerHasProjectFiles(API_BASE_URL);
       const result = await fetchJson(`${API_BASE_URL}/api/upload/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -564,7 +648,7 @@ export function App() {
         // real cause is visible without server console access.
         console.error('[Export] Advanced renderer fell back to ASS:', result.graphicsFailureReason);
       }
-      return { ok: true, renderedWithEffects: result.renderedWithEffects !== false, graphicsFailureReason: result.graphicsFailureReason || null };
+      return { ok: true, renderedWithEffects: result.renderedWithEffects !== false, textElementsRendered: result.textElementsRendered !== false, graphicsFailureReason: result.graphicsFailureReason || null };
     } catch (err) {
       console.error("Regeneration Error:", err);
       setViewState('video');
@@ -576,7 +660,7 @@ export function App() {
 
   const triggerRegeneration = useCallback(async () => {
     showToast("Re-rendering captioned video...");
-    const { ok, renderedWithEffects, graphicsFailureReason } = await renderCurrentEditsToServer();
+    const { ok, renderedWithEffects, textElementsRendered, graphicsFailureReason } = await renderCurrentEditsToServer();
     if (ok) {
       if (renderedWithEffects) {
         showToast('Render complete! Ready to download.');
@@ -584,7 +668,7 @@ export function App() {
       } else {
         setRenderIssue({
           stage: graphicsFailureReason?.stage || 'render',
-          message: graphicsFailureReason?.message || 'The advanced renderer could not run, and no reason was reported.',
+          message: (graphicsFailureReason?.message || 'The advanced renderer could not run, and no reason was reported.') + (textElementsRendered ? '' : textLossNote()),
           detail: graphicsFailureReason?.stack || null
         });
         setRenderIssueCopied(false);
@@ -627,7 +711,7 @@ export function App() {
     }
 
     showToast("Rendering your latest edits before download...");
-    const { ok, renderedWithEffects, graphicsFailureReason } = await renderCurrentEditsToServer();
+    const { ok, renderedWithEffects, textElementsRendered, graphicsFailureReason } = await renderCurrentEditsToServer();
     if (!ok || !appState.renderedVideoPath) return;
 
     // Cache-bust: the backend writes every regenerate to the SAME
@@ -649,7 +733,7 @@ export function App() {
     document.body.removeChild(dlLink);
     showToast(renderedWithEffects
       ? "Download started!"
-      : `Download started — but without some caption effects (position/rotation/blend); the advanced renderer couldn't run this time.${graphicsFailureReason ? ` Reason: ${graphicsFailureReason.stage} — ${graphicsFailureReason.message}` : ""}`);
+      : `Download started — but without some caption effects (position/rotation/blend)${textElementsRendered ? '' : textLossNote()}; the advanced renderer couldn't run this time.${graphicsFailureReason ? ` Reason: ${graphicsFailureReason.stage} — ${graphicsFailureReason.message}` : ""}`);
   }, [renderCurrentEditsToServer, videoSrc, showToast]);
 
   return (
@@ -743,7 +827,7 @@ export function App() {
           className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
           style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
         >
-          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} />
+          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} />
         </div>
       )}
 
@@ -770,7 +854,7 @@ export function App() {
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
             <span className="text-xs font-bold uppercase tracking-wide text-[var(--text-secondary)]">
-              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : 'Video Inspector'}
+              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : 'Video Inspector'}
             </span>
             {desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT && (
               <button
@@ -791,6 +875,13 @@ export function App() {
           <div className="overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'transcript' ? 'block' : 'none' }}>
             <RightInspector sectionFilter="transcript" onRegenerateCaptions={() => triggerRegeneration()} />
           </div>
+          {/* Mounted only while shown: the bottom sheet mounts its own
+              TextInspector below the desktop breakpoint, with the same ids. */}
+          {desktopSidePanel === 'text-overlay' && (
+            <div className="overflow-y-auto flex-1 p-4">
+              <TextInspector onAddSoundAt={openSoundLibraryAt} />
+            </div>
+          )}
           {/* Not conditionally rendered — see relocatePrecisionFields() in
               timelinePanel.js, which physically moves the SAME lane input
               elements in here rather than this being separate React-owned
@@ -858,7 +949,7 @@ export function App() {
                 </div>
               ) : tool.group === 'textel' ? (
                 <div className="p-4">
-                  <TextInspector />
+                  <TextInspector onAddSoundAt={openSoundLibraryAt} />
                 </div>
               ) : tool.group === 'word' ? (
                 <div className="p-4">

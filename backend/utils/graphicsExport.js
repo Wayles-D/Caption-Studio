@@ -20,6 +20,7 @@ import { compositeGraphicsCaptionTrack, getVideoInfo } from './graphicsComposito
 import { groupWordsToPhrases, sanitizePhraseTimings } from './phraseGrouper.js';
 import { normalizeCaptionEventList, resolveCaptionPhrases } from '../../shared/captionEvent.js';
 import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
+import { normalizeTextElementList, isTextElementRenderable } from '../../shared/textElement.js';
 
 /**
  * WHY this exists: every failure in this module degrades the job to the ASS
@@ -49,6 +50,42 @@ export function getLastGraphicsFailure() {
 }
 
 /**
+ * The FALLBACK's second pass: composites the project's text elements —
+ * overlays, manual captions, cinematic interludes — onto a video whose
+ * captions were already burned by the ASS pipeline.
+ *
+ * Those elements exist only in this renderer; the ASS burn cannot draw them.
+ * So without this, any render that fell back (a caption preset outside the
+ * graphics renderer's scope, or a failure there) silently lost every overlay
+ * and interlude, however well the rest of it went. The captions layer here is
+ * empty; the audio is copied from the input untouched, because the fallback
+ * burn has already mixed the sound effects into it.
+ *
+ * @returns {Promise<boolean>} true when there were text elements and they are now in outputPath; false (and outputPath untouched) when there were none.
+ */
+export async function compositeTextElementsOnto(videoPath, styles, outputPath, framesDir) {
+  const params = styles || {};
+  if (!normalizeTextElementList(params.textElements).some(isTextElementRenderable)) return false;
+  try {
+    const { width, height, duration, frameRate } = await getVideoInfo(videoPath);
+    const { captions, manualCaptions, text } = buildFullTimelineSegments([], params, width, height, duration, framesDir);
+    await compositeGraphicsCaptionTrack(videoPath, captions, outputPath, {
+      frameRate,
+      duration,
+      canvasWidth: width,
+      canvasHeight: height,
+      textBlendMode: getASSStyleFromConfig(params).textBlendMode,
+      manualCaptionSegments: manualCaptions,
+      textElementSegments: text
+    });
+    console.log(`[GraphicsExport] Composited ${text.length + manualCaptions.length} text segments onto the fallback render.`);
+    return true;
+  } finally {
+    try { fs.rmSync(framesDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+/**
  * Attempts to render captions for `videoPath` via the graphics pipeline.
  *
  * @param {string} videoPath - Absolute path to the source video.
@@ -64,12 +101,19 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   if (!canGenerateGraphicsFrames(params)) {
     return recordFailure('unsupported-scope', `Preset/mode outside the graphics renderer's scope (captionMode='${params.captionMode}', preset='${params.preset || params.currentPreset}').`);
   }
-  if (!Array.isArray(words) || words.length === 0) {
+  // A video with no speech has nothing to caption — but it can still carry
+  // text overlays and cinematic interludes, and those exist ONLY in this
+  // pipeline (the ASS fallback cannot draw them). So an empty transcript
+  // falls back only when there is no text to draw either; otherwise the
+  // caption layer is simply empty.
+  const hasTextElements = normalizeTextElementList(params.textElements).some(isTextElementRenderable);
+  const hasWords = Array.isArray(words) && words.length > 0;
+  if (!hasWords && !hasTextElements) {
     return recordFailure('no-words', 'No words supplied to render.');
   }
 
-  let phrases;
-  try {
+  let phrases = [];
+  if (hasWords) try {
     // CAPTION EVENTS WIN when the project has them (see
     // shared/captionEvent.js). Regrouping the word list here would discard
     // every retime, split and merge the user made — the grouper is a pure
@@ -85,10 +129,10 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     console.error(`[GraphicsExport] Failed to group words into phrases, falling back to ASS: ${err.message}`, err.stack);
     return recordFailure('phrase-grouping', err.message, err.stack);
   }
-  if (!phrases.length) return recordFailure('no-phrases', 'Word list produced no renderable phrases.');
+  if (!phrases.length && !hasTextElements) return recordFailure('no-phrases', 'Word list produced no renderable phrases.');
 
   try {
-    const { width, height, duration, hasAudio } = await getVideoInfo(videoPath);
+    const { width, height, duration, hasAudio, frameRate } = await getVideoInfo(videoPath);
     // Two independently composited layers: the transcript's captions, and
     // manually placed captions / text overlays. They are kept apart so the
     // caption's Text Blend Mode cannot bleed onto text the user coloured
@@ -105,6 +149,10 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // compositing matches the live preview exactly.
     await compositeGraphicsCaptionTrack(videoPath, segments, outputVideoPath, {
       videoTransform: params.videoTransform,
+      // The text layers are laid onto the video's own frame grid (see
+      // compositeGraphicsCaptionTrack), so an edge lands on the same frame
+      // the preview switches on.
+      frameRate,
       duration,
       canvasWidth: width,
       canvasHeight: height,

@@ -15,7 +15,7 @@
  * container; rebuilds its own children imperatively.
  */
 import * as keyframeEngine from './keyframeEngine.js';
-import { undo, redo, getHistoryState, appState } from '../state.js';
+import { undo, redo, getHistoryState, appState, updateState } from '../state.js';
 import {
   getFilmstripWindow,
   chooseSecondsPerTile,
@@ -465,6 +465,23 @@ function buildDom(container, options) {
   addBtn.addEventListener('click', () => keyframeEngine.addOrUpdateKeyframeAtPlayhead());
   controlsRow.appendChild(addBtn);
 
+  // "+ Cinematic": a cinematic text interlude starting exactly at the
+  // playhead (see textElements.js's addInterlude). In the header rather than
+  // only in a lane gutter, so it is always in reach — the Cinematic lane
+  // itself only takes up room once a project has an interlude (see
+  // refreshTextLane), which keeps every other lane where it always was.
+  const addInterludeBtn = document.createElement('button');
+  addInterludeBtn.type = 'button';
+  addInterludeBtn.className = 'timeline-add-keyframe-btn timeline-add-interlude-btn';
+  addInterludeBtn.id = 'timeline-add-interlude-btn';
+  addInterludeBtn.textContent = '+ Cinematic';
+  addInterludeBtn.title = 'Cinematic text at the playhead — a full-frame text card replaces the picture; the audio keeps playing';
+  addInterludeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    textElements.addInterlude();
+  });
+  controlsRow.appendChild(addInterludeBtn);
+
   // Precision (X/Y/scale%/rotation°) numeric fields: shown inline (hidden by
   // default) on mobile/tablet, the same as always — the primary way to set
   // these values is direct manipulation on the canvas (drag/resize/rotate —
@@ -611,6 +628,16 @@ function buildDom(container, options) {
   // yourself on its own row next to the transcript is what makes that
   // difference visible while editing.
   const captionsLane = buildAudioLane('captions', 'Captions', 'Add a caption at the playhead');
+
+  // CINEMATIC TEXT INTERLUDES get the top lane, directly under the picture:
+  // for their span they REPLACE the picture (see shared/textElement.js), so
+  // they belong next to it. Same record type and same gestures as the two
+  // text lanes below — this lane is presentation only.
+  const interludeLane = buildAudioLane('interlude', 'Cinematic', 'Add cinematic text at the playhead — the picture is replaced by a full-frame text card, the audio keeps playing');
+  interludeLane.addBtn.id = 'timeline-add-interlude-lane-btn';
+  // Hidden until the project has an interlude (see refreshTextLane).
+  interludeLane.row.hidden = true;
+  lanesEl.appendChild(interludeLane.row);
   lanesEl.appendChild(captionsLane.row);
   lanesEl.appendChild(textLane.row);
   lanesEl.appendChild(sfxLane.row);
@@ -714,7 +741,7 @@ function buildDom(container, options) {
     header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip,
     addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack,
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
-    captionsTrack: captionsLane.track,
+    captionsTrack: captionsLane.track, interludeTrack: interludeLane.track, interludeRow: interludeLane.row, addInterludeBtn: interludeLane.addBtn,
     addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn,
     addCaptionBtn: captionsLane.addBtn, addVideoBtn,
     zoomInBtn, zoomOutBtn, zoomLevel
@@ -823,6 +850,21 @@ function refreshPlayhead(currentTime, duration) {
   const x = timeToX(currentTime, rulerRect.width, duration);
   const left = (rulerRect.left - scrollRect.left) + els.scroll.scrollLeft + x;
   els.playhead.style.left = `${left}px`;
+  // Full height of the CONTENT, not of the visible box. The line is absolute
+  // inside the scroll container, where `bottom: 0` resolves against the
+  // visible area — so once stacked clips made the lanes taller than the
+  // panel, it stopped one screen-height down and scrolled away with the
+  // content. Measured off the lanes block (the last content child), never off
+  // scrollHeight, which would include the line itself and could never shrink.
+  const lanes = document.getElementById('timeline-lanes');
+  if (lanes) {
+    const height = Math.max(els.scroll.clientHeight, lanes.offsetTop + lanes.offsetHeight);
+    const value = `${height}px`;
+    if (els.playhead.style.height !== value) {
+      els.playhead.style.height = value;
+      els.playhead.style.bottom = 'auto';
+    }
+  }
   // Driven from the SAME position the playhead was just drawn at, once per
   // frame, so the viewport can never disagree with where the playhead is —
   // and no extra layout is measured to do it.
@@ -1142,7 +1184,11 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       // phrase-shaped, since the renderer consumes them as one). Read either
       // rather than forcing one vocabulary onto the other — getting this
       // wrong yields NaN, which silently collapses the clip to 0.
-      grabOffsetSeconds: mode === 'move' ? pointerTime - (clip.startTime ?? clip.start ?? 0) : 0
+      grabOffsetSeconds: mode === 'move' ? pointerTime - (clip.startTime ?? clip.start ?? 0) : 0,
+      // The text list as it was BEFORE the gesture — see endDrag.
+      textBefore: kind === 'text' ? appState.textElements : null,
+      // ...and the sounds, which a text move carries along if they are linked.
+      soundsBefore: kind === 'text' ? appState.soundEvents : null
     };
   });
 
@@ -1158,7 +1204,18 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
     // The final position is committed as ONE history entry; every intermediate
     // move during the drag was recorded with recordHistory:false, so undo
     // steps back over the whole gesture rather than one pointermove of it.
-    if (dragClip.moved) applyClipDrag(e.clientX, el, { recordHistory: true });
+    if (dragClip.moved) {
+      // A text clip's live drag has already written its result with history
+      // off, so a history snapshot taken now would equal the outcome and Undo
+      // would do nothing (measured: the first Undo after a trim changed
+      // nothing, the second deleted the element). Rewind to the pre-gesture
+      // list first (history off), then commit the result (history on) — the
+      // same fix the canvas gestures use (see canvasTransform.js).
+      if (dragClip.kind === 'text' && dragClip.textBefore) {
+        updateState({ textElements: dragClip.textBefore, soundEvents: dragClip.soundsBefore }, { recordHistory: false });
+      }
+      applyClipDrag(e.clientX, el, { recordHistory: true });
+    }
     dragClip = null;
   };
   el.addEventListener('pointerup', endDrag);
@@ -1363,6 +1420,12 @@ function buildTextClip(element, duration, isSelected) {
   if (isSelected) el.classList.add('selected');
   if (!element.enabled) el.classList.add('disabled');
   if (element.kind === 'caption') el.classList.add('is-caption');
+  if (element.kind === 'interlude') {
+    el.classList.add('is-interlude');
+    // Its own background colour is the clip's swatch, so two interludes read
+    // apart on the lane at a glance.
+    el.style.setProperty('--interlude-swatch', element.background?.color || '#FFFFFF');
+  }
 
   el.style.left = `${timeToPercent(element.start, duration)}%`;
   el.style.width = `${Math.max(1, timeToPercent(element.end, duration) - timeToPercent(element.start, duration))}%`;
@@ -1373,7 +1436,9 @@ function buildTextClip(element, duration, isSelected) {
 
   const label = document.createElement('span');
   label.className = 'timeline-text-clip-label';
-  label.textContent = element.text || (element.kind === 'caption' ? 'Caption' : 'Text');
+  // An interlude's text can be several lines; the lane shows it as one.
+  label.textContent = String(element.text || '').replace(/\s+/g, ' ').trim()
+    || (element.kind === 'caption' ? 'Caption' : element.kind === 'interlude' ? 'Cinematic' : 'Text');
   el.appendChild(label);
 
   attachClipPointerHandlers(el, element, 'text', 'move');
@@ -1421,6 +1486,27 @@ function buildCaptionEventClip(event, duration, isSelected) {
   label.textContent = text || 'Caption';
   el.appendChild(label);
 
+  // "Turn this caption into…" — cinematic text or a text overlay, taking the
+  // caption's own span, words, timing and edits (see textElements.js's
+  // convertCaptionToTextElement). On the capsule, for the same reason Replace
+  // is on a sound clip: this is where you are looking when you decide a line
+  // deserves more than a caption. pointerdown is stopped so pressing it can't
+  // start a drag of the capsule underneath.
+  const convertBtn = document.createElement('button');
+  convertBtn.type = 'button';
+  convertBtn.className = 'timeline-caption-convert';
+  convertBtn.dataset.convertCaption = event.id;
+  convertBtn.title = 'Turn this caption into cinematic text or a text overlay';
+  convertBtn.setAttribute('aria-label', 'Turn this caption into cinematic text or a text overlay');
+  convertBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>';
+  convertBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  convertBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    captionEvents.selectCaptionEvent(event.id);
+    openCaptionConvertMenu(convertBtn, event.id);
+  });
+  el.appendChild(convertBtn);
+
   attachClipPointerHandlers(el, event, 'caption', 'move');
 
   ['start', 'end'].forEach((edge) => {
@@ -1432,6 +1518,74 @@ function buildCaptionEventClip(event, duration, isSelected) {
   });
 
   return el;
+}
+
+/**
+ * The capsule's two-item menu: "Cinematic text" / "Text overlay". A small
+ * popover on <body> — fixed-positioned, like the old sound picker was, so the
+ * timeline's own scroll container can't clip it. Closes on a choice, an
+ * outside press, Escape, or any scroll.
+ */
+let convertMenu = null;
+function closeCaptionConvertMenu() {
+  if (!convertMenu) return;
+  convertMenu.cleanup();
+  convertMenu.el.remove();
+  convertMenu = null;
+}
+function openCaptionConvertMenu(anchor, captionEventId) {
+  closeCaptionConvertMenu();
+  const el = document.createElement('div');
+  el.className = 'timeline-convert-menu';
+  el.id = 'timeline-convert-menu';
+  el.setAttribute('role', 'menu');
+  const heading = document.createElement('div');
+  heading.className = 'timeline-convert-menu-heading';
+  heading.textContent = 'Turn caption into';
+  el.appendChild(heading);
+  [
+    { kind: 'interlude', label: 'Cinematic text', hint: 'Full-frame card, audio keeps playing' },
+    { kind: 'overlay', label: 'Text overlay', hint: 'Free text over the video' }
+  ].forEach((item) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'timeline-convert-menu-item';
+    btn.dataset.convertTo = item.kind;
+    btn.setAttribute('role', 'menuitem');
+    btn.innerHTML = '<span class="timeline-convert-menu-label"></span><span class="timeline-convert-menu-hint"></span>';
+    btn.querySelector('.timeline-convert-menu-label').textContent = item.label;
+    btn.querySelector('.timeline-convert-menu-hint').textContent = item.hint;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeCaptionConvertMenu();
+      textElements.convertCaptionToTextElement(captionEventId, item.kind);
+    });
+    el.appendChild(btn);
+  });
+  document.body.appendChild(el);
+
+  // Below the button, kept on screen.
+  const r = anchor.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  const left = Math.min(window.innerWidth - w - 8, Math.max(8, r.left));
+  const top = r.bottom + 6 + h > window.innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6;
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+
+  const onDown = (e) => { if (!el.contains(e.target)) closeCaptionConvertMenu(); };
+  const onKey = (e) => { if (e.key === 'Escape') closeCaptionConvertMenu(); };
+  const onScroll = () => closeCaptionConvertMenu();
+  document.addEventListener('pointerdown', onDown, true);
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('scroll', onScroll, true);
+  convertMenu = {
+    el,
+    cleanup: () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+    }
+  };
 }
 
 function refreshTextLane(duration) {
@@ -1455,6 +1609,7 @@ function refreshTextLane(duration) {
 
   clearClips(els.textTrack);
   clearClips(els.captionsTrack);
+  clearClips(els.interludeTrack);
   if (!(duration > 0)) return;
 
   // Split by kind, not by type: both lanes hold the same records and build
@@ -1463,6 +1618,7 @@ function refreshTextLane(duration) {
   // depends on its kind.
   const captionClips = [];
   const overlayClips = [];
+  const interludeClips = [];
 
   // The TRANSCRIPT's own captions share the Captions lane with manually
   // placed ones — to the user they are the same thing (a caption, on the
@@ -1479,6 +1635,9 @@ function refreshTextLane(duration) {
     if (element.kind === 'caption') {
       captionClips.push(clip);
       els.captionsTrack.appendChild(clip);
+    } else if (element.kind === 'interlude') {
+      interludeClips.push(clip);
+      els.interludeTrack.appendChild(clip);
     } else {
       overlayClips.push(clip);
       els.textTrack.appendChild(clip);
@@ -1487,6 +1646,10 @@ function refreshTextLane(duration) {
   // Stacked AFTER appending — the packer measures the real laid-out boxes.
   sizeLaneForRows(els.textTrack, stackClips(els.textTrack, overlayClips));
   sizeLaneForRows(els.captionsTrack, stackClips(els.captionsTrack, captionClips));
+  sizeLaneForRows(els.interludeTrack, stackClips(els.interludeTrack, interludeClips));
+  els.interludeTrack.classList.toggle('is-empty', interludeClips.length === 0);
+  // The lane only costs vertical space once there is something on it.
+  els.interludeRow.hidden = interludeClips.length === 0;
   els.textTrack.classList.toggle('is-empty', overlayClips.length === 0);
   els.captionsTrack.classList.toggle('is-empty', captionClips.length === 0);
 }
@@ -1952,6 +2115,12 @@ export function initTimelinePanel(container, options = {}) {
   // record, different kind — which is what decides its lane, its label and
   // whether it inherits the caption's anchored position (see
   // textElements.js's addTextElement).
+  // The Cinematic lane's own "+" — the same action as the header button.
+  els.addInterludeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    textElements.addInterlude();
+  });
+
   els.addCaptionBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     textElements.addTextElement({ kind: 'caption', text: 'New caption' });

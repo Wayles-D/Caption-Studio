@@ -519,6 +519,14 @@ body.light-theme {
   text-align: center;
 }
 
+/* canvasTransform.js hides the toolbar (hidden attribute) while a text
+   overlay / cinematic interlude is selected — none of its caption scope
+   options apply to one. The display rule below would otherwise override
+   that, and did: the caption options showed over every selected text. */
+.caption-transform-toolbar[hidden] {
+  display: none !important;
+}
+
 .caption-transform-toolbar {
   position: absolute;
   bottom: 100%;
@@ -1625,8 +1633,127 @@ body.light-theme {
   border-style: dashed;
 }
 
+/* The Cinematic lane is hidden until a project has an interlude (see
+   timelinePanel.js's refreshTextLane) — author display rules would
+   otherwise override the hidden attribute. */
+.timeline-lane[hidden] {
+  display: none !important;
+}
+
+/* A CINEMATIC TEXT INTERLUDE replaces the picture for its span, so it is
+   drawn as a card rather than a tinted text bar: neutral (not accent), with
+   letterbox rules top and bottom and a swatch of its own background colour at
+   the head — two interludes read apart at a glance. */
+/* The swatch IS the left border — not a separate block with padding to make
+   room for it. Padding sets a floor under a clip's width, so a short
+   interlude used to be drawn wider than its own duration and could not
+   shrink with the timeline; now it narrows exactly like a caption clip,
+   its label truncating to an ellipsis and then disappearing. */
+.timeline-text-clip.is-interlude {
+  min-width: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--text-secondary);
+  border-top-width: 2px;
+  border-bottom-width: 2px;
+  border-left: 4px solid var(--interlude-swatch, #FFFFFF);
+  background: color-mix(in srgb, var(--text-primary) 9%, var(--bg-card));
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.timeline-text-clip.is-interlude .timeline-text-clip-handle {
+  background: var(--text-secondary);
+}
+
 .timeline-text-clip.selected {
   box-shadow: 0 0 0 2px var(--accent-color);
+}
+
+/* "Turn this caption into…" — on a transcript caption's capsule, shown on
+   hover and when selected, the same way a sound clip's Replace is. */
+.timeline-caption-convert {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: auto;
+  padding: 0;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.28);
+  color: inherit;
+  cursor: pointer;
+}
+
+.timeline-text-clip.is-transcript:hover .timeline-caption-convert,
+.timeline-text-clip.is-transcript:focus-within .timeline-caption-convert,
+.timeline-text-clip.is-transcript.selected .timeline-caption-convert {
+  display: inline-flex;
+}
+
+.timeline-caption-convert:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.timeline-caption-convert svg {
+  width: 10px;
+  height: 10px;
+}
+
+.timeline-convert-menu {
+  position: fixed;
+  z-index: 1100;
+  min-width: 200px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-md);
+}
+
+.timeline-convert-menu-heading {
+  padding: 4px 8px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.timeline-convert-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline-convert-menu-item:hover,
+.timeline-convert-menu-item:focus-visible {
+  border-color: var(--accent-color);
+  background: rgba(0, 246, 172, 0.06);
+  outline: none;
+}
+
+.timeline-convert-menu-label {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.timeline-convert-menu-hint {
+  font-size: 10px;
+  color: var(--text-muted);
 }
 
 .timeline-text-clip.disabled {

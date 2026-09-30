@@ -15,11 +15,19 @@
  *   - normalize on every write, not just on read.
  */
 import { appState, updateState } from '../state.js';
+import { resolveCaptionPhrases, normalizeCaptionEvent } from '../../../shared/captionEvent.js';
+import { createSoundEvent } from '../../../shared/audioTimeline.js';
+import { getPhraseTransformKey } from '../../../shared/captionTransform.js';
 import {
   createTextElement,
+  createInterlude,
+  textElementFromCaption,
   normalizeTextElement,
+  resolveInterludeBackground,
+  INTERLUDE_DEFAULT_STYLE,
   MIN_TEXT_ELEMENT_DURATION,
-  DEFAULT_TEXT_ELEMENT_DURATION
+  DEFAULT_TEXT_ELEMENT_DURATION,
+  DEFAULT_INTERLUDE_DURATION
 } from '../../../shared/textElement.js';
 import {
   KEYFRAME_PROPERTIES,
@@ -125,6 +133,112 @@ export function addTextElement({ kind = 'overlay', start = getPlayheadTime(), te
   return element;
 }
 
+/**
+ * "+ Cinematic Text": a new interlude starting EXACTLY at the playhead.
+ *
+ * The start is the playhead's own time, taken from the same #preview-video
+ * every other part of the editor treats as the clock — never rounded or
+ * snapped. Its default span is DEFAULT_INTERLUDE_DURATION, shortened only
+ * if the video ends first.
+ *
+ * Built with createInterlude, the same factory a future suggestion pass would
+ * call with a range of its own; either way the result is an ordinary element
+ * the user drags, trims and styles like any other.
+ */
+export function addInterlude({ start = getPlayheadTime(), text = 'THIS CHANGED\nEVERYTHING.', ...overrides } = {}) {
+  const duration = getVideoDuration();
+  const clampedStart = clampToTimeline(start);
+  const end = duration > 0
+    ? Math.min(duration, clampedStart + DEFAULT_INTERLUDE_DURATION)
+    : clampedStart + DEFAULT_INTERLUDE_DURATION;
+  const element = createInterlude({
+    start: clampedStart,
+    end: Math.max(clampedStart + MIN_TEXT_ELEMENT_DURATION, end),
+    text,
+    ...overrides
+  });
+  writeTextElements([...getTextElements(), element]);
+  selectTextElement(element.id);
+  return element;
+}
+
+/**
+ * Turns one of the transcript's captions into cinematic text (kind
+ * 'interlude') or a text overlay — the caption capsule's own action, and the
+ * alternative to creating one at the playhead.
+ *
+ * The caption BECOMES the new element: it leaves the Captions lane in the
+ * same write that adds the element, so the words aren't shown twice, and one
+ * Undo puts everything back. The caption's own "This Caption" edits travel
+ * with it (see textElementFromCaption) and are removed from the caption list
+ * along with it; the element keeps the caption as its source, so
+ * restoreCaptionFromTextElement can turn it back.
+ */
+export function convertCaptionToTextElement(captionEventId, kind = 'interlude') {
+  const events = appState.captionEvents || [];
+  const event = events.find((e) => e.id === captionEventId);
+  if (!event) return null;
+  const words = appState.words || [];
+  const transformKey = getPhraseTransformKey({ start: event.start });
+  const transforms = appState.captionTransforms || {};
+  const transform = transforms[transformKey] || null;
+
+  const element = textElementFromCaption({ kind, event, words, transform });
+  if (!element.text.trim()) return null;
+
+  const nextEvents = events.filter((e) => e.id !== captionEventId);
+  const nextTransforms = { ...transforms };
+  if (transform) delete nextTransforms[transformKey];
+  updateState({
+    captionEvents: nextEvents,
+    phrases: resolveCaptionPhrases(words, nextEvents),
+    captionTransforms: nextTransforms,
+    textElements: [...getTextElements(), element].sort((a, b) => a.start - b.start),
+    selectedCaptionEventId: null
+  }, { recordHistory: true });
+  selectTextElement(element.id);
+  return element;
+}
+
+/**
+ * The way back: puts the source caption back on the Captions lane — at the
+ * time it was spoken, with the edits it had — and removes this element. One
+ * undo step, like the conversion.
+ */
+export function restoreCaptionFromTextElement(id) {
+  const element = getTextElement(id);
+  const source = element?.source;
+  if (!element || source?.kind !== 'caption' || !source.event) return null;
+  const event = normalizeCaptionEvent(source.event);
+  if (!event) return null;
+  const words = appState.words || [];
+  const nextEvents = [...(appState.captionEvents || []).filter((e) => e.id !== event.id), event].sort((a, b) => a.start - b.start);
+  const nextTransforms = { ...(appState.captionTransforms || {}) };
+  if (source.transform) nextTransforms[getPhraseTransformKey({ start: event.start })] = source.transform;
+  updateState({
+    captionEvents: nextEvents,
+    phrases: resolveCaptionPhrases(words, nextEvents),
+    captionTransforms: nextTransforms,
+    textElements: getTextElements().filter((el) => el.id !== id),
+    selectedTextElementId: null
+  }, { recordHistory: true });
+  return event;
+}
+
+/** Patches an interlude's full-frame background (e.g. { color: '#000000' }). A no-op on any other kind. */
+export function updateInterludeBackground(id, patch, { recordHistory = true } = {}) {
+  const element = getTextElement(id);
+  if (!element || element.kind !== 'interlude') return;
+  updateTextElement(id, { background: resolveInterludeBackground({ kind: 'interlude', background: { ...element.background, ...patch } }) }, { recordHistory });
+}
+
+/** Back to the interlude's starting look — its seeded style, not the caption's. */
+export function resetInterludeStyle(id) {
+  const element = getTextElement(id);
+  if (!element || element.kind !== 'interlude') return;
+  updateTextElement(id, { style: { ...INTERLUDE_DEFAULT_STYLE } });
+}
+
 export function updateTextElement(id, patch, { recordHistory = true } = {}) {
   const elements = getTextElements();
   const idx = elements.findIndex((el) => el.id === id);
@@ -155,7 +269,21 @@ export function moveTextElement(id, start, options) {
   const videoDuration = getVideoDuration();
   const maxStart = videoDuration > 0 ? Math.max(0, videoDuration - duration) : Number.MAX_SAFE_INTEGER;
   const nextStart = Math.min(maxStart, clampToTimeline(start));
-  return updateTextElement(id, { start: nextStart, end: nextStart + duration }, options);
+  const delta = nextStart - element.start;
+  const linked = new Set(element.soundIds || []);
+  if (!linked.size || !delta) return updateTextElement(id, { start: nextStart, end: nextStart + duration }, options);
+
+  // Linked sounds ride along by the same amount — in the SAME write as the
+  // element, so a drag is one undo step and no frame renders a card whose
+  // hit is still at the old time.
+  const idx = getTextElements().findIndex((el) => el.id === id);
+  const nextElements = getTextElements().slice();
+  nextElements[idx] = normalizeTextElement({ ...element, start: nextStart, end: nextStart + duration });
+  const soundEvents = (appState.soundEvents || []).map((e) => (linked.has(e.id)
+    ? { ...e, startTime: Math.max(0, videoDuration > 0 ? Math.min(videoDuration, e.startTime + delta) : e.startTime + delta), userModified: e.source === 'ai' ? true : e.userModified }
+    : e)).sort((a, b) => a.startTime - b.startTime);
+  updateState({ textElements: nextElements.sort((a, b) => a.start - b.start), soundEvents }, { recordHistory: options?.recordHistory ?? true });
+  return nextElements.find((el) => el.id === id);
 }
 
 /**
@@ -179,10 +307,49 @@ export function setTextElementEnabled(id, enabled) {
 
 export function removeTextElement(id) {
   const elements = getTextElements();
+  const element = elements.find((el) => el.id === id);
+  if (!element) return;
   const next = elements.filter((el) => el.id !== id);
-  if (next.length === elements.length) return;
-  writeTextElements(next);
+  // Its LINKED sounds go with it (a hit that belonged to a card that no
+  // longer exists is a stray sound), in the same write so one Undo brings
+  // both back. Unlinked sounds are the user's own and are left alone.
+  const linked = new Set(element.soundIds || []);
+  const updates = { textElements: next.slice().sort((a, b) => a.start - b.start) };
+  if (linked.size) updates.soundEvents = (appState.soundEvents || []).filter((e) => !linked.has(e.id));
+  updateState(updates, { recordHistory: true });
   if (appState.selectedTextElementId === id) selectTextElement(null);
+}
+
+/**
+ * "+ Sound at start": a new, ordinary SFX clip at the element's first frame,
+ * LINKED to it — added and linked in one write, so one Undo removes both.
+ */
+export function addLinkedSound(id, soundId) {
+  const element = getTextElement(id);
+  if (!element || !soundId) return null;
+  const event = createSoundEvent(soundId, element.start);
+  const idx = getTextElements().findIndex((el) => el.id === id);
+  const nextElements = getTextElements().slice();
+  nextElements[idx] = normalizeTextElement({ ...element, soundIds: [...(element.soundIds || []), event.id] });
+  updateState({
+    textElements: nextElements.sort((a, b) => a.start - b.start),
+    soundEvents: [...(appState.soundEvents || []), event].sort((a, b) => a.startTime - b.startTime)
+  }, { recordHistory: true });
+  return event;
+}
+
+/** Links a sound-effect clip to a text element, so it moves (and is removed) with it. */
+export function attachSoundToTextElement(id, soundEventId) {
+  const element = getTextElement(id);
+  if (!element || !soundEventId) return;
+  updateTextElement(id, { soundIds: [...new Set([...(element.soundIds || []), soundEventId])] });
+}
+
+/** Unlinks it again — the clip stays exactly where it is. */
+export function detachSoundFromTextElement(id, soundEventId) {
+  const element = getTextElement(id);
+  if (!element) return;
+  updateTextElement(id, { soundIds: (element.soundIds || []).filter((s) => s !== soundEventId) });
 }
 
 // --- Selection (editor UI only — never undo-tracked, never exported) --------

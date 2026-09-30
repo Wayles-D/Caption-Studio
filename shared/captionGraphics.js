@@ -132,6 +132,31 @@ function needsSyntheticBold(fontFamilyDisplayName, fontWeightNum) {
   return bold.file === regular.file;
 }
 
+/**
+ * Sets a font on a context — the ONE way this module does it.
+ *
+ * A VARIABLE font (Montserrat, Inter, Outfit, Lexend, … — one file carrying
+ * every weight) needs its weight axis set explicitly on the export canvas.
+ * @napi-rs/canvas does not pick an instance from the weight in the font
+ * string; it draws the font's default instance, which for Montserrat is
+ * weight 100 (Thin). So every export in one of these families was drawn
+ * Thin — plus only the light synthetic-bold stroke — while the browser
+ * preview, which does honour the weight, drew it at the requested weight.
+ * Measured: Montserrat 'THIS CHANGED EVERYTHING' at 40px is 583.1px wide at
+ * every weight from 100 to 900 before this, 610.1px at 800 after.
+ *
+ * Only a context that HAS fontVariationSettings is touched, and the browser's
+ * canvas has none, so the preview is unchanged; a static font has no weight
+ * axis, so it is unaffected by the setting.
+ */
+function setCanvasFont(ctx, font) {
+  ctx.font = font;
+  if (!('fontVariationSettings' in ctx)) return;
+  const weight = /(?:^|\s)([1-9]00)\s/.exec(font);
+  const value = weight ? "'wght' " + weight[1] : 'normal';
+  if (ctx.fontVariationSettings !== value) ctx.fontVariationSettings = value;
+}
+
 function buildFontString({ fontFamily, fontWeight, italic, fontSizePx }) {
   const weight = fontWeight || '400';
   const style = italic ? 'italic ' : '';
@@ -309,8 +334,26 @@ function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelW
 
   const fontSizePx = (parseFloat(cssConfig.text.fontSize) || 14) * pxScale;
   const wordSpacingPx = (cssConfig.wordSpacingPx || 0) * pxScale;
-  const maxWidthPx = (toPx(cssConfig.overlay.width, canvasWidth) || canvasWidth * 0.9) - (OVERLAY_HORIZONTAL_PADDING_PX * 2 * pxScale);
-  const lineHeightPx = fontSizePx * (parseFloat(profile.lineSpacing) || 1.25);
+
+  // BLOCK LAYOUT OVERRIDES — optional, and set only by a text element's own
+  // style bag (the cinematic interlude seeds them; see shared/textElement.js).
+  // getStyleParams() never emits these keys, so for every transcript caption
+  // each one is absent and the preset-derived value below is used exactly as
+  // before they existed.
+  //   textMaxWidth  — wrap width, % of frame width
+  //   lineHeight    — line box as a multiple of the font size
+  //   letterSpacing — authored px between glyphs (scaled like every authored px)
+  //   textAlign     — 'left' | 'center' | 'right' within the block
+  const widthPct = Number(params.textMaxWidth);
+  const maxWidthPx = (Number.isFinite(widthPct) && widthPct >= 10 && widthPct <= 100
+    ? canvasWidth * (widthPct / 100)
+    : (toPx(cssConfig.overlay.width, canvasWidth) || canvasWidth * 0.9)) - (OVERLAY_HORIZONTAL_PADDING_PX * 2 * pxScale);
+  const lineHeightMultiple = Number(params.lineHeight);
+  const lineHeightPx = fontSizePx * (Number.isFinite(lineHeightMultiple) && lineHeightMultiple >= 0.5 && lineHeightMultiple <= 3
+    ? lineHeightMultiple
+    : (parseFloat(profile.lineSpacing) || 1.25));
+  const letterSpacingPx = (Number(params.letterSpacing) || 0) * pxScale;
+  const textAlign = params.textAlign === 'left' || params.textAlign === 'right' ? params.textAlign : 'center';
 
   const shadowMode = resolveShadowMode(params);
   const shadowParams = resolveShadowOutlineParams(params, profile, false);
@@ -368,7 +411,37 @@ function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelW
   const borderRadiusPx = (parseFloat(cssConfig.text.borderRadius) || 0) * pxScale;
   const backgroundColor = cssConfig.backgroundColor;
 
-  return { pxScale, cssPxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge, rotationDeg, isBoxed, boxPadXPx, boxPadYPx, borderRadiusPx, backgroundColor };
+  return { pxScale, cssPxScale, fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, letterSpacingPx, textAlign, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, anchorX, anchorY, yEdge, rotationDeg, isBoxed, boxPadXPx, boxPadYPx, borderRadiusPx, backgroundColor };
+}
+
+/**
+ * Sets the canvas's letter spacing for a block, and resets it to none for a
+ * block without any. Both canvases in use (the browser's and @napi-rs/canvas)
+ * support letterSpacing and measure it identically — it widens measureText by
+ * the spacing after every glyph, trailing one included, and layout accounts
+ * for that (see layoutLines / the paint x-offset). A block with no spacing
+ * leaves a context that has never had any untouched.
+ */
+function applyLetterSpacing(ctx, letterSpacingPx) {
+  if (!('letterSpacing' in ctx)) return;
+  const value = letterSpacingPx ? letterSpacingPx + 'px' : '0px';
+  if (ctx.letterSpacing !== value) ctx.letterSpacing = value;
+}
+
+/**
+ * Fills the WHOLE frame with a solid colour — a cinematic interlude's
+ * background (see shared/textElement.js's resolveInterludeBackground). The
+ * one place it is painted, called by both the preview's text layer and the
+ * exporter's, so the two fill the same frame the same way. A frame, not a
+ * text box: it is not rotated, scaled or animated with the text on top of it.
+ */
+export function paintFrameBackground(ctx, background, canvasWidth, canvasHeight) {
+  if (!background || background.type !== 'color' || !background.color) return;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = background.color;
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  ctx.restore();
 }
 
 /**
@@ -474,7 +547,7 @@ function resolveWordDrawSpec(word, drawCtx) {
  * container — with manual line breaks at breakAfterIndices. Only visible
  * words (typewriter's not-yet-spoken words are dropped) occupy layout space.
  */
-function layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndices }) {
+function layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndices, letterSpacingPx = 0 }) {
   const lines = [];
   let current = [];
   let currentWidth = 0;
@@ -487,8 +560,11 @@ function layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndi
 
   wordUnits.forEach((unit) => {
     if (!unit.visible) return;
-    ctx.font = unit.font;
-    const measuredWidth = ctx.measureText(unit.text).width * unit.scale;
+    setCanvasFont(ctx, unit.font);
+    // Letter spacing is also measured after a word's LAST glyph; that
+    // trailing gap is not part of the word, so it is taken back out here
+    // (and the paint step shifts by half of it — see paintSentenceComposite).
+    const measuredWidth = (ctx.measureText(unit.text).width - letterSpacingPx) * unit.scale;
     const spacing = current.length ? wordSpacingPx : 0;
 
     if (current.length && currentWidth + spacing + measuredWidth > maxWidthPx) {
@@ -533,7 +609,7 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
 
-  const { fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, anchorX, anchorY, yEdge } = geometry;
+  const { fontSizePx, wordSpacingPx, maxWidthPx, lineHeightPx, anchorX, anchorY, yEdge, letterSpacingPx = 0, textAlign = 'center' } = geometry;
 
   const breakAfterIndices = new Set(activePhrase.breakAfterIndices || []);
   const drawCtx = { currentTime, mode, keywordsEnabled, keywordColor, activeHighlight, inactiveColor, params, profile, blockFontWeight };
@@ -631,7 +707,8 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
 
   ctx.textBaseline = 'alphabetic';
   ctx.lineJoin = 'round';
-  const lines = layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndices });
+  applyLetterSpacing(ctx, letterSpacingPx);
+  const lines = layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndices, letterSpacingPx });
   if (!lines.length) return null;
 
   const totalHeight = lines.length * lineHeightPx;
@@ -647,7 +724,12 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
   lines.forEach((line, lineIdx) => {
     const lineTop = blockTop + lineIdx * lineHeightPx;
     const baselineY = lineTop + lineHeightPx * 0.8;
-    let cursorX = anchorX - line.width / 2;
+    // Lines are aligned WITHIN the block, and the block stays centred on the
+    // anchor — so a left-aligned block still sits where it was placed, and its
+    // box (and rotation pivot) is unchanged by the alignment.
+    let cursorX = textAlign === 'left' ? anchorX - blockWidth / 2
+      : textAlign === 'right' ? anchorX + blockWidth / 2 - line.width
+      : anchorX - line.width / 2;
     line.words.forEach((word) => {
       word.x = cursorX;
       word.y = lineTop;
@@ -674,9 +756,13 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
  * paintComposite/renderRollingStackResolvedFrame split.
  */
 function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, activePhrase, params, currentTime, canvasWidth, canvasHeight, geometry }) {
-  const { fontSizePx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, rotationDeg } = geometry;
+  const { fontSizePx, outlineWidthPx, outlineColor, hasShadow, shadowBlurPx, shadowOffsetXPx, shadowOffsetYPx, shadowColor, rotationDeg, letterSpacingPx = 0 } = geometry;
 
   targetCtx.save();
+  // Painted onto whichever surface this is — the live canvas or the Unified
+  // shadow's offscreen one — so it has to be set here, not only where the
+  // lines were measured.
+  applyLetterSpacing(targetCtx, letterSpacingPx);
   if (rotationDeg) {
     targetCtx.translate(centerX, centerY);
     targetCtx.rotate((rotationDeg * Math.PI) / 180);
@@ -756,7 +842,10 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
       // — see resolveWordStyleMetadata); every other word (including every
       // word of a non-keyword-driven preset) falls back to the frame-level
       // Shadow/Outline slider values exactly as before this feature existed.
-      paintText(targetCtx, word.text, word.centerX, word.baselineY, {
+      // Centred text with letter spacing is drawn with a trailing gap after
+      // its last glyph; shifting by half of it centres the visible glyphs on
+      // the word's own centre (a no-op without letter spacing).
+      paintText(targetCtx, word.text, word.centerX + (letterSpacingPx * (word.scale || 1)) / 2, word.baselineY, {
         font: word.font,
         color: word.color,
         scale: word.scale,
@@ -987,7 +1076,7 @@ function paintText(ctx, text, x, y, style) {
   } = style;
 
   ctx.save();
-  ctx.font = font;
+  setCanvasFont(ctx, font);
   ctx.textAlign = textAlign;
 
   if (scale !== 1) {
@@ -1284,11 +1373,11 @@ function buildChunkWordStyleUnits(ctx, spec, chunk, params, geometry) {
   const units = rawWords.map((w, i) => {
     const text = displayWords[i] ?? (w.word || w.text || '').trim();
     const style = applyWordStyleOverride(spec, resolveWordStyleOverride(params, w.wordIndex), geometry, spec.fontSizePx);
-    ctx.font = style.font;
+    setCanvasFont(ctx, style.font);
     return { wordIndex: w.wordIndex, text, style, width: ctx.measureText(text).width };
   });
 
-  ctx.font = spec.font;
+  setCanvasFont(ctx, spec.font);
   const spaceWidth = ctx.measureText(' ').width;
   const totalWidth = units.reduce((sum, u) => sum + u.width, 0) + spaceWidth * Math.max(0, units.length - 1);
 
@@ -1321,7 +1410,7 @@ function layoutRollingStackLines(ctx, windowChunks, cssConfig, params, geometry,
     if (styleUnits) {
       width = styleUnits.totalWidth;
     } else {
-      ctx.font = spec.font;
+      setCanvasFont(ctx, spec.font);
       width = ctx.measureText(spec.text).width;
     }
     const lineHeightPx = spec.fontSizePx * (parseFloat(cssConfig.profile.lineSpacing) || 1.25);
@@ -1381,7 +1470,7 @@ function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
   const rawWords = line.chunk?.words || [];
   if (!rawWords.length) return [];
 
-  ctx.font = line.font;
+  setCanvasFont(ctx, line.font);
   const displayWords = line.text.split(' ');
   const spaceWidth = ctx.measureText(' ').width;
   // When a word in this chunk carries its own style, its width was already

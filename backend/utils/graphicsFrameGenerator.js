@@ -23,7 +23,7 @@ import fs from 'fs';
 import path from 'path';
 import { createCanvas } from '@napi-rs/canvas';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
-import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport } from '../../shared/captionGraphics.js';
+import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
 import { resolveAnimationConfig } from '../../shared/captionAnimation.js';
@@ -33,7 +33,10 @@ import {
   getActiveTextElements,
   getTextElementBoundaryTimes,
   textElementToPhrase,
-  resolveTextElementParams
+  resolveTextElementParams,
+  isTextElementRenderable,
+  orderForCompositing,
+  resolveInterludeBackground
 } from '../../shared/textElement.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 
@@ -428,7 +431,9 @@ function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
  * @returns {{start:number,end:number,file:string}[]} Contiguous segments covering [0, videoDuration), or [] when there is no text at all (in which case the caller adds no second layer and the export is byte-identical to one without this feature).
  */
 function buildTextElementSegments(textElements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile) {
-  const active = (textElements || []).filter((el) => el.enabled && String(el.text || '').trim());
+  // The same "does it draw anything" rule the preview uses — an interlude
+  // with no words still draws its background (see isTextElementRenderable).
+  const active = (textElements || []).filter(isTextElementRenderable);
   if (!active.length) return [];
 
   registerBackendCanvasFonts();
@@ -449,6 +454,16 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     for (let t = from + ANIMATION_SAMPLE_STEP_SECONDS; t < to; t += ANIMATION_SAMPLE_STEP_SECONDS) addCut(t);
   };
   active.forEach((element) => {
+    // An element made from a caption keeps each word's spoken timing (see
+    // shared/textElement.js's textElementFromCaption), so its karaoke
+    // highlight / pop / typewriter reveal changes AT each word — the same
+    // boundaries the caption stream itself is cut at. A typed element's words
+    // all span the element, so this adds nothing for it.
+    textElementToPhrase(element).words.forEach((w) => {
+      if (w.start > element.start && w.start < element.end) addCut(w.start);
+      if (w.end > element.start && w.end < element.end) addCut(w.end);
+    });
+
     const kfRange = getKeyframeTimeRange({ keyframes: element.keyframes });
     if (kfRange) addSamples(Math.max(kfRange.min, element.start), Math.min(kfRange.max, element.end));
 
@@ -486,7 +501,9 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     // A plain overlap test is exact here with no epsilon, because the cuts
     // are taken AT every element boundary: no element can partially cover a
     // segment, so "overlaps" and "covers" are the same thing.
-    const visible = active.filter((el) => el.start < end && el.end > start);
+    // Drawn in the preview's order (orderForCompositing): at most one
+    // interlude, which covers the frame, with overlays on top of it.
+    const visible = orderForCompositing(active.filter((el) => el.start < end && el.end > start));
     if (!visible.length) {
       // Nothing on screen — the shared fully-transparent frame, exactly as
       // the caption stream fills its own gaps.
@@ -496,6 +513,13 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
 
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     visible.forEach((element) => {
+      // A cinematic interlude's full-frame background: an OPAQUE PNG for this
+      // segment, so the plain alpha-over composite of this layer hides the
+      // video and the caption layers beneath it — while the audio, which
+      // never passes through this pipeline, plays on unchanged. The same
+      // paint call the preview makes.
+      const interludeBackground = resolveInterludeBackground(element);
+      if (interludeBackground) paintFrameBackground(ctx, interludeBackground, canvasWidth, canvasHeight);
       // Shared with the live preview (src/js/components/preview.js's
       // syncTextElementsCanvas) so an overlay resolves identically on both
       // sides — see resolveTextElementParams.
