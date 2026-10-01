@@ -232,12 +232,14 @@ export function WordInspector() {
             type="button"
             className={`${TOGGLE_BTN_BASE} ${style.italic ? TOGGLE_BTN_ON : TOGGLE_BTN_OFF} italic`}
             onClick={() => set({ italic: style.italic ? null : true })}
+            id="word-italic"
             title="Italic"
           >I</button>
           <button
             type="button"
             className={`${TOGGLE_BTN_BASE} ${style.underline ? TOGGLE_BTN_ON : TOGGLE_BTN_OFF} underline`}
             onClick={() => set({ underline: style.underline ? null : true })}
+            id="word-underline"
             title="Underline"
           >U</button>
         </div>

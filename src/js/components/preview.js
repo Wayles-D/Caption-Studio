@@ -87,9 +87,11 @@ function loadKeywordDrivenFontFaces(cssConfig) {
  * for the caption's base font.
  */
 function ensureWordStyleFontsReady(fontSizePx) {
-  const overrides = appState.captionTransforms;
-  if (!overrides) return;
-  Object.keys(overrides).forEach((key) => {
+  // A caption word's own style lives in appState.captionTransforms; a text
+  // element's word's lives on that element (shared/textElement.js's
+  // wordTransforms) — the same trap applies to both.
+  const maps = [appState.captionTransforms, ...(appState.textElements || []).map((el) => el?.wordTransforms)];
+  maps.filter(Boolean).forEach((overrides) => Object.keys(overrides).forEach((key) => {
     if (!key.startsWith('w')) return;
     const style = overrides[key]?.style;
     if (!style) return;
@@ -104,7 +106,7 @@ function ensureWordStyleFontsReady(fontSizePx) {
     loadLocalFontFace(family, faceKey);
     ensureCanvasFontReady(resolved.familyName, style.fontWeight || '400', fontSizePx, resolved.italic)
       .then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
-  });
+  }));
 }
 
 /**

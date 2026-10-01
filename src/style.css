@@ -1856,3 +1856,10 @@ body.light-theme {
   background: var(--bg-input);
   color: var(--accent-color);
 }
+
+/* A word inside a text element is selected: its own box is shown, but the
+   resize/rotate handles act on whole elements, so they are not offered on it. */
+#caption-transform-box.is-text-word .caption-transform-handle,
+#caption-transform-box.is-text-word .caption-transform-rotate-line {
+  display: none;
+}

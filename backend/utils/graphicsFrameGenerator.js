@@ -26,7 +26,7 @@ import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
-import { resolveAnimationConfig } from '../../shared/captionAnimation.js';
+import { resolveAnimationConfig, resolveWordAnimationWindow } from '../../shared/captionAnimation.js';
 import { getKeyframeTimeRange } from '../../shared/keyframes.js';
 import {
   normalizeTextElementList,
@@ -78,14 +78,50 @@ function computeBoundarySlices(phrase) {
   return slices;
 }
 
-// Fixed sampling rate used ONLY inside an active entrance-animation window —
-// deliberately independent of the source video's own frame rate (an exact
-// per-video-frame match isn't required for a smooth-looking ramp, and tying
-// it to a possibly-high source fps would blow the PNG-count budget this
-// module's boundary-slice design exists to protect — see this file's own
-// header comment). 60ms (~16-17fps) is dense enough that a linear/eased
-// alpha or scale ramp reads as continuous motion, not a slideshow.
+// Sampling used ONLY inside an active animation window (an entrance, or a
+// keyframed stretch).
+//
+// With the output's frame rate known (buildFullTimelineSegments' frameRate —
+// the rate the compositor lays these PNGs onto), samples sit ON that frame
+// grid: one per frame, or one per two or three frames at high rates (never
+// denser than ~40 per second, to keep the PNG count bounded — see this
+// file's header comment). Each sample is drawn at exactly the instant its
+// frame shows, which is the instant the preview draws that frame at, so an
+// exported entrance passes through the same positions the preview did.
+//
+// Without one it falls back to a fixed 60ms step. (That used to be the only
+// mode: a 0.25s slide got four or five positions, each held for two frames
+// and drawn up to 60ms before the frame that showed it — visibly steppier,
+// and slightly behind, the preview.)
 const ANIMATION_SAMPLE_STEP_SECONDS = 0.06;
+const MAX_SAMPLES_PER_SECOND = 40;
+// Set for the duration of one (synchronous) buildFullTimelineSegments call.
+let sampleFps = null;
+
+function parseFrameRate(rate) {
+  if (!rate) return null;
+  const [n, d = '1'] = String(rate).split('/');
+  const v = Number(n) / Number(d);
+  return Number.isFinite(v) && v >= 5 && v <= 240 ? v : null;
+}
+
+/** Sample instants strictly inside (from, to) — see the note above. */
+function animationSampleTimes(from, to) {
+  const times = [];
+  if (!(to > from)) return times;
+  if (sampleFps) {
+    const step = Math.max(1, Math.round(sampleFps / MAX_SAMPLES_PER_SECOND));
+    // The first frame at or after `from`; a frame index, so it never drifts.
+    let frame = Math.ceil(from * sampleFps - 1e-6);
+    for (; frame / sampleFps < to - 1e-9; frame += step) {
+      const t = frame / sampleFps;
+      if (t > from + 1e-9) times.push(t);
+    }
+    return times;
+  }
+  for (let t = from + ANIMATION_SAMPLE_STEP_SECONDS; t < to - 1e-9; t += ANIMATION_SAMPLE_STEP_SECONDS) times.push(t);
+  return times;
+}
 
 /**
  * Subdivides whichever boundary/window slices overlap an entrance
@@ -119,8 +155,7 @@ function subdivideSlicesForAnimation(slices, animStart, animEnd) {
     if (slice.start < overlapStart) result.push({ start: slice.start, end: overlapStart });
 
     let t = overlapStart;
-    while (t < overlapEnd) {
-      const next = Math.min(t + ANIMATION_SAMPLE_STEP_SECONDS, overlapEnd);
+    for (const next of [...animationSampleTimes(overlapStart, overlapEnd), overlapEnd]) {
       if (next - t >= 0.001) result.push({ start: t, end: next });
       t = next;
     }
@@ -128,6 +163,19 @@ function subdivideSlicesForAnimation(slices, animStart, animEnd) {
     if (slice.end > overlapEnd) result.push({ start: overlapEnd, end: slice.end });
   }
   return result;
+}
+
+/**
+ * The stretch a word's own entrance is actually moving over, or null — its
+ * window (shared/captionAnimation.js's resolveWordAnimationWindow, the one
+ * the painter uses) cut to the configured duration, which it never outlasts.
+ */
+function wordAnimationSpan(word, container, override) {
+  if (!override?.animationType || override.animationType === 'none') return null;
+  const win = resolveWordAnimationWindow(word, container, override);
+  const { duration } = resolveAnimationConfig({ captionAnimationType: override.animationType, captionAnimationDuration: override.animationDuration });
+  const end = win.start + Math.min(duration, win.end - win.start);
+  return end > win.start ? { start: win.start, end } : null;
 }
 
 /**
@@ -144,16 +192,13 @@ function subdivideSlicesForAnimation(slices, animStart, animEnd) {
  * window untouched, so calling it once per animated word composes safely
  * regardless of how many (if any) words in a phrase have one.
  */
-function subdivideForWordAnimations(slices, words, params) {
+function subdivideForWordAnimations(slices, words, params, container) {
   let result = slices;
   (words || []).forEach((w) => {
     const override = resolveWordOverride(params, w.wordIndex);
     if (!override) return;
-    if (override.animationType && override.animationType !== 'none') {
-      const lifetime = Math.max(0, (w.end ?? w.start) - w.start);
-      const duration = Math.min(override.animationDuration || 0.25, lifetime);
-      if (duration > 0) result = subdivideSlicesForAnimation(result, w.start, w.start + duration);
-    }
+    const win = wordAnimationSpan(w, container, override);
+    if (win) result = subdivideSlicesForAnimation(result, win.start, win.end);
     // Real timeline keyframes (see shared/keyframes.js) need the exact same
     // dense-sampling treatment as an entrance animation — otherwise a
     // word's keyframed position/scale/rotation/opacity would render as a
@@ -221,7 +266,7 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
   if (phraseKfRange) {
     slices = subdivideSlicesForAnimation(slices, phraseKfRange.min, phraseKfRange.max);
   }
-  slices = subdivideForWordAnimations(slices, phrase.words, staticPhraseParams);
+  slices = subdivideForWordAnimations(slices, phrase.words, staticPhraseParams, phrase);
 
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
@@ -315,8 +360,14 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
     }
     // Per-word animation (keyword scope) — only the words actually in THIS
     // window (not the whole phrase) can matter for this slice's own range.
-    const wordsInWindow = slice.chunks.flatMap((c) => c.words || []);
-    subSlices = subdivideForWordAnimations(subSlices, wordsInWindow, staticPhraseParams);
+    // Each line (chunk) is its words' container, until the window moves on —
+    // the same container the painter gives them (paintRollingStackLines).
+    const windowEnd = slice.chunks[slice.chunks.length - 1]?.end;
+    slice.chunks.forEach((c) => {
+      const starts = (c.words || []).map((w) => w.start).filter((t) => t != null);
+      const container = { start: starts.length ? Math.min(...starts) : undefined, end: windowEnd };
+      subSlices = subdivideForWordAnimations(subSlices, c.words || [], staticPhraseParams, container);
+    });
     return subSlices.map((sub) => ({ ...sub, chunks: slice.chunks }));
   });
 
@@ -451,7 +502,8 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
   // for caption-level and then per-word animation (see
   // subdivideSlicesForAnimation's own doc comment).
   const addSamples = (from, to) => {
-    for (let t = from + ANIMATION_SAMPLE_STEP_SECONDS; t < to; t += ANIMATION_SAMPLE_STEP_SECONDS) addCut(t);
+    addCut(from);
+    animationSampleTimes(from, to).forEach(addCut);
   };
   active.forEach((element) => {
     // An element made from a caption keeps each word's spoken timing (see
@@ -467,12 +519,25 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     const kfRange = getKeyframeTimeRange({ keyframes: element.keyframes });
     if (kfRange) addSamples(Math.max(kfRange.min, element.start), Math.min(kfRange.max, element.end));
 
-    const animType = element.style?.captionAnimationType ?? params.captionAnimationType;
-    if (animType && animType !== 'none') {
-      const requested = element.style?.captionAnimationDuration ?? params.captionAnimationDuration ?? 0.25;
-      const duration = Math.min(requested, element.end - element.start);
+    // The element's params as its draw resolves them (resolveTextElementParams
+    // — the style bag over the caption's params, its own words' map), so the
+    // windows sampled here are exactly the ones that move on screen.
+    const elementParams = resolveTextElementParams(params, element);
+    const animation = resolveAnimationConfig(elementParams);
+    if (animation.type !== 'none') {
+      const duration = Math.min(animation.duration, element.end - element.start);
       if (duration > 0) addSamples(element.start, element.start + duration);
     }
+    // ...and each of its words' own entrances and keyframes.
+    const phrase = textElementToPhrase(element);
+    phrase.words.forEach((w) => {
+      const override = resolveWordOverride(elementParams, w.wordIndex);
+      if (!override) return;
+      const win = wordAnimationSpan(w, phrase, override);
+      if (win) addSamples(Math.max(win.start, element.start), Math.min(win.end, element.end));
+      const wordKf = getKeyframeTimeRange(override);
+      if (wordKf) addSamples(Math.max(wordKf.min, element.start), Math.min(wordKf.max, element.end));
+    });
   });
 
   const boundaries = Array.from(cuts).sort((a, b) => a - b);
@@ -547,7 +612,19 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
   return segments;
 }
 
-export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir) {
+export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, { frameRate = null } = {}) {
+  // Everything below is synchronous, so the sampling grid set here is the
+  // one every animation in this build is sampled on (see animationSampleTimes).
+  const previousFps = sampleFps;
+  sampleFps = parseFrameRate(frameRate);
+  try {
+    return buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir);
+  } finally {
+    sampleFps = previousFps;
+  }
+}
+
+function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir) {
   const blankFile = generateBlankFrame(canvasWidth, canvasHeight, outDir);
   const pushGap = (segments, start, end) => {
     if (end - start >= 0.001) segments.push({ start, end, file: blankFile });

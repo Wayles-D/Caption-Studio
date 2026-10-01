@@ -218,6 +218,12 @@ export function PreviewStage({
                 <button type="button" className="caption-transform-scope-btn" id="btn-anim-scope-all-words" hidden>All Words</button>
                 <button type="button" className="caption-transform-scope-btn" id="btn-anim-scope-this-caption" hidden>This Caption</button>
                 <button type="button" className="caption-transform-scope-btn" id="btn-anim-scope-all-captions" hidden>All Captions</button>
+                {/* How the targeted words enter: each at its own spoken
+                    time, or together as one — independent of WHICH words
+                    are targeted (the scope buttons above). See
+                    canvasTransform.js's applyAnimationTiming. */}
+                <button type="button" className="caption-transform-scope-btn" id="btn-anim-timing-each" hidden>One by One</button>
+                <button type="button" className="caption-transform-scope-btn" id="btn-anim-timing-together" hidden>Together</button>
                 <button type="button" className="caption-transform-reset-btn" id="btn-transform-reset">Reset</button>
                 <span className="caption-transform-rotation-label" id="caption-transform-rotation-label" />
               </div>

@@ -57,6 +57,7 @@ import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/capt
 import { setWordKeyword } from './transcriptEditorState.js';
 import { deselectVideoTarget } from './videoTransform.js';
 import { getTextElement, updateTextElement, updateTextElementStyle, setTextElementValues, selectTextElement } from './textElements.js';
+import { textElementToPhrase } from '../../../shared/textElement.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../../../shared/captionGraphics.js';
 
@@ -95,6 +96,7 @@ function routeFieldsThroughKeyframes(existing, fields, fieldToProperty, readCurr
 let overlayEl, hitAreaEl, boxEl, rotateHandleEl, toolbarEl, scopeThisBtn, scopeAllBtn, resetBtn, rotationLabelEl;
 let scopeThisKeywordBtn, scopeAllKeywordsBtn, scopeSelectKeywordsBtn, keywordMultiSelectDoneBtn, keywordMultiSelectLabelEl;
 let animationTypeSelect, animScopeThisBtn, animScopeSameTypeBtn, animScopeAllWordsBtn, animScopeThisCaptionBtn, animScopeAllCaptionsBtn, animationSectionLabelEl;
+let animTimingEachBtn, animTimingTogetherBtn;
 let keywordToggleBtn, groupStartBtn, groupConfirmBtn, groupMultiSelectLabelEl;
 let selected = false;
 // { x, y, width, height, centerX, centerY, rotationDeg, cssPxScale, phrase, mode, words?, chunks? }
@@ -126,6 +128,77 @@ let currentBox = null;
 // match under a click is the topmost one).
 let textElementBoxes = [];
 let selectedTextElementId = null;
+// A WORD inside the selected text element (its position in that element's
+// text — see shared/textElement.js's wordTransforms), or null when the whole
+// element is the selection. The second click on a selected element picks the
+// word under it, exactly as a second click on a caption picks a word.
+let selectedTextWordIndex = null;
+// Whether the current text selection was made by a click ON THE VIDEO. Only
+// then does a further click drill into a word — an element that became
+// selected some other way (just created, picked on the timeline) takes its
+// first click on the video as selecting it, exactly as a caption does, so
+// that click never lands the user inside a word unasked.
+let textSelectedOnCanvas = false;
+
+/**
+ * The per-word edits the current selection's words live in. A caption's
+ * words are the transcript's (appState.captionTransforms); a text element's
+ * words are its own (element.wordTransforms) — same entry shape, read by the
+ * same renderer, so everything below that reads a word's entry works on
+ * either. The two selections never coexist (selectTextElementTarget clears
+ * the caption one), so "a text element is selected" decides which map.
+ */
+function activeWordMap() {
+  if (selectedTextElementId) return getTextElement(selectedTextElementId)?.wordTransforms || {};
+  return appState.captionTransforms;
+}
+
+/** The selected text element's words, in order, with keyword flags (all of them, shown or not). */
+function selectedTextElementWords() {
+  const element = selectedTextElementId ? getTextElement(selectedTextElementId) : null;
+  return element ? textElementToPhrase(element).words : [];
+}
+
+function isTextWordKeyword(index) {
+  return !!selectedTextElementWords().find((w) => w.wordIndex === index)?.isKeyword;
+}
+
+/**
+ * Rewrites some of the selected text element's word entries in one write.
+ * `mutate` gets a copy of each entry and returns the next one (an empty
+ * result removes the entry).
+ */
+function writeTextWordEntries(indexes, mutate, { recordHistory }) {
+  const element = selectedTextElementId ? getTextElement(selectedTextElementId) : null;
+  if (!element || !indexes.length) return;
+  const map = { ...(element.wordTransforms || {}) };
+  indexes.forEach((i) => {
+    const key = getWordTransformKey(i);
+    const next = mutate({ ...(map[key] || {}) });
+    if (next && Object.keys(next).length) map[key] = next;
+    else delete map[key];
+  });
+  updateTextElement(element.id, { wordTransforms: map }, { recordHistory });
+}
+
+/** The element's words a word-level animation scope reaches, from the selected one. */
+function textWordIndexesForScope(scope, index) {
+  const words = selectedTextElementWords();
+  if (scope === 'all-words') return words.map((w) => w.wordIndex);
+  if (scope === 'same-type') {
+    const kw = isTextWordKeyword(index);
+    return words.filter((w) => !!w.isKeyword === kw).map((w) => w.wordIndex);
+  }
+  return [index];
+}
+
+function selectTextWord(index) {
+  selectedTextWordIndex = index;
+  resetKeywordScopeState();
+  if (toolbarEl) toolbarEl.hidden = index == null;
+  if (boxEl) boxEl.classList.toggle('is-text-word', index != null);
+  notifySelectionChangedIfNeeded();
+}
 
 // The individual word currently selected within currentBox, or null when the
 // selection is at the whole-caption/group level. Independent of `selected`:
@@ -257,7 +330,7 @@ function effectiveValue(phrase, field, globalValue) {
  */
 function effectiveWordValue(wordIndex, field, fallback) {
   if (wordIndex == null) return fallback;
-  const override = appState.captionTransforms[getWordTransformKey(wordIndex)];
+  const override = activeWordMap()[getWordTransformKey(wordIndex)];
   return resolveEffectiveField(override, field, WORD_FIELD_TO_PROPERTY, fallback);
 }
 
@@ -755,6 +828,20 @@ function applyPhraseAnimationFields(fields, isAllCaptions, { recordHistory }) {
  * the current caption" (this feature's own architectural rule).
  */
 function applyAnimationFields(fields, opts) {
+  // A word inside a text element: the same scopes, over THAT element's words
+  // — This Word, All Keywords / All Normal Words, All Words — and "Whole
+  // Text" for the element itself, which is its own entrance (its style's
+  // captionAnimationType, the field the Text panel edits too). There is no
+  // "all captions" for an object that exists once.
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    const scope = appState.animationApplyScope;
+    if (scope === 'this-caption') {
+      updateTextElementStyle(selectedTextElementId, { captionAnimationType: fields.animationType }, opts);
+      return;
+    }
+    writeTextWordEntries(textWordIndexesForScope(scope, selectedTextWordIndex), (entry) => ({ ...entry, ...fields }), opts);
+    return;
+  }
   if (selectedWordIndex != null) {
     const scope = appState.animationApplyScope;
     if (scope === 'this-caption' || scope === 'all-captions') {
@@ -768,6 +855,49 @@ function applyAnimationFields(fields, opts) {
   // 'same-type'/'all-words') are meaningless without a word selected, so
   // only the all-captions/not-all-captions distinction matters here.
   applyPhraseAnimationFields(fields, appState.animationApplyScope === 'all-captions', opts);
+}
+
+/**
+ * Whether the targeted words enter ONE BY ONE, each at its own spoken time
+ * (the default), or TOGETHER, as one composition at the start of the caption
+ * or text they're in. Separate from WHICH words are targeted (the scope
+ * buttons): "All Keywords + Together" makes every keyword of a caption arrive
+ * at once while its other words stay put. Read by the renderer and the
+ * exporter through shared/captionAnimation.js's resolveWordAnimationWindow.
+ */
+function getSelectedWordAnimationTiming() {
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    return activeWordMap()[getWordTransformKey(selectedTextWordIndex)]?.animationTiming === 'together' ? 'together' : 'word';
+  }
+  if (selectedWordIndex != null) {
+    return appState.captionTransforms[getWordTransformKey(selectedWordIndex)]?.animationTiming === 'together' ? 'together' : 'word';
+  }
+  return 'word';
+}
+
+function applyAnimationTiming(timing) {
+  const value = timing === 'together' ? 'together' : null;
+  const scope = appState.animationApplyScope;
+  const set = (entry) => {
+    const next = { ...entry };
+    if (value) next.animationTiming = value;
+    else delete next.animationTiming;
+    return next;
+  };
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    writeTextWordEntries(textWordIndexesForScope(scope, selectedTextWordIndex), set, { recordHistory: true });
+    return;
+  }
+  if (selectedWordIndex == null) return;
+  const indexes = getWordIndexesForAnimationScope(scope, selectedWordIndex);
+  const nextMap = { ...appState.captionTransforms };
+  indexes.forEach((idx) => {
+    const key = getWordTransformKey(idx);
+    const next = set(nextMap[key] || {});
+    if (Object.keys(next).length) nextMap[key] = next;
+    else delete nextMap[key];
+  });
+  updateState({ captionTransforms: nextMap }, { recordHistory: true });
 }
 
 /**
@@ -893,6 +1023,12 @@ function resetWordTransform(wordIndex) {
 }
 
 function resetCurrentTransform() {
+  // A word inside a text element: back to the element's own look — its
+  // entry (style, animation) goes.
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    writeTextWordEntries([selectedTextWordIndex], () => null, { recordHistory: true });
+    return;
+  }
   if (!currentBox) return;
   if (selectedWordIndex != null) {
     if (isKeywordIndex(selectedWordIndex)) {
@@ -1017,13 +1153,23 @@ function ensureMinimumGrabBox(box) {
  * the padding is symmetric around the same center, so it doesn't change
  * what a drag/resize/rotate gesture computes.
  */
+/** The selected text element's own (whole) box — what moving it works from, even while one of its words is the selection. */
+function getTextElementDisplayBox() {
+  const entry = textElementBoxes.find((b) => b.id === selectedTextElementId);
+  return entry ? ensureMinimumGrabBox(inflateBox(entry.box, CAPTION_SELECTION_PADDING_CSS_PX)) : null;
+}
+
 function getDisplayBox() {
   // Checked BEFORE currentBox: a text element is independent of the
   // transcript, so it can be selected (and dragged) on a frame where no
   // caption is on screen at all and currentBox is therefore null.
   if (selectedTextElementId) {
     const entry = textElementBoxes.find((b) => b.id === selectedTextElementId);
-    return entry ? ensureMinimumGrabBox(inflateBox(entry.box, CAPTION_SELECTION_PADDING_CSS_PX)) : null;
+    if (entry && selectedTextWordIndex != null) {
+      const word = getWordCandidates(entry.box).find((w) => w.wordIndex === selectedTextWordIndex);
+      if (word) return ensureMinimumGrabBox(wordBoxFor(word, entry.box));
+    }
+    return getTextElementDisplayBox();
   }
   if (!currentBox) return null;
   if (selectedWordIndex != null) {
@@ -1163,7 +1309,7 @@ function currentSelectionTarget() {
   // group scope buttons apply to it (there is no "all captions" for an
   // object that exists exactly once), so classifying it here is what keeps
   // every one of them hidden in updateScopeButtons.
-  if (selectedTextElementId) return 'text';
+  if (selectedTextElementId) return selectedTextWordIndex != null ? 'text-word' : 'text';
   if (selectedWordIndex == null) {
     // A partial/custom group (some caption words detached, or an explicitly
     // grouped subset) has no phrase-level field of its own — This Caption/
@@ -1195,6 +1341,10 @@ function currentSelectionTarget() {
  * actually use).
  */
 function getCurrentAnimationTypeForDisplay() {
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    if (appState.animationApplyScope === 'this-caption') return getTextElement(selectedTextElementId)?.style?.captionAnimationType || 'none';
+    return activeWordMap()[getWordTransformKey(selectedTextWordIndex)]?.animationType || 'none';
+  }
   if (selectedWordIndex != null) {
     const override = appState.captionTransforms[getWordTransformKey(selectedWordIndex)];
     return override?.animationType || 'none';
@@ -1251,8 +1401,12 @@ function updateScopeButtons() {
   // which SCOPE buttons show depends on the target — see each button block
   // below — but the type select itself is always visible whenever anything
   // is selected.
-  const showAnimationSection = (target === 'word' || target === 'keyword' || target === 'caption' || target === 'group') && !suppressForMultiSelect;
-  const isWordTarget = target === 'word' || target === 'keyword';
+  const showAnimationSection = (target === 'word' || target === 'keyword' || target === 'caption' || target === 'group' || target === 'text-word') && !suppressForMultiSelect;
+  const isTextWord = target === 'text-word';
+  const isWordTarget = target === 'word' || target === 'keyword' || isTextWord;
+  // Keyword or not, for the noun on the buttons — a caption keyword is
+  // classified as its own target; a text element's word is looked up.
+  const isKeywordWord = target === 'keyword' || (isTextWord && isTextWordKeyword(selectedTextWordIndex));
 
   if (animationSectionLabelEl) animationSectionLabelEl.hidden = !showAnimationSection;
 
@@ -1270,7 +1424,7 @@ function updateScopeButtons() {
     const show = showAnimationSection && isWordTarget;
     animScopeThisBtn.hidden = !show;
     if (show) {
-      animScopeThisBtn.textContent = target === 'keyword' ? 'This Keyword' : 'This Word';
+      animScopeThisBtn.textContent = isKeywordWord ? 'This Keyword' : 'This Word';
       animScopeThisBtn.classList.toggle('active', appState.animationApplyScope === 'this');
     }
   }
@@ -1282,7 +1436,7 @@ function updateScopeButtons() {
     const show = showAnimationSection && isWordTarget;
     animScopeSameTypeBtn.hidden = !show;
     if (show) {
-      animScopeSameTypeBtn.textContent = target === 'keyword' ? 'All Keywords' : 'All Normal Words';
+      animScopeSameTypeBtn.textContent = isKeywordWord ? 'All Keywords' : 'All Normal Words';
       animScopeSameTypeBtn.classList.toggle('active', appState.animationApplyScope === 'same-type');
     }
   }
@@ -1291,8 +1445,10 @@ function updateScopeButtons() {
   // independently. Only offered from a NORMAL word (per this feature's own
   // spec: a keyword's list is This Keyword/All Keywords/This Caption/All
   // Captions — "All Words" isn't one of its options).
+  // Offered from a keyword too: "every word, keyword or not" is a target in
+  // its own right, whichever kind of word it was reached from.
   if (animScopeAllWordsBtn) {
-    const show = showAnimationSection && target === 'word';
+    const show = showAnimationSection && isWordTarget;
     animScopeAllWordsBtn.hidden = !show;
     if (show) animScopeAllWordsBtn.classList.toggle('active', appState.animationApplyScope === 'all-words');
   }
@@ -1302,6 +1458,8 @@ function updateScopeButtons() {
   // caption/group is already the selection — see applyAnimationFields).
   if (animScopeThisCaptionBtn) {
     animScopeThisCaptionBtn.hidden = !showAnimationSection;
+    // Inside a text element the "whole thing" is that text, not a caption.
+    animScopeThisCaptionBtn.textContent = isTextWord ? 'Whole Text' : 'This Caption';
     if (showAnimationSection) {
       const isActive = isWordTarget
         ? appState.animationApplyScope === 'this-caption'
@@ -1309,8 +1467,21 @@ function updateScopeButtons() {
       animScopeThisCaptionBtn.classList.toggle('active', isActive);
     }
   }
+  // One by one / together — only while a word-level scope is chosen (the
+  // whole caption or text is one composition by definition).
+  const showTiming = showAnimationSection && isWordTarget
+    && ['this', 'same-type', 'all-words'].includes(appState.animationApplyScope);
+  const timing = showTiming ? getSelectedWordAnimationTiming() : 'word';
+  if (animTimingEachBtn) {
+    animTimingEachBtn.hidden = !showTiming;
+    animTimingEachBtn.classList.toggle('active', timing !== 'together');
+  }
+  if (animTimingTogetherBtn) {
+    animTimingTogetherBtn.hidden = !showTiming;
+    animTimingTogetherBtn.classList.toggle('active', timing === 'together');
+  }
   if (animScopeAllCaptionsBtn) {
-    animScopeAllCaptionsBtn.hidden = !showAnimationSection;
+    animScopeAllCaptionsBtn.hidden = !showAnimationSection || isTextWord;
     if (showAnimationSection) {
       animScopeAllCaptionsBtn.classList.toggle('active', appState.animationApplyScope === 'all-captions');
     }
@@ -1657,6 +1828,9 @@ function selectTextElementTarget(id) {
   selectedGroupId = null;
   explicitCaptionSelectionKey = null;
   selectedTextElementId = id;
+  selectedTextWordIndex = null;
+  textSelectedOnCanvas = false;
+  if (boxEl) boxEl.classList.remove('is-text-word');
   if (toolbarEl) toolbarEl.hidden = true;
   selectTextElement(id);
   notifySelectionChangedIfNeeded();
@@ -1666,6 +1840,8 @@ function clearTextElementSelection() {
   if (inlineEditingId) endInlineEdit(true);
   if (!selectedTextElementId) return;
   selectedTextElementId = null;
+  selectedTextWordIndex = null;
+  if (boxEl) boxEl.classList.remove('is-text-word');
   // `selected` is only ever true-because-of-a-text-element here (a text
   // selection zeroes selectedWordIndex/selectedGroupId), so dropping it is
   // dropping the whole selection — leaving it set would keep a box on
@@ -1705,7 +1881,7 @@ function textElementSnapshot(id) {
 }
 
 function beginTextMove(e) {
-  const box = getDisplayBox();
+  const box = getTextElementDisplayBox();
   if (!box) return;
   const { x, y, rect } = clientToCssPoint(e.clientX, e.clientY);
   const scale = box.cssPxScale || 1;
@@ -1811,6 +1987,15 @@ function endTextDrag(d) {
   const id = d.textElementId;
   const final = textElementSnapshot(id);
   if (!final) return;
+  // A press on the selected element that never moved it was a CLICK: it
+  // picks the word it landed on (or, off every word, goes back to the whole
+  // element). Nothing changed, so nothing is committed.
+  if (d.kind === 'move' && 'pendingTextWord' in d && JSON.stringify(final) === JSON.stringify(d.startStyle)) {
+    selectTextWord(d.pendingTextWord);
+    positionBoxElement();
+    updateScopeButtons();
+    return;
+  }
   if (d.startStyle) updateTextElement(id, d.startStyle, { recordHistory: false });
   updateTextElement(id, final, { recordHistory: true });
 }
@@ -1943,11 +2128,28 @@ function beginRotate(e) {
   e.target.setPointerCapture(e.pointerId);
 }
 
+// Where the current press went down (viewport px) — the origin of the drag
+// dead zone below.
+let pressClient = null;
+// A press only becomes a drag once the pointer has travelled this far
+// (CSS px). Below it, it is a click: nothing is written, and endDrag commits
+// nothing. Without this, every click that selected a caption or a word ran
+// the whole move-commit path with a zero delta — which switched a
+// 'bottom'-anchored caption to 'manual' at the same percentage (a different
+// anchor, so it visibly jumped ~half a line), and detached a clicked word
+// from its group.
+const DRAG_DEAD_ZONE_PX = 3;
+
 function onPointerMove(e) {
   // Checked before the currentBox guard: a text element can be dragged on a
   // frame with no caption on screen, where currentBox is null.
   if (drag && drag.textElementId) { onTextPointerMove(e); return; }
   if (!drag || !currentBox) return;
+  if (!drag.moved) {
+    const origin = drag.pressClient || (drag.pressClient = pressClient || { x: e.clientX, y: e.clientY });
+    if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < DRAG_DEAD_ZONE_PX) return;
+    drag.moved = true;
+  }
   const box = getDisplayBox();
   const { x, y } = clientToCssPoint(e.clientX, e.clientY);
   const scale = box.cssPxScale || 1;
@@ -2070,6 +2272,9 @@ function endDrag() {
     endTextDrag(finished);
     return;
   }
+  // A click, not a drag: nothing moved, so there is nothing to commit (see
+  // DRAG_DEAD_ZONE_PX).
+  if (!finished.moved) return;
 
   if (groupMembers) {
     // Commit each member's just-set field as its own undo step, re-reading
@@ -2163,6 +2368,15 @@ if (import.meta.env.DEV) {
     const scale = box.cssPxScale || 1;
     return { x: box.x / scale, y: box.y / scale, width: box.width / scale, height: box.height / scale, centerX: box.centerX / scale, centerY: box.centerY / scale };
   };
+  // A text element's words where the layout put them (CSS px in the video
+  // frame) — their RESTING places, whatever an entrance is doing to them.
+  window.__debugTextWordRects = (id) => {
+    const entry = textElementBoxes.find((b) => b.id === id) || textElementBoxes[0];
+    if (!entry) return [];
+    const scale = entry.box.cssPxScale || 1;
+    return getWordCandidates(entry.box).map((w) => ({ wordIndex: w.wordIndex, x: w.x / scale, y: w.y / scale, width: w.width / scale, height: w.height / scale }));
+  };
+  window.__debugSelectedTextWordIndex = () => selectedTextWordIndex;
   window.__debugKeywordScopeState = () => ({
     selectedWordIndex, isSelectingKeywords,
     keywordMultiSelection: keywordMultiSelection ? Array.from(keywordMultiSelection) : null
@@ -2230,6 +2444,8 @@ export function initCanvasTransform() {
   animScopeAllWordsBtn = document.getElementById('btn-anim-scope-all-words');
   animScopeThisCaptionBtn = document.getElementById('btn-anim-scope-this-caption');
   animScopeAllCaptionsBtn = document.getElementById('btn-anim-scope-all-captions');
+  animTimingEachBtn = document.getElementById('btn-anim-timing-each');
+  animTimingTogetherBtn = document.getElementById('btn-anim-timing-together');
   keywordToggleBtn = document.getElementById('btn-transform-toggle-keyword');
   groupStartBtn = document.getElementById('btn-transform-group-start');
   groupConfirmBtn = document.getElementById('btn-transform-group-confirm');
@@ -2288,6 +2504,9 @@ export function initCanvasTransform() {
   // before any tick has run again.
   window.addEventListener('resize', () => syncOverlayToContentRect(overlayEl));
 
+  // Capture phase, so the origin is known before any handler starts a drag.
+  overlayEl.addEventListener('pointerdown', (e) => { pressClient = { x: e.clientX, y: e.clientY }; }, true);
+
   hitAreaEl.addEventListener('pointerdown', (e) => {
     // TEXT ELEMENTS FIRST, and before the currentBox guard. They render on
     // their own layer ABOVE the caption canvas, so a click that lands on
@@ -2302,7 +2521,21 @@ export function initCanvasTransform() {
     const textHit = findTextElementAtClient(e.clientX, e.clientY);
     if (textHit) {
       deselectVideoTarget();
+      const wasSelected = selectedTextElementId === textHit.id && textSelectedOnCanvas;
       if (selectedTextElementId !== textHit.id) selectTextElementTarget(textHit.id);
+      textSelectedOnCanvas = true;
+      // The word under a press on an ALREADY-selected element — the same
+      // two-step drill-in a caption has (first click: the whole thing,
+      // second: a word). Decided on release: a press that becomes a drag
+      // still moves the element, as it always has.
+      let pendingWord = null;
+      if (wasSelected) {
+        const { x: cx, y: cy } = clientToCssPoint(e.clientX, e.clientY);
+        const s = textHit.box.cssPxScale || 1;
+        const hitWord = findWordAtPoint(cx * s, cy * s, textHit.box);
+        pendingWord = hitWord ? hitWord.wordIndex : null;
+      }
+      if (pendingWord == null && selectedTextWordIndex != null) selectTextWord(null);
       boxEl.hidden = false;
       positionBoxElement();
       updateScopeButtons();
@@ -2310,6 +2543,7 @@ export function initCanvasTransform() {
       // caption branch below does it: press-hold-drag has to work on the
       // first gesture, not only after a select-then-press-again.
       beginTextMove(e);
+      if (drag && pendingWord != null) drag.pendingTextWord = pendingWord;
       return;
     }
     // Clicked away from every text element — release the text selection
@@ -2469,9 +2703,22 @@ export function initCanvasTransform() {
     if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
 
     // A selected text element's box sits on top of hitAreaEl, so this is
-    // where its own re-drag starts. No drill-in step: a text element has no
-    // words to descend into.
-    if (selectedTextElementId) { beginTextMove(e); return; }
+    // where its own re-drag starts — and where its second click lands, the
+    // one that picks a WORD inside it (decided on release: see endTextDrag).
+    if (selectedTextElementId) {
+      const entry = textElementBoxes.find((b) => b.id === selectedTextElementId);
+      let pendingWord = null;
+      const drillIn = textSelectedOnCanvas;
+      textSelectedOnCanvas = true;
+      if (entry && drillIn) {
+        const { x: cx, y: cy } = clientToCssPoint(e.clientX, e.clientY);
+        const s = entry.box.cssPxScale || 1;
+        pendingWord = findWordAtPoint(cx * s, cy * s, entry.box)?.wordIndex ?? null;
+      }
+      beginTextMove(e);
+      if (drag) drag.pendingTextWord = pendingWord;
+      return;
+    }
 
     // While a GROUP is selected (selectedWordIndex null), this box spans the
     // whole group, so it's what actually receives a click meant to drill
@@ -2635,9 +2882,18 @@ export function initCanvasTransform() {
         animationEasing: appState.captionAnimationEasing,
         animationIntensity: appState.captionAnimationIntensity
       };
+      if (getSelectedWordAnimationTiming() === 'together') fields.animationTiming = 'together';
       applyAnimationFields(fields, { recordHistory: true });
     });
   }
+  [[animTimingEachBtn, 'word'], [animTimingTogetherBtn, 'together']].forEach(([btn, timing]) => {
+    if (!btn) return;
+    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    btn.addEventListener('click', () => {
+      applyAnimationTiming(timing);
+      updateScopeButtons();
+    });
+  });
   if (animScopeThisBtn) {
     animScopeThisBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
     animScopeThisBtn.addEventListener('click', () => {
@@ -2743,6 +2999,16 @@ export function getKeyframeTarget() {
  * @returns {{wordIndex:number, text:string, isKeyword:boolean, style:object}|null}
  */
 export function getSelectedWordStyleTarget() {
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    const word = selectedTextElementWords().find((w) => w.wordIndex === selectedTextWordIndex);
+    return {
+      wordIndex: selectedTextWordIndex,
+      text: word ? (word.word || word.text || '') : '',
+      isKeyword: !!word?.isKeyword,
+      style: (activeWordMap()[getWordTransformKey(selectedTextWordIndex)] || {}).style || {},
+      textElementId: selectedTextElementId
+    };
+  }
   if (!selected || selectedWordIndex == null) return null;
   const sourceWord = (appState.words || [])[selectedWordIndex];
   return {
@@ -2766,6 +3032,17 @@ export function getSelectedWordStyleTarget() {
  */
 export function applyWordStyleFields(wordIndex, styleFields, { recordHistory = true } = {}) {
   if (wordIndex == null) return;
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    writeTextWordEntries([wordIndex], (entry) => {
+      const style = { ...(entry.style || {}) };
+      Object.entries(styleFields).forEach(([field, value]) => {
+        if (value == null) delete style[field];
+        else style[field] = value;
+      });
+      return { ...entry, style };
+    }, { recordHistory });
+    return;
+  }
   const key = getWordTransformKey(wordIndex);
   const existing = appState.captionTransforms[key] || {};
   const nextStyle = { ...(existing.style || {}) };
@@ -2784,6 +3061,10 @@ export function applyWordStyleFields(wordIndex, styleFields, { recordHistory = t
  */
 export function resetWordStyle(wordIndex) {
   if (wordIndex == null) return;
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    writeTextWordEntries([wordIndex], ({ style, ...rest }) => rest, { recordHistory: true });
+    return;
+  }
   const key = getWordTransformKey(wordIndex);
   const existing = appState.captionTransforms[key];
   if (!existing || !existing.style) return;
@@ -2816,7 +3097,9 @@ export function onSelectionChange(cb) {
 
 function notifySelectionChangedIfNeeded() {
   const target = getKeyframeTarget();
-  const signature = target ? `${target.kind}:${(target.wordIndexes || []).join(',')}` : 'none';
+  const signature = selectedTextElementId
+    ? `text:${selectedTextElementId}:${selectedTextWordIndex ?? ''}`
+    : target ? `${target.kind}:${(target.wordIndexes || []).join(',')}` : 'none';
   if (signature === lastSelectionSignature) return;
   lastSelectionSignature = signature;
   selectionListeners.forEach((cb) => {

@@ -67,10 +67,15 @@ export const INTERLUDE_DEFAULT_STYLE = {
   preset: 'caps-white',
   fontFamily: 'Montserrat',
   fontWeight: '800',
-  fontSize: 30,
+  // Sized so a short line reads as ONE horizontal composition — "HOME
+  // OFFICE HACKS" fits across the card on a single line — and longer text
+  // wraps only once it genuinely meets the card's width (textMaxWidth). At
+  // the previous 30 the same three words needed ~114% of the frame and so
+  // always stacked one per line.
+  fontSize: 22,
   // Word spacing is authored in px, not em: the caption default (4px) suits
   // 14px caption type and all but closes the gap between words at this size.
-  wordSpacing: 9,
+  wordSpacing: 7,
   textCase: 'uppercase',
   activeWordColor: '#111111',
   inactiveWordColor: '#111111',
@@ -85,7 +90,9 @@ export const INTERLUDE_DEFAULT_STYLE = {
   customPosY: 50,
   textAlign: 'center',
   lineHeight: 1.1,
-  textMaxWidth: 80,
+  // Wrap width, % of the frame: the card is the whole frame, so text uses
+  // most of it before it breaks a line.
+  textMaxWidth: 90,
   letterSpacing: 1,
   captionAnimationType: 'fade',
   captionAnimationDuration: 0.4
@@ -196,8 +203,27 @@ export function normalizeTextElement(raw) {
     // removeTextElement. Ordinary SFX clips otherwise; only the link lives here.
     ...(Array.isArray(raw.soundIds) && raw.soundIds.some((s) => typeof s === 'string' && s)
       ? { soundIds: [...new Set(raw.soundIds.filter((s) => typeof s === 'string' && s))] }
-      : {})
+      : {}),
+    // This element's OWN per-word edits — style, entrance animation,
+    // transform, keyframes — in exactly the entry shape a caption word's live
+    // in (appState.captionTransforms['w<index>'], see
+    // shared/captionTransform.js), keyed by the word's position in THIS
+    // element's text. The renderer reads them the same way it reads a
+    // caption's (resolveTextElementParams hands them over as the params'
+    // captionTransforms), so a word in a card can do whatever a caption word
+    // can, through the same code.
+    ...(normalizeWordTransforms(raw.wordTransforms) ? { wordTransforms: normalizeWordTransforms(raw.wordTransforms) } : {})
   };
+}
+
+/** Only well-formed 'w<n>' entries; null when there are none. */
+function normalizeWordTransforms(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  Object.entries(raw).forEach(([key, entry]) => {
+    if (/^w\d+$/.test(key) && entry && typeof entry === 'object' && !Array.isArray(entry)) out[key] = entry;
+  });
+  return Object.keys(out).length ? out : null;
 }
 
 /**
@@ -254,7 +280,13 @@ export function textElementFromCaption({ kind = 'interlude', event, words, trans
       breakAfter: breaks.has(pos)
     });
   });
-  const text = timing.map((t, i) => t.word + (i < timing.length - 1 ? (kind === 'interlude' && t.breakAfter ? '\n' : ' ') : '')).join('');
+  // One line of words: the card wraps them to its own width, from real text
+  // metrics ("HOME OFFICE HACKS" stays on one line while it fits). The
+  // caption's line breaks were chosen for a caption-sized block and used to
+  // be carried over as hard newlines, forcing "MANAGING / MULTIPLE
+  // CHARGERS." however wide the card was. A break typed into the card's text
+  // is still honoured.
+  const text = timing.map((t) => t.word).join(' ');
 
   let style = {};
   let keyframes = [];
@@ -428,7 +460,14 @@ export function resolveTextElementParams(baseParams, element, currentTime) {
     // (The preview has always had a separate, unblended text canvas, so this
     // was a preview/export divergence: correct on screen, wrong in the file.)
     textBlendMode: 'normal',
-    ...(element.style || {})
+    ...(element.style || {}),
+    // The element's own per-word edits, and ONLY those. A caption's per-word
+    // and per-caption edits (appState.captionTransforms) belong to the
+    // caption — an element made from one starts clean and is edited as
+    // itself (see normalizeTextElement's wordTransforms). Before this, a card
+    // converted from a caption silently took on that caption's word
+    // animations, keyed by transcript position.
+    captionTransforms: element.wordTransforms || {}
   };
   const keyframes = element.keyframes;
   if (!Array.isArray(keyframes) || !keyframes.length || currentTime == null) return merged;
@@ -478,11 +517,13 @@ export function textElementToPhrase(element) {
   // per-word styling made on those words belongs to it now.
   const timing = activeTiming(element);
   if (timing) {
-    const words = timing.map((t) => ({
+    const words = timing.map((t, i) => ({
       word: t.word,
       start: element.start + t.offset,
       end: element.start + t.offset + t.duration,
-      ...(t.wordIndex != null ? { wordIndex: t.wordIndex } : {}),
+      // The word's place in THIS element — the key its own edits live under
+      // (normalizeTextElement's wordTransforms).
+      wordIndex: i,
       isKeyword: t.isKeyword
     }));
     const breakAfterIndices = element.kind === 'interlude'
@@ -500,7 +541,7 @@ export function textElementToPhrase(element) {
   const words = [];
   const breakAfterIndices = [];
   lines.forEach((line, i) => {
-    line.split(/\s+/).filter(Boolean).forEach((word) => words.push({ word, start: element.start, end: element.end }));
+    line.split(/\s+/).filter(Boolean).forEach((word) => words.push({ word, start: element.start, end: element.end, wordIndex: words.length }));
     if (i < lines.length - 1 && words.length && breakAfterIndices.at(-1) !== words.length - 1) breakAfterIndices.push(words.length - 1);
   });
 

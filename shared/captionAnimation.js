@@ -85,23 +85,36 @@ export function getAnimationProgress(currentTime, elementStart, elementEnd, anim
   return applyEasing(elapsed / effectiveDuration, animation.easing);
 }
 
+/** How far a slide travels, in font sizes, at intensity 1. */
+export const SLIDE_DISTANCE_EM = 1;
+// Opaque by the time the slide is ~40% of the way there (eased) — with the
+// default ease-out that is the first ~60ms of a 0.25s entrance.
+const slideAlpha = (progress) => Math.min(1, progress / 0.4);
+
 /**
- * Turns an eased progress value into a concrete draw-time transform. All
- * offsets are returned as FRACTIONS of the canvas's own width/height (not
- * absolute px) so the same numbers produce a proportionally identical
- * animation at any canvas resolution — the caller multiplies by its own
- * canvasWidth/canvasHeight, exactly like resolveGeometry's pxScale pattern
- * in shared/captionGraphics.js.
+ * Turns an eased progress value into a concrete draw-time transform. Slide
+ * offsets are returned in EMS — multiples of the text's own font size — and
+ * the caller multiplies by its font size in px. A slide is an entrance OF
+ * THE TEXT, so it travels a distance measured against the text: about one
+ * line, whatever the frame's size. (It used to be a tenth of the frame —
+ * 128px on a 1280px-tall video, two to three times a caption's height — so
+ * the text visibly sat far from where it was going before it arrived.)
+ *
+ * A slide also fades in over the first part of its travel, so the text is
+ * never seen standing still at the start offset: at progress 0 it is
+ * invisible, and it is fully opaque well before it lands.
+ *
+ * Directions name the way the text MOVES: Slide Up rises into place from
+ * below, Slide Left travels leftwards into place from the right.
  *
  * `type: 'none'` (or progress already 1) always resolves to the identity
- * transform — {alpha:1, scale:1, offsetXRatio:0, offsetYRatio:0} — so a
- * caller can apply this unconditionally without regressing the pre-
- * animation pixel output.
+ * transform — {alpha:1, scale:1, offsetXEm:0, offsetYEm:0} — so a caller can
+ * apply this unconditionally without regressing the pre-animation output.
  *
- * @returns {{alpha:number, scale:number, offsetXRatio:number, offsetYRatio:number}}
+ * @returns {{alpha:number, scale:number, offsetXEm:number, offsetYEm:number}}
  */
 export function computeAnimationTransform(type, progress, intensity = 1) {
-  const identity = { alpha: 1, scale: 1, offsetXRatio: 0, offsetYRatio: 0 };
+  const identity = { alpha: 1, scale: 1, offsetXEm: 0, offsetYEm: 0 };
   if (!type || type === 'none' || progress >= 1) return identity;
 
   switch (type) {
@@ -120,13 +133,13 @@ export function computeAnimationTransform(type, progress, intensity = 1) {
       return { ...identity, scale: startScale + (1 - startScale) * progress };
     }
     case 'slide-up':
-      return { ...identity, offsetYRatio: 0.1 * intensity * (1 - progress) };
+      return { ...identity, alpha: slideAlpha(progress), offsetYEm: SLIDE_DISTANCE_EM * intensity * (1 - progress) };
     case 'slide-down':
-      return { ...identity, offsetYRatio: -0.1 * intensity * (1 - progress) };
+      return { ...identity, alpha: slideAlpha(progress), offsetYEm: -SLIDE_DISTANCE_EM * intensity * (1 - progress) };
     case 'slide-left':
-      return { ...identity, offsetXRatio: -0.1 * intensity * (1 - progress) };
+      return { ...identity, alpha: slideAlpha(progress), offsetXEm: SLIDE_DISTANCE_EM * intensity * (1 - progress) };
     case 'slide-right':
-      return { ...identity, offsetXRatio: 0.1 * intensity * (1 - progress) };
+      return { ...identity, alpha: slideAlpha(progress), offsetXEm: -SLIDE_DISTANCE_EM * intensity * (1 - progress) };
     default:
       return identity;
   }
@@ -139,6 +152,47 @@ export function computeAnimationTransform(type, progress, intensity = 1) {
  */
 export function getAnimationTransform(params, currentTime, elementStart, elementEnd) {
   const animation = resolveAnimationConfig(params);
+  // Before its entrance begins, a thing with an entrance has not entered: it
+  // is not drawn. For a whole caption this never comes up (it is not on
+  // screen before it starts), but a WORD with its own entrance sits in a
+  // caption that is already showing — and at progress 0 a slide or pop is
+  // fully opaque at its start offset, so the word used to wait there,
+  // visibly, until its own time came.
+  if (animation.type !== 'none' && currentTime < elementStart) {
+    return { alpha: 0, scale: 1, offsetXEm: 0, offsetYEm: 0 };
+  }
   const progress = getAnimationProgress(currentTime, elementStart, elementEnd, animation);
   return computeAnimationTransform(animation.type, progress, animation.intensity);
+}
+
+/**
+ * The window a word's own entrance animation runs over, for preview and
+ * export alike (shared/captionGraphics.js paints with it,
+ * backend/utils/graphicsFrameGenerator.js samples it).
+ *
+ *  - It STARTS at the word's own start — or, for a word set to animate
+ *    together with the rest ('together'), at the start of the caption or
+ *    text it belongs to, so every such word enters as one.
+ *  - It may run until the caption ENDS, not just until the word stops being
+ *    spoken: the word stays on screen after it is said, so a longer duration
+ *    is a slower entrance. (It used to be clamped to the word's spoken
+ *    length — a third of a second, typically — so raising the duration did
+ *    nothing at all.)
+ */
+export function resolveWordAnimationWindow(word, container, override) {
+  const start = override?.animationTiming === 'together' && container?.start != null
+    ? container.start
+    : word.start;
+  const end = Math.max(start, container?.end ?? word.end ?? start);
+  return { start, end };
+}
+
+/** A word override's own entrance, as the params getAnimationTransform reads. */
+export function wordAnimationParams(override) {
+  return {
+    captionAnimationType: override?.animationType,
+    captionAnimationDuration: override?.animationDuration,
+    captionAnimationEasing: override?.animationEasing,
+    captionAnimationIntensity: override?.animationIntensity
+  };
 }

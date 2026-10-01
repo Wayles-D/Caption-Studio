@@ -55,7 +55,7 @@ import {
 } from './captionConfig.js';
 import { resolveFontFace } from './fontRegistry.js';
 import { chunkRawText } from './rollingStack.js';
-import { getAnimationTransform } from './captionAnimation.js';
+import { getAnimationTransform, resolveWordAnimationWindow, wordAnimationParams } from './captionAnimation.js';
 import { resolveWordOverride, resolveWordOverrideAtTime, resolveWordStyleOverride, hasWordOverride } from './captionTransform.js';
 
 /**
@@ -344,10 +344,15 @@ function resolveGeometry(cssConfig, params, canvasWidth, canvasHeight, cssPixelW
   //   lineHeight    — line box as a multiple of the font size
   //   letterSpacing — authored px between glyphs (scaled like every authored px)
   //   textAlign     — 'left' | 'center' | 'right' within the block
+  //
+  // textMaxWidth is the TEXT's own width — the caption overlay's side padding
+  // is not taken off it again. (It used to be, which left a "90%" card
+  // wrapping at about 74% of the frame: "HOME OFFICE HACKS" broke a line
+  // with room to spare.)
   const widthPct = Number(params.textMaxWidth);
-  const maxWidthPx = (Number.isFinite(widthPct) && widthPct >= 10 && widthPct <= 100
+  const maxWidthPx = Number.isFinite(widthPct) && widthPct >= 10 && widthPct <= 100
     ? canvasWidth * (widthPct / 100)
-    : (toPx(cssConfig.overlay.width, canvasWidth) || canvasWidth * 0.9)) - (OVERLAY_HORIZONTAL_PADDING_PX * 2 * pxScale);
+    : (toPx(cssConfig.overlay.width, canvasWidth) || canvasWidth * 0.9) - (OVERLAY_HORIZONTAL_PADDING_PX * 2 * pxScale);
   const lineHeightMultiple = Number(params.lineHeight);
   const lineHeightPx = fontSizePx * (Number.isFinite(lineHeightMultiple) && lineHeightMultiple >= 0.5 && lineHeightMultiple <= 3
     ? lineHeightMultiple
@@ -558,13 +563,19 @@ function layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndi
     currentWidth = 0;
   };
 
+  // The FINAL layout: every word in the caption has its place, whether or not
+  // it is showing yet, and at its resting size. A word typewriter mode hasn't
+  // revealed yet still holds its space (it just isn't painted), and pop
+  // mode's enlarged active word grows in place around its own centre — so no
+  // word ever pushes another along as the caption plays. (Both used to
+  // re-flow the line: typewriter re-centred it as each word appeared, pop
+  // shoved the neighbours aside.)
   wordUnits.forEach((unit) => {
-    if (!unit.visible) return;
     setCanvasFont(ctx, unit.font);
     // Letter spacing is also measured after a word's LAST glyph; that
     // trailing gap is not part of the word, so it is taken back out here
     // (and the paint step shifts by half of it — see paintSentenceComposite).
-    const measuredWidth = (ctx.measureText(unit.text).width - letterSpacingPx) * unit.scale;
+    const measuredWidth = ctx.measureText(unit.text).width - letterSpacingPx;
     const spacing = current.length ? wordSpacingPx : 0;
 
     if (current.length && currentWidth + spacing + measuredWidth > maxWidthPx) {
@@ -780,6 +791,9 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
 
   lines.forEach((line) => {
     line.words.forEach((word) => {
+      // Laid out but not yet revealed (typewriter) — its space is kept, it
+      // isn't drawn. See layoutLines.
+      if (word.visible === false) return;
       // wordIndex is the word's position in the ENTIRE flat transcript (see
       // shared/captionTransform.js's getWordTransformKey doc comment) —
       // word.originalIndex is only its position within THIS phrase, so the
@@ -819,18 +833,22 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
         // caption-level animation already applied around the whole block
         // (either directly, or via the Unified-shadow offscreen composite —
         // see renderResolvedFrame).
+        //
+        // Its window (resolveWordAnimationWindow) starts at the word's own
+        // start — or the caption's, for words set to enter together — and may
+        // run until the caption ends. The word's place in the layout was
+        // fixed above, before any of this: the animation only moves the word
+        // relative to where it will land, so no other word ever shifts.
         if (rawOverride.animationType && rawOverride.animationType !== 'none' && sourceWord) {
-          const wordAnim = getAnimationTransform(
-            { captionAnimationType: rawOverride.animationType, captionAnimationDuration: rawOverride.animationDuration, captionAnimationEasing: rawOverride.animationEasing, captionAnimationIntensity: rawOverride.animationIntensity },
-            currentTime, sourceWord.start, sourceWord.end
-          );
+          const win = resolveWordAnimationWindow(sourceWord, activePhrase, rawOverride);
+          const wordAnim = getAnimationTransform(wordAnimationParams(rawOverride), currentTime, win.start, win.end);
           if (wordAnim.scale !== 1) {
             targetCtx.translate(pivotX, pivotY);
             targetCtx.scale(wordAnim.scale, wordAnim.scale);
             targetCtx.translate(-pivotX, -pivotY);
           }
-          if (wordAnim.offsetXRatio || wordAnim.offsetYRatio) {
-            targetCtx.translate(wordAnim.offsetXRatio * canvasWidth, wordAnim.offsetYRatio * canvasHeight);
+          if (wordAnim.offsetXEm || wordAnim.offsetYEm) {
+            targetCtx.translate(wordAnim.offsetXEm * fontSizePx, wordAnim.offsetYEm * fontSizePx);
           }
           targetCtx.globalAlpha *= wordAnim.alpha;
         }
@@ -932,8 +950,8 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
     const uni = resolveUnifiedShadowParams(params);
     const textOpacity = params.textOpacity ?? 100;
     ctx.save();
-    if (anim.offsetXRatio || anim.offsetYRatio) {
-      ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+    if (anim.offsetXEm || anim.offsetYEm) {
+      ctx.translate(anim.offsetXEm * geometry.fontSizePx, anim.offsetYEm * geometry.fontSizePx);
     }
     if (totalScale !== 1) {
       ctx.translate(centerX, centerY);
@@ -960,8 +978,8 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   // manually-rotated caption still slides in along a straight screen-space
   // line rather than along its own tilted axis (see this module's animation
   // integration notes).
-  if (anim.offsetXRatio || anim.offsetYRatio) {
-    ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+  if (anim.offsetXEm || anim.offsetYEm) {
+    ctx.translate(anim.offsetXEm * geometry.fontSizePx, anim.offsetYEm * geometry.fontSizePx);
   }
   if (totalScale !== 1) {
     ctx.translate(centerX, centerY);
@@ -1003,7 +1021,7 @@ export function measureSentenceFrame(ctx, opts) {
   // shared/captionTransform.js's getWordTransformKey), not its position
   // within this one phrase/line.
   const words = computed.lines.flatMap((line) =>
-    line.words.map((w) => ({
+    line.words.filter((w) => w.visible !== false).map((w) => ({
       wordIndex: activePhrase.words[w.originalIndex]?.wordIndex,
       // isKeyword: needed by the on-canvas keyword scope UI (see
       // src/js/components/canvasTransform.js) — read straight off the
@@ -1512,9 +1530,13 @@ function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
   });
 }
 
-function paintRollingStackLines(ctx, positionedLines, params, currentTime, canvasWidth, canvasHeight) {
+function paintRollingStackLines(ctx, positionedLines, params, currentTime, canvasWidth, canvasHeight, { fontSizePx = 0, windowEnd } = {}) {
   positionedLines.forEach((line) => {
     const words = line.words || [];
+    // A word's entrance may run until the window it sits in moves on; words
+    // set to enter together share their own line's start.
+    const lineStarts = words.map((w) => w.start).filter((t) => t != null);
+    const container = { start: lineStarts.length ? Math.min(...lineStarts) : undefined, end: windowEnd };
     // Style overrides count here too, not just transform ones: a word whose
     // only override is a different colour/font still needs its own paint
     // pass rather than the chunk's single shared one.
@@ -1552,17 +1574,15 @@ function paintRollingStackLines(ctx, positionedLines, params, currentTime, canva
         // matching addition in sentence mode's renderResolvedFrame for the
         // full rationale; anchored to this word's own [start,end).
         if (rawOverride.animationType && rawOverride.animationType !== 'none' && word.start != null) {
-          const wordAnim = getAnimationTransform(
-            { captionAnimationType: rawOverride.animationType, captionAnimationDuration: rawOverride.animationDuration, captionAnimationEasing: rawOverride.animationEasing, captionAnimationIntensity: rawOverride.animationIntensity },
-            currentTime, word.start, word.end
-          );
+          const win = resolveWordAnimationWindow(word, container, rawOverride);
+          const wordAnim = getAnimationTransform(wordAnimationParams(rawOverride), currentTime, win.start, win.end);
           if (wordAnim.scale !== 1) {
             ctx.translate(pivotX, pivotY);
             ctx.scale(wordAnim.scale, wordAnim.scale);
             ctx.translate(-pivotX, -pivotY);
           }
-          if (wordAnim.offsetXRatio || wordAnim.offsetYRatio) {
-            ctx.translate(wordAnim.offsetXRatio * canvasWidth, wordAnim.offsetYRatio * canvasHeight);
+          if (wordAnim.offsetXEm || wordAnim.offsetYEm) {
+            ctx.translate(wordAnim.offsetXEm * fontSizePx, wordAnim.offsetYEm * fontSizePx);
           }
           ctx.globalAlpha *= wordAnim.alpha;
         }
@@ -1634,7 +1654,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
   const kfOpacity = params.opacity != null ? params.opacity : 100;
   const totalScale = anim.scale * kfScale;
   const totalAlpha = anim.alpha * (kfOpacity / 100);
-  const animating = totalAlpha !== 1 || totalScale !== 1 || anim.offsetXRatio !== 0 || anim.offsetYRatio !== 0;
+  const animating = totalAlpha !== 1 || totalScale !== 1 || anim.offsetXEm !== 0 || anim.offsetYEm !== 0;
 
   const paintComposite = (targetCtx, drawIntoCtx) => {
     const layout = layoutRollingStackLines(targetCtx, windowChunks, cssConfig, params, geometry, alignment);
@@ -1657,7 +1677,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
   if (shadowMode === 'unified' && createOffscreenCanvas) {
     const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
     const offCtx = offscreen.getContext('2d');
-    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight));
+    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight, { fontSizePx: geometry.fontSizePx, windowEnd: activeChunk.end }));
 
     // The offscreen canvas already contains the rotated composition (rotated
     // while painting, above) — drawImage below is a plain, unrotated pixel
@@ -1666,8 +1686,8 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     const uni = resolveUnifiedShadowParams(params);
     const textOpacity = params.textOpacity ?? 100;
     ctx.save();
-    if (anim.offsetXRatio || anim.offsetYRatio) {
-      ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+    if (anim.offsetXEm || anim.offsetYEm) {
+      ctx.translate(anim.offsetXEm * geometry.fontSizePx, anim.offsetYEm * geometry.fontSizePx);
     }
     if (totalScale !== 1) {
       ctx.translate(layout.centerX, layout.centerY);
@@ -1694,11 +1714,11 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     // before this feature existed whenever captionAnimationType is 'none'.
     const offscreen = createOffscreenCanvas(canvasWidth, canvasHeight);
     const offCtx = offscreen.getContext('2d');
-    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight));
+    const layout = paintComposite(offCtx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight, { fontSizePx: geometry.fontSizePx, windowEnd: activeChunk.end }));
 
     ctx.save();
-    if (anim.offsetXRatio || anim.offsetYRatio) {
-      ctx.translate(anim.offsetXRatio * canvasWidth, anim.offsetYRatio * canvasHeight);
+    if (anim.offsetXEm || anim.offsetYEm) {
+      ctx.translate(anim.offsetXEm * geometry.fontSizePx, anim.offsetYEm * geometry.fontSizePx);
     }
     if (totalScale !== 1) {
       ctx.translate(layout.centerX, layout.centerY);
@@ -1711,7 +1731,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
     return;
   }
 
-  paintComposite(ctx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight));
+  paintComposite(ctx, (c, l) => paintRollingStackLines(c, l.lines, params, currentTime, canvasWidth, canvasHeight, { fontSizePx: geometry.fontSizePx, windowEnd: activeChunk.end }));
 }
 
 /**

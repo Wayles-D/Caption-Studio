@@ -17,7 +17,7 @@
 import { appState, updateState } from '../state.js';
 import { resolveCaptionPhrases, normalizeCaptionEvent } from '../../../shared/captionEvent.js';
 import { createSoundEvent } from '../../../shared/audioTimeline.js';
-import { getPhraseTransformKey } from '../../../shared/captionTransform.js';
+import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
 import {
   createTextElement,
   createInterlude,
@@ -185,6 +185,19 @@ export function convertCaptionToTextElement(captionEventId, kind = 'interlude') 
 
   const element = textElementFromCaption({ kind, event, words, transform });
   if (!element.text.trim()) return null;
+  // Per-word edits live on the element itself (shared/textElement.js's
+  // wordTransforms). An OVERLAY is the caption carried on as it was, so its
+  // words' edits are copied across, re-keyed to their place in the overlay.
+  // Cinematic text is a card of its own: it starts clean, and anything its
+  // words should do is applied to them there, deliberately.
+  if (kind !== 'interlude') {
+    const own = {};
+    (element.timing || []).forEach((t, i) => {
+      const entry = t.wordIndex != null ? transforms[getWordTransformKey(t.wordIndex)] : null;
+      if (entry) own[getWordTransformKey(i)] = entry;
+    });
+    if (Object.keys(own).length) element.wordTransforms = own;
+  }
 
   const nextEvents = events.filter((e) => e.id !== captionEventId);
   const nextTransforms = { ...transforms };

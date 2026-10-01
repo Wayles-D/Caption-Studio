@@ -68,7 +68,7 @@ export async function compositeTextElementsOnto(videoPath, styles, outputPath, f
   if (!normalizeTextElementList(params.textElements).some(isTextElementRenderable)) return false;
   try {
     const { width, height, duration, frameRate } = await getVideoInfo(videoPath);
-    const { captions, manualCaptions, text } = buildFullTimelineSegments([], params, width, height, duration, framesDir);
+    const { captions, manualCaptions, text } = buildFullTimelineSegments([], params, width, height, duration, framesDir, { frameRate });
     await compositeGraphicsCaptionTrack(videoPath, captions, outputPath, {
       frameRate,
       duration,
@@ -139,7 +139,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // deliberately — see buildTextElementSegments. `text` is empty (and no
     // second layer is added) for a project with no text elements.
     const { captions: segments, manualCaptions: manualCaptionSegments, text: textSegments } =
-      buildFullTimelineSegments(phrases, params, width, height, duration, framesDir);
+      buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, { frameRate });
     // The VIDEO's own keyframed transform (see shared/videoTransform.js) —
     // passed through so the exported file reproduces the same zoom/pan/
     // rotate/fade the live preview shows, independent of captions. The
