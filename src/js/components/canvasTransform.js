@@ -192,6 +192,14 @@ function textWordIndexesForScope(scope, index) {
   return [index];
 }
 
+/** Back from one word of the selected text element to the whole element (the Text panel's "Whole text"). */
+export function clearTextWordSelection() {
+  if (selectedTextWordIndex == null) return;
+  selectTextWord(null);
+  positionBoxElement();
+  updateScopeButtons();
+}
+
 function selectTextWord(index) {
   selectedTextWordIndex = index;
   resetKeywordScopeState();
@@ -1906,7 +1914,76 @@ function beginTextMove(e) {
   hitAreaEl.setPointerCapture(e.pointerId);
 }
 
+/**
+ * A gesture on ONE WORD of the selected text element (move / resize /
+ * rotate): written into that word's own entry (element.wordTransforms) —
+ * offset, fontScale, rotationDeg, the same per-word transform a caption word
+ * has, applied by the renderer around the word's laid-out place, so the rest
+ * of the text never moves.
+ */
+function beginTextWordDrag(e, kind) {
+  const box = getDisplayBox();
+  if (!box) return;
+  const { x, y } = clientToCssPoint(e.clientX, e.clientY);
+  const scale = box.cssPxScale || 1;
+  const index = selectedTextWordIndex;
+  const startEntry = { ...(activeWordMap()[getWordTransformKey(index)] || {}) };
+  drag = {
+    kind,
+    pointerId: e.pointerId,
+    textElementId: selectedTextElementId,
+    textWordIndex: index,
+    startEntry,
+    startPointerX: x,
+    startPointerY: y,
+    startDist: Math.hypot(x - box.centerX / scale, y - box.centerY / scale) || 1,
+    startOffsetXPx: startEntry.offsetXPx || 0,
+    startOffsetYPx: startEntry.offsetYPx || 0,
+    startScale: startEntry.fontScale != null ? startEntry.fontScale : 1
+  };
+  e.target.setPointerCapture(e.pointerId);
+}
+
+function onTextWordPointerMove(e) {
+  const box = getDisplayBox();
+  if (!box) return;
+  if (!drag.moved) {
+    const origin = drag.pressClient || (drag.pressClient = pressClient || { x: e.clientX, y: e.clientY });
+    if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < DRAG_DEAD_ZONE_PX) return;
+    drag.moved = true;
+  }
+  const { x, y } = clientToCssPoint(e.clientX, e.clientY);
+  const scale = box.cssPxScale || 1;
+  const centerX = box.centerX / scale;
+  const centerY = box.centerY / scale;
+  let fields;
+  if (drag.kind === 'move') {
+    // Authored 330-box units, as for a caption word (see the word branch of
+    // onPointerMove) — the same offset lands in the same place in export.
+    const canvasW = getCanvasBackingWidth();
+    fields = {
+      offsetXPx: drag.startOffsetXPx + canvasPxToWordOffset((x - drag.startPointerX) * scale, canvasW),
+      offsetYPx: drag.startOffsetYPx + canvasPxToWordOffset((y - drag.startPointerY) * scale, canvasW)
+    };
+  } else if (drag.kind === 'resize') {
+    const ratio = (Math.hypot(x - centerX, y - centerY) || 1) / drag.startDist;
+    fields = { fontScale: Math.max(0.3, Math.min(4, drag.startScale * ratio)) };
+  } else {
+    fields = { rotationDeg: Math.round((Math.atan2(y - centerY, x - centerX) * 180) / Math.PI + 90) };
+  }
+  writeTextWordEntries([drag.textWordIndex], (entry) => ({ ...entry, ...fields }), { recordHistory: false });
+}
+
+/** One undo step per word gesture; a click that never became a drag changes nothing. */
+function endTextWordDrag(d) {
+  if (!d.moved) return;
+  const final = { ...(activeWordMap()[getWordTransformKey(d.textWordIndex)] || {}) };
+  writeTextWordEntries([d.textWordIndex], () => d.startEntry, { recordHistory: false });
+  writeTextWordEntries([d.textWordIndex], () => final, { recordHistory: true });
+}
+
 function beginTextResize(e, corner) {
+  if (selectedTextWordIndex != null) { beginTextWordDrag(e, 'resize'); return; }
   const box = getDisplayBox();
   if (!box) return;
   const { x, y } = clientToCssPoint(e.clientX, e.clientY);
@@ -1924,6 +2001,7 @@ function beginTextResize(e, corner) {
 }
 
 function beginTextRotate(e) {
+  if (selectedTextWordIndex != null) { beginTextWordDrag(e, 'rotate'); return; }
   drag = {
     kind: 'rotate', pointerId: e.pointerId, textElementId: selectedTextElementId,
     startStyle: textElementSnapshot(selectedTextElementId)
@@ -1937,6 +2015,7 @@ function beginTextRotate(e) {
  * file and in audioTimeline.js uses).
  */
 function onTextPointerMove(e) {
+  if (drag.textWordIndex != null) { onTextWordPointerMove(e); return; }
   const box = getDisplayBox();
   if (!box) return;
   const id = drag.textElementId;
@@ -1984,6 +2063,7 @@ function onTextPointerMove(e) {
  * (confirmed: the first version of this did exactly that).
  */
 function endTextDrag(d) {
+  if (d.textWordIndex != null) { endTextWordDrag(d); return; }
   const id = d.textElementId;
   const final = textElementSnapshot(id);
   if (!final) return;
@@ -2714,6 +2794,10 @@ export function initCanvasTransform() {
         const { x: cx, y: cy } = clientToCssPoint(e.clientX, e.clientY);
         const s = entry.box.cssPxScale || 1;
         pendingWord = findWordAtPoint(cx * s, cy * s, entry.box)?.wordIndex ?? null;
+      }
+      if (selectedTextWordIndex != null && pendingWord === selectedTextWordIndex) {
+        beginTextWordDrag(e, 'move');
+        return;
       }
       beginTextMove(e);
       if (drag) drag.pendingTextWord = pendingWord;

@@ -33,7 +33,7 @@ import { SplashScreen, shouldShowSplash } from './components/SplashScreen.jsx';
 import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
-import { WordInspector } from './components/WordInspector.jsx';
+import { WordToolPanel } from './components/WordInspector.jsx';
 import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
@@ -953,7 +953,7 @@ export function App() {
                 </div>
               ) : tool.group === 'word' ? (
                 <div className="p-4">
-                  <WordInspector />
+                  <WordToolPanel textPanelOpen={isDesktop && desktopSidePanel === 'text-overlay'} />
                 </div>
               ) : (
                 <div className="p-4">

@@ -26,6 +26,8 @@ import { ANIMATION_TYPES } from '../../shared/captionAnimation.js';
 import { ColorPickerField } from './ColorPickerField.jsx';
 import { getSoundDefinition } from '../../shared/soundRegistry.js';
 import { INTERLUDE_DEFAULT_STYLE } from '../../shared/textElement.js';
+import { WordInspector } from './WordInspector.jsx';
+import { getSelectedWordStyleTarget, onSelectionChange, clearTextWordSelection } from '../js/components/canvasTransform.js';
 
 // What "clear this override" means for the element being edited. An overlay
 // or manual caption INHERITS the caption style; an interlude never did — it
@@ -773,10 +775,17 @@ function TextElementStyle({ element }) {
 export function TextInspector({ onAddSoundAt = null } = {}) {
   const [, force] = useState(0);
   useEffect(() => subscribe('*', () => force((n) => n + 1)), []);
+  // Picking a word inside the element on the video is a canvas selection,
+  // not a state write — this is what re-renders the panel for it.
+  useEffect(() => onSelectionChange(() => force((n) => n + 1)), []);
 
   const elements = appState.textElements || [];
   const selectedId = appState.selectedTextElementId;
   const selected = elements.find((el) => el.id === selectedId) || null;
+  // A WORD of this element selected on the video (second click): the style
+  // controls then edit that word alone — see the section below.
+  const wordTarget = getSelectedWordStyleTarget();
+  const selectedWord = selected && wordTarget?.textElementId === selected.id ? wordTarget : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -852,6 +861,27 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
         </div>
       ) : (
         <>
+          {selectedWord && (
+            // One word of the text is selected: first in the panel are that
+            // word's own style controls (the per-word styling a caption word
+            // has), so a font, case or colour change touches it alone — never
+            // the rest of the phrase. The whole-text style controls are put
+            // away until "Whole text" goes back to them.
+            <>
+              <div className={CARD} id="textel-word-editing">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={SECTION_TITLE}>Editing one word</span>
+                  <button type="button" id="textel-edit-whole" className={SECONDARY_BTN} onClick={() => clearTextWordSelection()}>
+                    Whole text
+                  </button>
+                </div>
+                <p className={HINT}>
+                  Changes below apply to <b>{selectedWord.text || 'this word'}</b> only. Click another word on the video to switch, or press <b>Whole text</b> to style every word.
+                </p>
+              </div>
+              <WordInspector />
+            </>
+          )}
           <div className={CARD}>
             <div className="flex items-center justify-between">
               <span className={SECTION_TITLE}>{KIND_TITLE[selected.kind] || 'Text overlay'}</span>
@@ -929,7 +959,14 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
             </>
           )}
 
-          <TextElementStyle element={selected} />
+          {!selectedWord && (
+            <>
+              <p className={HINT} id="textel-word-hint">
+                To style one word on its own, click the text on the video, then click that word.
+              </p>
+              <TextElementStyle element={selected} />
+            </>
+          )}
         </>
       )}
     </div>

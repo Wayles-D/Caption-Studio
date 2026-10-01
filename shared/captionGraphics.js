@@ -71,6 +71,15 @@ import { entranceFromParams, entranceFromWordOverride, evaluateMotion, resolveMo
  * along a straight screen-space line, and the distance it travels is not
  * scaled by the motion's own scale.
  */
+/**
+ * A single word's own case, set on that word alone (the Word panel's Case):
+ * 'uppercase', 'lowercase' or 'capitalize' (first letter capital).
+ */
+function applyWordOwnCase(text, textCase) {
+  if (textCase === 'capitalize') return applyCaseTransform(text, 'sentence', true);
+  return applyCaseTransform(text, textCase, true);
+}
+
 function applyMotionTransform(ctx, d, pivotX, pivotY, unitPx, extraScale = 1) {
   if (d.offsetX || d.offsetY) ctx.translate(d.offsetX * unitPx, d.offsetY * unitPx);
   const scale = d.scale * extraScale;
@@ -652,8 +661,13 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
 
   const resolvedFontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const wordUnits = activePhrase.words.map((w, idx) => {
-    const caseForWord = resolveWordTextCase(!!w.isKeyword, keywordsEnabled, params.textCase, cssConfig.keywordTextCase);
-    const text = applyCaseTransform(w.word || w.text || '', caseForWord, idx === 0);
+    // A word's OWN case (its style override's textCase) wins over the
+    // caption's and the keyword tier's — "OFFICE" can be lowercase in an
+    // otherwise uppercase line.
+    const ownCase = resolveWordStyleOverride(params, w.wordIndex)?.textCase;
+    const text = ownCase
+      ? applyWordOwnCase(w.word || w.text || '', ownCase)
+      : applyCaseTransform(w.word || w.text || '', resolveWordTextCase(!!w.isKeyword, keywordsEnabled, params.textCase, cssConfig.keywordTextCase), idx === 0);
     // This word's own style override, applied to whichever unit the two
     // branches below produce — see applyWordStyleOverride for why the merge
     // happens on the finished unit rather than inside the style resolution.
@@ -1393,8 +1407,12 @@ function buildChunkWordStyleUnits(ctx, spec, chunk, params, geometry) {
   const displayWords = spec.text.split(' ');
 
   const units = rawWords.map((w, i) => {
-    const text = displayWords[i] ?? (w.word || w.text || '').trim();
-    const style = applyWordStyleOverride(spec, resolveWordStyleOverride(params, w.wordIndex), geometry, spec.fontSizePx);
+    const override = resolveWordStyleOverride(params, w.wordIndex);
+    // A word's own case wins here too (see computeSentenceLines).
+    const text = override?.textCase
+      ? applyWordOwnCase((w.word || w.text || '').trim(), override.textCase)
+      : displayWords[i] ?? (w.word || w.text || '').trim();
+    const style = applyWordStyleOverride(spec, override, geometry, spec.fontSizePx);
     setCanvasFont(ctx, style.font);
     return { wordIndex: w.wordIndex, text, style, width: ctx.measureText(text).width };
   });

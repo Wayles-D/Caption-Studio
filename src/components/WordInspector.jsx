@@ -140,6 +140,30 @@ function OverrideSlider({ label, value, fallbackLabel, min, max, unit, onChange,
   );
 }
 
+/**
+ * The Word tool's own panel. A word of a text element is already edited in
+ * the Text & Cinematic panel (TextInspector embeds this same inspector for
+ * it), so while that panel is open the tool points there rather than showing
+ * a second, identical set of controls beside it.
+ */
+export function WordToolPanel({ textPanelOpen = false }) {
+  const [, forceRender] = useState(0);
+  useEffect(() => onSelectionChange(() => forceRender((n) => n + 1)), []);
+  const target = getSelectedWordStyleTarget();
+  if (textPanelOpen && target?.textElementId) {
+    return (
+      <div className={CARD} id="word-tool-in-text-panel">
+        <span className={SECTION_TITLE}>Editing in Text &amp; Cinematic</span>
+        <p className={HINT}>
+          <b>{target.text || 'This word'}</b> is part of a text element, so its own style is in the
+          Text &amp; Cinematic panel on the right.
+        </p>
+      </div>
+    );
+  }
+  return <WordInspector />;
+}
+
 export function WordInspector() {
   // The canvas selection lives in module state inside canvasTransform.js, not
   // in a store — onSelectionChange (fired once per overlay sync) is the bridge.
@@ -222,6 +246,21 @@ export function WordInspector() {
           >
             <option value="">Same as caption</option>
             {WEIGHT_OPTIONS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="word-case-select" className={GROUP_LABEL}>Case</label>
+          <select
+            id="word-case-select"
+            className={SELECT}
+            value={style.textCase || ''}
+            onChange={(e) => set({ textCase: e.target.value || null })}
+          >
+            <option value="">Same as caption</option>
+            <option value="uppercase">UPPERCASE</option>
+            <option value="lowercase">lowercase</option>
+            <option value="capitalize">Capitalized</option>
           </select>
         </div>
 
