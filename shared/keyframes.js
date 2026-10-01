@@ -31,7 +31,7 @@
  * evaluation logic — the "one canonical keyframe evaluation mechanism" both
  * live preview and server export call into (see resolveAnimatableField).
  */
-import { applyEasing, EASING_TYPES } from './captionAnimation.js';
+import { applyEasing, EASING_TYPES } from './motion/easing.js';
 
 export const KEYFRAME_PROPERTIES = ['positionX', 'positionY', 'scale', 'rotation', 'opacity'];
 

@@ -78,7 +78,7 @@ export function resolvePhraseParams(baseParams, phrase, currentTime) {
   // writes these onto THIS phrase's own override exactly like every other
   // "This Caption" field above; without merging them here, a "This Caption"
   // animation choice would update captionTransforms correctly but never
-  // actually reach shared/captionAnimation.js's getAnimationTransform (which
+  // actually reach the motion engine's entranceFromParams (shared/motion, which
   // only ever reads captionAnimationType/Duration/Easing/Intensity off the
   // resolved params object), silently doing nothing.
   if (override.animationType != null) merged.captionAnimationType = override.animationType;
@@ -120,7 +120,7 @@ export function getWordTransformKey(wordIndex) {
  * paint time around that word's own rendered pivot, additively on top of
  * whatever phrase/global transform already placed the block it's part of.
  * The animation* fields (keyword-scope editing feature) are resolved through
- * the exact same shared/captionAnimation.js engine the caption/Rolling-Stack-
+ * the exact same motion engine (shared/motion) the caption/Rolling-Stack-
  * window-level animation uses, just anchored to this word's own [start,end)
  * — see shared/captionGraphics.js's per-word paint blocks. Returns null (not
  * baseParams) since callers apply this per-word inside a paint loop, not as
