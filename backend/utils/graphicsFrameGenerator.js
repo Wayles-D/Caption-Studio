@@ -26,7 +26,7 @@ import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
-import { entranceFromParams, entranceFromWordOverride, resolveMotionWindow, motionActiveSpan } from '../../shared/motion/motion.js';
+import { motionsFromParams, motionsFromWordOverride, motionActiveSpans } from '../../shared/motion/motion.js';
 import { getKeyframeTimeRange } from '../../shared/keyframes.js';
 import {
   normalizeTextElementList,
@@ -166,16 +166,13 @@ function subdivideSlicesForAnimation(slices, animStart, animEnd) {
 }
 
 /**
- * The stretch a word's own entrance is actually moving over, or null — the
- * motion system's own answer (shared/motion/motion.js: the window the
- * painter evaluates it in, cut to its duration), so what is sampled densely
+ * The stretches a word's own motions are actually moving over — the motion
+ * system's own answer (shared/motion/motion.js: the windows the painter
+ * evaluates them in, cut to their durations), so what is sampled densely
  * here is exactly what moves on screen.
  */
-function wordAnimationSpan(word, container, override) {
-  const motion = entranceFromWordOverride(override);
-  if (!motion) return null;
-  const span = motionActiveSpan(motion, resolveMotionWindow(motion, word, container));
-  return span.end > span.start ? span : null;
+function wordAnimationSpans(word, container, override) {
+  return motionActiveSpans(motionsFromWordOverride(override), word, container).filter((s) => s.end > s.start);
 }
 
 /**
@@ -197,8 +194,7 @@ function subdivideForWordAnimations(slices, words, params, container) {
   (words || []).forEach((w) => {
     const override = resolveWordOverride(params, w.wordIndex);
     if (!override) return;
-    const win = wordAnimationSpan(w, container, override);
-    if (win) result = subdivideSlicesForAnimation(result, win.start, win.end);
+    wordAnimationSpans(w, container, override).forEach((win) => { result = subdivideSlicesForAnimation(result, win.start, win.end); });
     // Real timeline keyframes (see shared/keyframes.js) need the exact same
     // dense-sampling treatment as an entrance animation — otherwise a
     // word's keyframed position/scale/rotation/opacity would render as a
@@ -251,11 +247,9 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
   // comment. The SAME clamp-to-lifetime rule the motion evaluator applies at
   // draw time is applied here too, so the number of subdivided slices always
   // matches how long the animation will actually run.
-  const entrance = entranceFromParams(staticPhraseParams);
-  if (entrance) {
-    const span = motionActiveSpan(entrance, { start: phrase.start, end: phrase.end });
+  motionActiveSpans(motionsFromParams(staticPhraseParams), phrase).forEach((span) => {
     slices = subdivideSlicesForAnimation(slices, span.start, span.end);
-  }
+  });
   // Real timeline keyframes on the PHRASE itself (position/scale/rotation/
   // opacity) — same dense-sampling treatment as the entrance animation
   // above, over the union range of every keyframed property (see
@@ -334,7 +328,7 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
-  const entrance = entranceFromParams(staticPhraseParams);
+  const motions = motionsFromParams(staticPhraseParams);
   const phraseOverride = params.captionTransforms?.[getPhraseTransformKey(phrase)];
   const phraseKfRange = getKeyframeTimeRange(phraseOverride);
 
@@ -346,11 +340,10 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
   // subdivided independently, then flattened back into one time-ordered list.
   const slices = windowSlices.flatMap((slice) => {
     let subSlices = [{ start: slice.start, end: slice.end }];
-    if (entrance) {
-      const activeChunk = slice.chunks[slice.chunks.length - 1];
-      const span = motionActiveSpan(entrance, { start: activeChunk.start, end: activeChunk.end });
+    const activeChunk = slice.chunks[slice.chunks.length - 1];
+    motionActiveSpans(motions, activeChunk).forEach((span) => {
       subSlices = subdivideSlicesForAnimation(subSlices, span.start, span.end);
-    }
+    });
     // Real timeline keyframes on the phrase itself — same treatment as
     // sentence mode's generatePhraseCaptionFrames.
     if (phraseKfRange) {
@@ -521,18 +514,15 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     // — the style bag over the caption's params, its own words' map), so the
     // windows sampled here are exactly the ones that move on screen.
     const elementParams = resolveTextElementParams(params, element);
-    const entrance = entranceFromParams(elementParams);
-    if (entrance) {
-      const span = motionActiveSpan(entrance, { start: element.start, end: element.end });
+    motionActiveSpans(motionsFromParams(elementParams), element).forEach((span) => {
       if (span.end > span.start) addSamples(span.start, span.end);
-    }
+    });
     // ...and each of its words' own entrances and keyframes.
     const phrase = textElementToPhrase(element);
     phrase.words.forEach((w) => {
       const override = resolveWordOverride(elementParams, w.wordIndex);
       if (!override) return;
-      const win = wordAnimationSpan(w, phrase, override);
-      if (win) addSamples(Math.max(win.start, element.start), Math.min(win.end, element.end));
+      wordAnimationSpans(w, phrase, override).forEach((win) => addSamples(Math.max(win.start, element.start), Math.min(win.end, element.end)));
       const wordKf = getKeyframeTimeRange(override);
       if (wordKf) addSamples(Math.max(wordKf.min, element.start), Math.min(wordKf.max, element.end));
     });

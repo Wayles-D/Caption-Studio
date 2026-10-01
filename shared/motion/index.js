@@ -11,7 +11,10 @@
  *                        base is never modified
  *
  * The same calls run in the live preview and the exporter, so the two cannot
- * disagree about where anything is at a given time.
+ * disagree about where anything is at a given time. Both reach an object's
+ * motion only through its LIST of motions (motionsFrom*, evaluateMotions,
+ * motionActiveSpans — at most one per kind), so a later kind of motion
+ * changes ./motion.js and nothing that draws or samples.
  *
  * Target selection — WHICH caption, word, keyword or element a motion is put
  * on — is the editor's job (src/js/components/canvasTransform.js), not this
