@@ -101,6 +101,9 @@ test('search narrows the library to what matches', async ({ page }) => {
 // Every pack file must decode in a real browser — the preview path — not just
 // exist on disk. Decoded here with the same Web Audio decoder the engine uses.
 test('every pack sound decodes in the browser, with audio in it', async ({ page }) => {
+  // 347 fetch+decode round trips: ~10s alone, but past the 30s default when
+  // the suite runs other browsers in parallel.
+  test.setTimeout(120000);
   await page.goto(APP_URL);
   const files = PACK_SOUNDS.map((s) => ({ id: s.id, file: packFileName(s.id), duration: s.duration }));
   const results = await page.evaluate(async (list) => {

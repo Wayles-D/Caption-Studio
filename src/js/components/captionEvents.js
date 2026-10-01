@@ -14,7 +14,7 @@
  * compares by identity), `recordHistory: false` during a live drag and `true`
  * on the commit so a gesture is one undo step.
  */
-import { appState, updateState } from '../state.js';
+import { appState, updateState, subscribe } from '../state.js';
 import {
   captionEventsFromPhrases,
   resolveCaptionPhrases,
@@ -29,6 +29,25 @@ import {
 export function getCaptionEvents() {
   return appState.captionEvents || [];
 }
+
+// UNDO / REDO restore captionEvents (a document key) but not phrases, which
+// are a projection of them and are not history-tracked. Without this, undoing
+// any caption edit — a retime, a split, turning a caption into cinematic text
+// — put the event back while the preview kept rendering the phrases from
+// before the undo. Every change to the list re-projects them, whoever made
+// it; the ordinary write paths already did the same in their own update, so
+// for them this is a no-op recomputation.
+//
+// An EMPTY list only means "no captions" once there have been some: a project
+// whose transcript predates caption events has phrases but no events until
+// ensureCaptionEventsSeeded runs, and those phrases must not be wiped.
+let hadCaptionEvents = false;
+subscribe('captionEvents', () => {
+  const events = getCaptionEvents();
+  if (events.length) hadCaptionEvents = true;
+  else if (!hadCaptionEvents) return;
+  updateState({ phrases: resolveCaptionPhrases(appState.words || [], events) }, { recordHistory: false });
+});
 
 export function getCaptionEvent(id) {
   return getCaptionEvents().find((e) => e.id === id) || null;

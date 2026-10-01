@@ -20,6 +20,7 @@
  */
 import { addAudioTrack } from './audioTimeline.js';
 import { readAudioDuration } from './audioEngine.js';
+import { rememberAudioFile } from '../projectPersistence.js';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -55,6 +56,10 @@ export async function importAudioFile(file, options = {}) {
     throw new Error(payload?.message || `Audio upload failed (HTTP ${response.status}).`);
   }
 
+  // Kept with the project, so the preview can still play it after a reload and
+  // the file can be sent back if the server purges its copy (see
+  // projectPersistence.js).
+  rememberAudioFile(payload.assetId, file);
   const url = URL.createObjectURL(file);
   // Best-effort: a file the browser cannot decode still uploads and still
   // exports (FFmpeg's format support is far broader than the Web Audio API's),

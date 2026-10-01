@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { listSoundSections } from '../../shared/soundRegistry.js';
 import { previewSound } from '../js/components/audioEngine.js';
 import * as audioTimeline from '../js/components/audioTimeline.js';
+import * as textElements from '../js/components/textElements.js';
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)]';
 const SECTION_LABEL = 'text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-secondary)] px-1 pt-5 pb-0.5 border-b border-[var(--border-color)]';
@@ -37,7 +38,7 @@ const ROW = `w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm
   text-left cursor-pointer transition-colors duration-150
   hover:border-[var(--accent-color)] hover:bg-[rgba(0,246,172,0.06)]`;
 
-export function SoundLibraryPanel({ onClose, replaceTargetId = null }) {
+export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTextElementId = null }) {
   const rootRef = useRef(null);
   const [query, setQuery] = useState('');
   const sections = useMemo(() => listSoundSections(), []);
@@ -157,6 +158,9 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null }) {
                           // its time, level, fades and provenance — and what keeps
                           // "I picked the wrong sound" from costing the placement.
                           if (replacing) audioTimeline.setSoundEventSound(replaceTargetId, sound.id);
+                          // From an interlude's "+ Sound at start": placed at
+                          // its first frame and linked, so it moves with it.
+                          else if (attachToTextElementId) textElements.addLinkedSound(attachToTextElementId, sound.id);
                           else audioTimeline.addSoundEvent(sound.id);
                           onClose();
                         }}

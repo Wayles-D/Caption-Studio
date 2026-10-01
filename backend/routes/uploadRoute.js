@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'path';
 import { uploadVideo, uploadAudio } from '../utils/multerConfig.js';
-import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent } from '../controllers/uploadController.js';
+import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent, sessionStatus, restoreVideo, restoreAudio } from '../controllers/uploadController.js';
 
 const router = Router();
 
@@ -45,6 +45,17 @@ router.post('/cleanup', workspaceCleanup);
  * @access  Public
  */
 router.post('/regenerate', regenerateCaptions);
+
+/**
+ * @route   POST /api/upload/session-status, /restore-video, /restore-audio
+ * @desc    Reopening a saved project (src/js/projectPersistence.js): which of the
+ *          project's server files were purged, and putting them back under
+ *          their original names from the browser's saved copies.
+ * @access  Public
+ */
+router.post('/session-status', sessionStatus);
+router.post('/restore-video', uploadVideo.single('video'), restoreVideo);
+router.post('/restore-audio', uploadAudio.single('audio'), restoreAudio);
 
 /**
  * @route   POST /api/upload/audio

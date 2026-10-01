@@ -8,9 +8,31 @@ import { resolveASSStyle } from '../utils/assWriter.js';
 import { analyzeTranscript } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
-import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor, getLastGraphicsFailure } from '../utils/graphicsExport.js';
+import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor, getLastGraphicsFailure, compositeTextElementsOnto } from '../utils/graphicsExport.js';
+
+/**
+ * After an ASS fallback burn: puts the project's text elements (overlays,
+ * manual captions, cinematic interludes) onto the burned file — see
+ * compositeTextElementsOnto. Returns whether the file now carries them
+ * (true also when there were none to carry). A failure here keeps the burned
+ * file and reports false, rather than failing the whole render.
+ */
+async function addTextElementsToFallbackRender(renderedVideoPath, styles, framesDir, label) {
+  const withText = renderedVideoPath.replace(/\.mp4$/i, '') + '.with-text.mp4';
+  try {
+    const added = await compositeTextElementsOnto(renderedVideoPath, styles, withText, framesDir);
+    if (!added) return true;
+    fs.renameSync(withText, renderedVideoPath);
+    return true;
+  } catch (err) {
+    console.error('[' + label + '] Could not add text overlays to the fallback render: ' + err.message);
+    try { if (fs.existsSync(withText)) fs.unlinkSync(withText); } catch { /* best effort */ }
+    return false;
+  }
+}
 import { getVideoInfo, getAudioInfo } from '../utils/graphicsCompositor.js';
 import { normalizeAudioTimeline, hasAnyAudio } from '../../shared/audioTimeline.js';
+import { normalizeTextElementList, isTextElementRenderable } from '../../shared/textElement.js';
 
 /**
  * Everything the ASS/libass fallback burn needs to mix the audio timeline
@@ -255,6 +277,9 @@ export async function uploadAndExtractAudio(req, res, next) {
         ...(await resolveFallbackAudioOptions(videoPath, req.body))
       });
     }
+    // ...and neither does it drop text overlays or cinematic interludes.
+    const textElementsRendered = usedGraphicsRenderer
+      || await addTextElementsToFallbackRender(renderedVideoPath, req.body, graphicsFramesDirFor(outputDir, baseName) + '-text', 'Pipeline] [' + baseName);
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Completed (${usedGraphicsRenderer ? 'graphics' : 'ass'} pipeline, Duration: ${Date.now() - renderStart}ms)`);
     activeProc = null;
 
@@ -310,6 +335,9 @@ export async function uploadAndExtractAudio(req, res, next) {
       // fallback it swaps to on any failure renders plain, un-transformed
       // captions with no way to tell from the video alone that it happened.
       renderedWithEffects: usedGraphicsRenderer,
+      // Whether text overlays / cinematic interludes are in the file — true on
+      // the graphics path, and on the fallback once they were composited on.
+      textElementsRendered,
       // When the graphics renderer bailed, WHY — see graphicsExport.js's
       // recordFailure: the real cause used to reach the server console only.
       graphicsFailureReason: usedGraphicsRenderer ? null : getLastGraphicsFailure()
@@ -436,7 +464,10 @@ export async function regenerateCaptions(req, res, next) {
     return res.status(400).json({ success: false, message: 'baseName must be a valid job ID.' });
   }
 
-  if (!words || !Array.isArray(words) || words.length === 0) {
+  // An empty transcript is allowed when there is text to draw: a video with no
+  // speech can still carry cinematic text and overlays (see graphicsExport.js).
+  const hasTextElements = normalizeTextElementList(styles?.textElements).some(isTextElementRenderable);
+  if (!words || !Array.isArray(words) || (words.length === 0 && !hasTextElements)) {
     return res.status(400).json({ success: false, message: 'words array is required and must not be empty.' });
   }
 
@@ -537,6 +568,8 @@ export async function regenerateCaptions(req, res, next) {
         ...(await resolveFallbackAudioOptions(videoPath, styles))
       });
     }
+    const textElementsRendered = usedGraphicsRenderer
+      || await addTextElementsToFallbackRender(renderedVideoPath, styles, graphicsFramesDirFor(outputDir, baseName) + '-text', 'Regenerate] [' + baseName);
     console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Completed (${usedGraphicsRenderer ? 'graphics' : 'ass'} pipeline, Duration: ${Date.now() - renderStart}ms)`);
     activeProc = null;
 
@@ -557,6 +590,9 @@ export async function regenerateCaptions(req, res, next) {
       // false means caption transform keyframes/blend mode were silently
       // dropped this render (ASS fallback).
       renderedWithEffects: usedGraphicsRenderer,
+      // Whether text overlays / cinematic interludes are in the file — true on
+      // the graphics path, and on the fallback once they were composited on.
+      textElementsRendered,
       // When the graphics renderer bailed, WHY — see graphicsExport.js's
       // recordFailure: the real cause used to reach the server console only.
       graphicsFailureReason: usedGraphicsRenderer ? null : getLastGraphicsFailure()
@@ -572,4 +608,74 @@ export async function regenerateCaptions(req, res, next) {
   } finally {
     activeJobIds.delete(baseName);
   }
+}
+
+// --- Reopening a saved project ---------------------------------------------
+//
+// The editor now keeps a project across a reload (src/js/projectPersistence.js)
+// — including the original video and imported audio, as files in the browser.
+// The server does NOT keep them: uploads are purged after 30 minutes, audio
+// assets after 24 hours (utils/cleanup.js). So a project reopened later would
+// fail to render. These three endpoints let the client ask what is missing and
+// put it back under its ORIGINAL name, so nothing in the project has to change
+// and no second transcription is ever needed.
+
+const restoreUploadsDir = path.join(__dirname, '../uploads');
+const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm'];
+const AUDIO_ASSET_ID = /^[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,5}$/;
+
+function findUploadedVideo(baseName) {
+  for (const ext of VIDEO_EXTENSIONS) {
+    const p = path.join(restoreUploadsDir, `${baseName}${ext}`);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+/** POST /api/upload/session-status — { baseName, assetIds } → { videoPresent, missingAssets } */
+export async function sessionStatus(req, res) {
+  const { baseName, assetIds } = req.body || {};
+  if (!isValidJobId(baseName)) return res.status(400).json({ success: false, message: 'baseName must be a valid job ID.' });
+  const ids = Array.isArray(assetIds) ? assetIds.filter((id) => typeof id === 'string' && AUDIO_ASSET_ID.test(id)) : [];
+  const { AUDIO_UPLOADS_DIR } = await import('../utils/audioMixFilter.js');
+  const missingAssets = ids.filter((id) => !fs.existsSync(path.join(AUDIO_UPLOADS_DIR, id)));
+  return res.json({ success: true, videoPresent: !!findUploadedVideo(baseName), missingAssets });
+}
+
+/** POST /api/upload/restore-video — multipart { baseName, video } → stores it as <baseName><ext> if missing. */
+export async function restoreVideo(req, res) {
+  const baseName = req.body?.baseName;
+  const file = req.file;
+  const discard = () => { try { if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch { /* best effort */ } };
+  if (!file) return res.status(400).json({ success: false, message: 'video file is required.' });
+  if (!isValidJobId(baseName)) { discard(); return res.status(400).json({ success: false, message: 'baseName must be a valid job ID.' }); }
+  const existing = findUploadedVideo(baseName);
+  if (existing) {
+    // Already there (another tab restored it first): keep it, and refresh
+    // its age so the cleanup daemon doesn't take it mid-edit.
+    discard();
+    const now = new Date();
+    try { fs.utimesSync(existing, now, now); } catch { /* best effort */ }
+    return res.json({ success: true, restored: false });
+  }
+  const ext = VIDEO_EXTENSIONS.includes(path.extname(file.originalname).toLowerCase()) ? path.extname(file.originalname).toLowerCase() : '.mp4';
+  fs.renameSync(file.path, path.join(restoreUploadsDir, `${baseName}${ext}`));
+  console.log(`[Restore] [${baseName}] Original video restored from the client's saved copy.`);
+  return res.json({ success: true, restored: true });
+}
+
+/** POST /api/upload/restore-audio — multipart { assetId, audio } → stores it under that exact assetId if missing. */
+export async function restoreAudio(req, res) {
+  const assetId = req.body?.assetId;
+  const file = req.file;
+  const discard = () => { try { if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch { /* best effort */ } };
+  if (!file) return res.status(400).json({ success: false, message: 'audio file is required.' });
+  if (typeof assetId !== 'string' || !AUDIO_ASSET_ID.test(assetId)) { discard(); return res.status(400).json({ success: false, message: 'assetId is invalid.' }); }
+  const { AUDIO_UPLOADS_DIR } = await import('../utils/audioMixFilter.js');
+  const target = path.join(AUDIO_UPLOADS_DIR, assetId);
+  if (path.dirname(path.resolve(target)) !== path.resolve(AUDIO_UPLOADS_DIR)) { discard(); return res.status(400).json({ success: false, message: 'assetId is invalid.' }); }
+  if (fs.existsSync(target)) { discard(); return res.json({ success: true, restored: false }); }
+  fs.renameSync(file.path, target);
+  console.log(`[Restore] Audio asset ${assetId} restored from the client's saved copy.`);
+  return res.json({ success: true, restored: true });
 }

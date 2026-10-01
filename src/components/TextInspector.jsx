@@ -18,12 +18,21 @@
  * syncTextElementsCanvas and backend/utils/graphicsFrameGenerator.js's
  * composite pass), so the two cannot disagree.
  */
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { appState, subscribe } from '../js/state.js';
 import * as textElements from '../js/components/textElements.js';
 import { listFontOptions } from '../../shared/fontRegistry.js';
 import { ANIMATION_TYPES } from '../../shared/captionAnimation.js';
 import { ColorPickerField } from './ColorPickerField.jsx';
+import { getSoundDefinition } from '../../shared/soundRegistry.js';
+import { INTERLUDE_DEFAULT_STYLE } from '../../shared/textElement.js';
+
+// What "clear this override" means for the element being edited. An overlay
+// or manual caption INHERITS the caption style; an interlude never did — it
+// goes back to its own cinematic default (see TextElementStyle's apply).
+const INHERIT_CLEAR = { short: 'inherit', title: 'Go back to inheriting this from the caption style', unset: 'Same as caption' };
+const ClearMeaning = createContext(INHERIT_CLEAR);
+const INTERLUDE_CLEAR = { short: 'default', title: 'Go back to the cinematic default', unset: 'Default' };
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
 const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
@@ -78,6 +87,19 @@ const SHADOW_MODE_OPTIONS = [
   { value: 'individual', label: 'Per word' },
   { value: 'unified', label: 'Unified' }
 ];
+const ALIGN_OPTIONS = [
+  { value: 'left', label: 'Left' },
+  { value: 'center', label: 'Centre' },
+  { value: 'right', label: 'Right' }
+];
+// Quick picks for an interlude's background — the two cinematic classics.
+// Anything else goes through the same colour picker every other colour uses.
+const BACKGROUND_SWATCHES = [
+  { value: '#FFFFFF', label: 'White' },
+  { value: '#000000', label: 'Black' }
+];
+const KIND_BADGE = { caption: 'CAP', overlay: 'TXT', interlude: 'CIN' };
+const KIND_TITLE = { caption: 'Manual caption', overlay: 'Text overlay', interlude: 'Cinematic text' };
 const titleCase = (s) => s.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
 function formatTime(t) {
@@ -89,14 +111,15 @@ function formatTime(t) {
 
 /** "Clear this override" — shown only once the key is actually set. */
 function InheritButton({ show, onClick }) {
+  const meaning = useContext(ClearMeaning);
   if (!show) return null;
   return (
     <button
       type="button"
       className="text-[10px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
-      title="Go back to inheriting this from the caption style"
+      title={meaning.title}
       onClick={onClick}
-    >inherit</button>
+    >{meaning.short}</button>
   );
 }
 
@@ -123,6 +146,7 @@ function StyleSlider({ id, label, value, min, max, step = 1, unit = '', onChange
 
 /** Dropdown whose empty option means "inherit". */
 function StyleSelect({ id, label, value, options, onChange }) {
+  const meaning = useContext(ClearMeaning);
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={id} className={GROUP_LABEL}>{label}</label>
@@ -131,7 +155,7 @@ function StyleSelect({ id, label, value, options, onChange }) {
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value || null)}
       >
-        <option value="">Same as caption</option>
+        <option value="">{meaning.unset}</option>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </div>
@@ -209,7 +233,10 @@ function ApplyStyleTo({ element }) {
   const [picking, setPicking] = useState(false);
   const [checked, setChecked] = useState(() => new Set());
 
-  const others = (appState.textElements || []).filter((el) => el.id !== element.id);
+  // An interlude's look (a full-frame card's typography) and an overlay's
+  // are different jobs, so "apply to" stays within the same kind of element.
+  const sameFamily = (el) => (el.kind === 'interlude') === (element.kind === 'interlude');
+  const others = (appState.textElements || []).filter((el) => el.id !== element.id && sameFamily(el));
   if (!others.length) return null;
 
   const toggle = (id) => setChecked((prev) => {
@@ -238,7 +265,7 @@ function ApplyStyleTo({ element }) {
             type="button" id="textel-apply-all" className={PRIMARY_BTN}
             onClick={() => applyTo(others.map((el) => el.id))}
           >
-            All text ({others.length})
+            {element.kind === 'interlude' ? 'All cinematic' : 'All text'} ({others.length})
           </button>
           <button
             type="button" id="textel-apply-choose" className={SECONDARY_BTN}
@@ -291,13 +318,176 @@ function ApplyStyleTo({ element }) {
 }
 
 /**
+ * An interlude's block layout: alignment, letter spacing, line height and
+ * wrap width. Each writes one key of the style bag, read by the shared
+ * renderer's resolveGeometry (shared/captionGraphics.js) — preview and export
+ * alike — and absent for everything that isn't an interlude.
+ */
+function InterludeLayout({ element, apply }) {
+  const style = element.style || {};
+  const align = style.textAlign || 'center';
+  return (
+    <div className={CARD}>
+      <span className={SECTION_TITLE}>Layout</span>
+      <div className="flex flex-col gap-1.5">
+        <span className={GROUP_LABEL}>Alignment</span>
+        <div className="flex items-center gap-2">
+          {ALIGN_OPTIONS.map((o) => (
+            <button
+              key={o.value} type="button" id={'interlude-align-' + o.value}
+              className={TOGGLE_BTN_BASE + ' ' + (align === o.value ? TOGGLE_BTN_ON : TOGGLE_BTN_OFF)}
+              onClick={() => apply({ textAlign: o.value })}
+            >{o.label}</button>
+          ))}
+        </div>
+      </div>
+      <StyleSlider
+        id="interlude-letter-spacing" label="Letter spacing" value={style.letterSpacing}
+        min={-2} max={20} step={0.5} unit="px"
+        onChange={(v) => apply({ letterSpacing: v })}
+        onClear={() => apply({ letterSpacing: null })}
+      />
+      <StyleSlider
+        id="interlude-line-height" label="Line height" value={style.lineHeight}
+        min={0.7} max={2.5} step={0.05} unit="×"
+        onChange={(v) => apply({ lineHeight: v })}
+        onClear={() => apply({ lineHeight: null })}
+      />
+      <StyleSlider
+        id="interlude-width" label="Text width" value={style.textMaxWidth}
+        min={20} max={100} unit="%"
+        onChange={(v) => apply({ textMaxWidth: v })}
+        onClear={() => apply({ textMaxWidth: null })}
+      />
+    </div>
+  );
+}
+
+/**
+ * The full-frame background — what replaces the picture. White and Black one
+ * press away, anything else through the shared ColorPickerField.
+ */
+function InterludeBackground({ element }) {
+  const [open, setOpen] = useState(false);
+  const color = element.background?.color || '#FFFFFF';
+  const set = (hex, opts) => textElements.updateInterludeBackground(element.id, { color: hex }, opts);
+  return (
+    <div className={CARD}>
+      <span className={SECTION_TITLE}>Background</span>
+      <p className={HINT}>Fills the whole frame for this span. The video keeps playing — and you keep hearing it — underneath.</p>
+      <div className="flex items-center gap-2">
+        {BACKGROUND_SWATCHES.map((s) => (
+          <button
+            key={s.value} type="button" id={'interlude-bg-' + s.label.toLowerCase()}
+            className={TOGGLE_BTN_BASE + ' ' + (color === s.value ? TOGGLE_BTN_ON : TOGGLE_BTN_OFF) + ' flex items-center justify-center gap-2'}
+            onClick={() => set(s.value)}
+          >
+            <span className="w-3 h-3 rounded-[2px] border border-[var(--border-color)]" style={{ background: s.value }} />
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[12px] text-[var(--text-primary)]">Custom</span>
+        <InterludeBackgroundPicker color={color} open={open} setOpen={setOpen} set={set} />
+      </div>
+    </div>
+  );
+}
+
+/** The shared colour picker, committing on close — see TextElementColorField for why a close must commit. */
+function InterludeBackgroundPicker({ color, open, setOpen, set }) {
+  const pickedRef = useRef(null);
+  return (
+    <ColorPickerField
+      triggerId="interlude-bg-custom"
+      label="Background"
+      value={color}
+      opacity={null}
+      open={open}
+      onOpenChange={(isOpen) => {
+        if (isOpen) pickedRef.current = null;
+        else if (pickedRef.current) {
+          const picked = pickedRef.current;
+          setTimeout(() => set(picked), 0);
+        }
+        setOpen(isOpen);
+      }}
+      onChange={(hex6) => {
+        pickedRef.current = hex6;
+        set(hex6, { recordHistory: false });
+      }}
+    />
+  );
+}
+
+/**
+ * Sound for an interlude — through the EXISTING sound-effect system, not a
+ * second one. "+ Sound at start" opens the ordinary sound library; the pick
+ * lands on the interlude's first frame as an ordinary SFX clip (volume,
+ * Replace, dragging and export all work as they do for any clip), LINKED to
+ * the interlude: moving the interlude moves it, deleting the interlude
+ * deletes it. Any other effect inside the span can be linked or unlinked here.
+ */
+function InterludeSound({ element, onAddSoundAt }) {
+  const linked = new Set(element.soundIds || []);
+  const listed = (appState.soundEvents || []).filter((e) => linked.has(e.id) || (e.startTime >= element.start && e.startTime < element.end));
+  return (
+    <div className={CARD}>
+      <span className={SECTION_TITLE}>Sound</span>
+      <p className={HINT}>
+        Adds a sound effect on the SFX lane at this interlude’s first frame — a hit, a whoosh, a riser landing.
+        Linked sounds move and delete with the interlude.
+      </p>
+      <button
+        type="button" id="interlude-add-sound" className={SECONDARY_BTN}
+        disabled={!onAddSoundAt}
+        onClick={() => onAddSoundAt?.(element.start, element.id)}
+      >
+        + Sound at start
+      </button>
+      {listed.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          {listed.map((e) => (
+            <label key={e.id} className={ROW_BASE + ' border-[var(--border-color)]'} data-interlude-sound={e.id}>
+              <input
+                type="checkbox"
+                data-interlude-sound-link={e.id}
+                checked={linked.has(e.id)}
+                onChange={(ev) => (ev.target.checked
+                  ? textElements.attachSoundToTextElement(element.id, e.id)
+                  : textElements.detachSoundFromTextElement(element.id, e.id))}
+                className="accent-[var(--accent-color)] shrink-0"
+                title="Linked: moves and deletes with this interlude"
+              />
+              <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--text-primary)]">{getSoundDefinition(e.soundId).label}</span>
+              <span className="text-[10px] text-[var(--text-muted)] shrink-0">{formatTime(e.startTime)}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * The whole styling stack for one element. Split out of TextInspector purely
  * for readability — its only state is which colour popover is open.
  */
 function TextElementStyle({ element }) {
   const [openColorField, setOpenColorField] = useState(null);
   const style = element.style || {};
-  const apply = (fields, opts) => textElements.updateTextElementStyle(element.id, fields, opts);
+  const isInterlude = element.kind === 'interlude';
+  // On an interlude, clearing a field restores its cinematic default rather
+  // than deleting the key — a deleted key would pull the CAPTION's value in
+  // (a boxed background, an outline) onto a card that never followed it.
+  const apply = (fields, opts) => textElements.updateTextElementStyle(
+    element.id,
+    isInterlude
+      ? Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v == null ? (INTERLUDE_DEFAULT_STYLE[k] ?? null) : v]))
+      : fields,
+    opts
+  );
   const hasAnyStyle = Object.keys(style).length > 0;
 
   /**
@@ -317,7 +507,7 @@ function TextElementStyle({ element }) {
   };
 
   return (
-    <>
+    <ClearMeaning.Provider value={isInterlude ? INTERLUDE_CLEAR : INHERIT_CLEAR}>
       {/* --- Typeface --- */}
       <div className={CARD}>
         <span className={SECTION_TITLE}>Typeface</span>
@@ -367,6 +557,10 @@ function TextElementStyle({ element }) {
         />
       </div>
 
+      {element.kind === 'interlude' && (
+        <InterludeLayout element={element} apply={apply} />
+      )}
+
       {/* --- Colour --- */}
       <div className={CARD}>
         <span className={SECTION_TITLE}>Colour</span>
@@ -377,8 +571,8 @@ function TextElementStyle({ element }) {
           openField={openColorField} setOpenField={setOpenColorField} apply={applyTextColor}
         />
         <ColorRow
-          label="Background" field="backgroundColor" fallback="#000000"
-          value={style.backgroundColor}
+          label={element.kind === 'interlude' ? 'Text box' : 'Background'} field="backgroundColor" fallback="#000000"
+          value={style.backgroundColor === 'transparent' ? null : style.backgroundColor}
           openField={openColorField} setOpenField={setOpenColorField} apply={apply}
         />
         <StyleSlider
@@ -550,21 +744,33 @@ function TextElementStyle({ element }) {
 
       <ApplyStyleTo element={element} />
 
-      <button
-        type="button" id="textel-reset-style" className={SECONDARY_BTN}
-        disabled={!hasAnyStyle}
-        // Clears the whole bag in one write, so the element goes back to
-        // following the caption entirely. Only this element's STYLE — its
-        // text and timing are content and are never touched here.
-        onClick={() => textElements.updateTextElement(element.id, { style: {} })}
-      >
-        Reset to caption style
-      </button>
-    </>
+      {element.kind === 'interlude' ? (
+        <button
+          type="button" id="textel-reset-style" className={SECONDARY_BTN}
+          // An interlude never followed the caption, so its reset is back to
+          // its own starting look (INTERLUDE_DEFAULT_STYLE). Text, timing and
+          // background are content and are not touched.
+          onClick={() => textElements.resetInterludeStyle(element.id)}
+        >
+          Reset to cinematic default
+        </button>
+      ) : (
+        <button
+          type="button" id="textel-reset-style" className={SECONDARY_BTN}
+          disabled={!hasAnyStyle}
+          // Clears the whole bag in one write, so the element goes back to
+          // following the caption entirely. Only this element's STYLE — its
+          // text and timing are content and are never touched here.
+          onClick={() => textElements.updateTextElement(element.id, { style: {} })}
+        >
+          Reset to caption style
+        </button>
+      )}
+    </ClearMeaning.Provider>
   );
 }
 
-export function TextInspector() {
+export function TextInspector({ onAddSoundAt = null } = {}) {
   const [, force] = useState(0);
   useEffect(() => subscribe('*', () => force((n) => n + 1)), []);
 
@@ -598,6 +804,13 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
           >
             + Caption
           </button>
+          <button
+            type="button" id="textel-add-interlude" className={SECONDARY_BTN + ' col-span-2'}
+            title="A full-frame text card that replaces the picture from the playhead, while the audio keeps playing"
+            onClick={() => textElements.addInterlude()}
+          >
+            + Cinematic text at playhead
+          </button>
         </div>
       </div>
 
@@ -615,10 +828,10 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
                 onClick={() => textElements.selectTextElement(el.id)}
               >
                 <span className="text-[9px] font-bold uppercase tracking-[0.04em] text-[var(--text-muted)] shrink-0">
-                  {el.kind === 'caption' ? 'CAP' : 'TXT'}
+                  {KIND_BADGE[el.kind] || 'TXT'}
                 </span>
                 <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--text-primary)]">
-                  {el.text || '(empty)'}
+                  {String(el.text || '').replace(/\s+/g, ' ').trim() || '(empty)'}
                 </span>
                 <span className="text-[10px] text-[var(--text-muted)] shrink-0">
                   {formatTime(el.start)}
@@ -641,7 +854,7 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
         <>
           <div className={CARD}>
             <div className="flex items-center justify-between">
-              <span className={SECTION_TITLE}>{selected.kind === 'caption' ? 'Manual caption' : 'Text overlay'}</span>
+              <span className={SECTION_TITLE}>{KIND_TITLE[selected.kind] || 'Text overlay'}</span>
             </div>
 
             <label className="flex flex-col gap-1.5">
@@ -658,14 +871,18 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
               />
             </label>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {[
-                { label: 'Start', value: selected.start, apply: (v) => textElements.moveTextElement(selected.id, v) },
-                { label: 'End', value: selected.end, apply: (v) => textElements.trimTextElement(selected.id, 'end', v) }
+                { label: 'Start', id: 'textel-start', value: selected.start, apply: (v) => textElements.moveTextElement(selected.id, v) },
+                { label: 'End', id: 'textel-end', value: selected.end, apply: (v) => textElements.trimTextElement(selected.id, 'end', v) },
+                // Duration is End expressed differently — the same trim, so it
+                // obeys the same limits (the video's end, the minimum length).
+                { label: 'Duration', id: 'textel-duration', value: selected.end - selected.start, apply: (v) => textElements.trimTextElement(selected.id, 'end', selected.start + v) }
               ].map((field) => (
                 <label key={field.label} className="flex flex-col gap-1.5">
                   <span className={GROUP_LABEL}>{field.label}</span>
                   <input
+                    id={field.id}
                     type="number" step="0.05" min="0" className={INPUT}
                     value={Number(field.value).toFixed(2)}
                     onChange={(e) => {
@@ -682,6 +899,21 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
               {'  ·  '}{(selected.end - selected.start).toFixed(2)}s
             </span>
 
+            {selected.source?.kind === 'caption' && (
+              <div className="flex flex-col gap-1.5">
+                <p className={HINT}>
+                  Made from a caption — its words keep their spoken timing, so the highlight and word animations run as they did on the caption.
+                </p>
+                <button
+                  type="button" id="textel-back-to-caption" className={SECONDARY_BTN}
+                  title="Put the caption back on the Captions lane, with its edits, and remove this"
+                  onClick={() => textElements.restoreCaptionFromTextElement(selected.id)}
+                >
+                  Back to caption
+                </button>
+              </div>
+            )}
+
             <button
               type="button" className={SECONDARY_BTN}
               onClick={() => textElements.removeTextElement(selected.id)}
@@ -689,6 +921,13 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
               Delete
             </button>
           </div>
+
+          {selected.kind === 'interlude' && (
+            <>
+              <InterludeBackground element={selected} />
+              <InterludeSound element={selected} onAddSoundAt={onAddSoundAt} />
+            </>
+          )}
 
           <TextElementStyle element={selected} />
         </>

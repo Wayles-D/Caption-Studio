@@ -497,10 +497,13 @@ export function initAudioEngine() {
 // keeps listening against the old copy of the editor state, which never sees
 // a clip added after the update. The result was a timeline whose sounds went
 // silent while the library's preview (which needs no listener) still played.
-// So the second time this module runs in one page (hot.data survives from the
-// old copy to the new), the page reloads instead. (hot.decline() would say the
-// same thing, but Vite implements it as a no-op.)
+// So the module accepts its own hot updates — including ones that arrive
+// through anything it imports — and answers each with a full page reload.
+// Vite calls this ONLY for a hot update, never on a normal page load. (An
+// earlier version counted evaluations instead; after a long editing session
+// the dev server can serve one module under two URLs on a FRESH load, which
+// that version mistook for a stale copy and reloaded forever.
+// hot.decline() would say the same thing, but Vite implements it as a no-op.)
 if (import.meta.hot) {
-  if (import.meta.hot.data.evaluated) window.location.reload();
-  import.meta.hot.data.evaluated = true;
+  import.meta.hot.accept(() => window.location.reload());
 }

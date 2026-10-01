@@ -5,10 +5,10 @@ import { appState, subscribe, updateState, MOCK_SUBTITLES, getStyleParams } from
 import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, resolveWordTextCase, applyOpacityToColor } from '../../../shared/captionConfig.js';
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
 import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolveRollingStackWindow } from '../../../shared/rollingStack.js';
-import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame } from '../../../shared/captionGraphics.js';
+import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame, paintFrameBackground } from '../../../shared/captionGraphics.js';
 import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay, setTextElementBoxes } from './canvasTransform.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
-import { getActiveTextElements, textElementToPhrase, resolveTextElementParams } from '../../../shared/textElement.js';
+import { getActiveTextElements, textElementToPhrase, resolveTextElementParams, orderForCompositing, resolveInterludeBackground } from '../../../shared/textElement.js';
 import { initVideoCanvasControls } from './videoCanvasControls.js';
 import { initAudioEngine } from './audioEngine.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
@@ -87,9 +87,11 @@ function loadKeywordDrivenFontFaces(cssConfig) {
  * for the caption's base font.
  */
 function ensureWordStyleFontsReady(fontSizePx) {
-  const overrides = appState.captionTransforms;
-  if (!overrides) return;
-  Object.keys(overrides).forEach((key) => {
+  // A caption word's own style lives in appState.captionTransforms; a text
+  // element's word's lives on that element (shared/textElement.js's
+  // wordTransforms) — the same trap applies to both.
+  const maps = [appState.captionTransforms, ...(appState.textElements || []).map((el) => el?.wordTransforms)];
+  maps.filter(Boolean).forEach((overrides) => Object.keys(overrides).forEach((key) => {
     if (!key.startsWith('w')) return;
     const style = overrides[key]?.style;
     if (!style) return;
@@ -104,7 +106,7 @@ function ensureWordStyleFontsReady(fontSizePx) {
     loadLocalFontFace(family, faceKey);
     ensureCanvasFontReady(resolved.familyName, style.fontWeight || '400', fontSizePx, resolved.italic)
       .then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
-  });
+  }));
 }
 
 /**
@@ -190,7 +192,10 @@ function syncTextElementsCanvas(currentTime, baseStyleParams) {
   const canvas = document.getElementById('text-elements-canvas');
   if (!canvas) return;
 
-  const active = getActiveTextElements(appState.textElements || [], currentTime);
+  // orderForCompositing: manual captions, then at most ONE cinematic
+  // interlude (which covers the frame — see paintFrameBackground below), then
+  // overlays on top. The exporter draws in this same order.
+  const active = orderForCompositing(getActiveTextElements(appState.textElements || [], currentTime));
   if (!active.length) {
     canvas.classList.remove('active');
     // Must still publish the (empty) box list, or the transform layer keeps
@@ -217,6 +222,13 @@ function syncTextElementsCanvas(currentTime, baseStyleParams) {
   const boxes = [];
 
   active.forEach((element) => {
+    // A cinematic interlude replaces the PICTURE: its background fills this
+    // whole layer (the composition frame — the same box the video is laid
+    // out in), hiding the video and the captions beneath it. The video keeps
+    // playing under it, so its audio is untouched.
+    const interludeBackground = resolveInterludeBackground(element);
+    if (interludeBackground) paintFrameBackground(prepped.ctx, interludeBackground, prepped.targetW, prepped.targetH);
+
     // The SAME resolver the exporter uses — style bag over caption params,
     // then this element's own keyframes at this instant on top. Sharing it
     // is what keeps preview and export from ever disagreeing about where an

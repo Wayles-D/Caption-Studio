@@ -67,6 +67,42 @@ const UNDO_TRACKED_KEYS = [
   ...TEXT_ELEMENT_DOCUMENT_KEYS
 ];
 
+/**
+ * What a saved PROJECT is (see projectPersistence.js): the whole undoable
+ * document above, plus the session facts needed to open it again — the
+ * transcript, which server job it belongs to, and the video's length. Not
+ * the selection, not processing flags, not history: those are the editor's
+ * momentary state, not the project.
+ */
+const PROJECT_SESSION_KEYS = ['words', 'phrases', 'baseName', 'renderedVideoPath', 'videoDuration'];
+
+/** The current project as a plain, cloneable object. */
+export function getProjectSnapshot() {
+  const snapshot = {};
+  [...UNDO_TRACKED_KEYS, ...PROJECT_SESSION_KEYS].forEach((k) => { snapshot[k] = appState[k]; });
+  const file = appState.uploadedFile;
+  // The File object itself is stored separately (as a Blob); only what the UI
+  // shows about it travels in the document.
+  snapshot.uploadedFile = file ? { name: file.name, type: file.type || null, size: file.size || null, demo: !!file.demo } : null;
+  return snapshot;
+}
+
+/**
+ * Opens a saved project: writes every saved key back and starts a fresh undo
+ * history — undoing past the moment a project was opened would step into
+ * whatever was on screen before it.
+ */
+export function restoreProjectSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return;
+  const allowed = new Set([...UNDO_TRACKED_KEYS, ...PROJECT_SESSION_KEYS, 'uploadedFile']);
+  const updates = {};
+  Object.entries(snapshot).forEach(([k, v]) => { if (allowed.has(k) && v !== undefined) updates[k] = v; });
+  updateState({ ...updates, isLoaded: true, isProcessing: false }, { recordHistory: false });
+  historyStack.length = 0;
+  redoStack.length = 0;
+  notify('history', { canUndo: false, canRedo: false });
+}
+
 function storeFor(key) {
   if (TRANSFORM_KEYS.has(key)) return useTransformStore;
   if (AUDIO_KEYS.has(key)) return useAudioStore;

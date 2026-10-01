@@ -38,6 +38,22 @@ import { buildAudioMixGraph } from './audioMixFilter.js';
  * independently probes dimensions, it just fits whatever shape actually
  * flows through the SAME filter graph, post-rotation).
  */
+const NTSC_RATES = [[23.976, '24000/1001'], [29.97, '30000/1001'], [47.952, '48000/1001'], [59.94, '60000/1001'], [119.88, '120000/1001']];
+/** A banner fps figure as an exact rational string, or null if implausible. */
+function toFrameRate(fps) {
+  if (!Number.isFinite(fps) || fps < 5 || fps > 240) return null;
+  const ntsc = NTSC_RATES.find(([r]) => Math.abs(r - fps) < 0.01);
+  if (ntsc) return ntsc[1];
+  return Number.isInteger(fps) ? String(fps) : String(Math.round(fps * 1000)) + '/1000';
+}
+/** A rational string ("30000/1001", "25") as a number. */
+function frameRateValue(rate) {
+  if (!rate) return null;
+  const [n, d = '1'] = String(rate).split('/');
+  const v = Number(n) / Number(d);
+  return Number.isFinite(v) && v >= 5 && v <= 240 ? v : null;
+}
+
 export function getVideoInfo(inputVideoPath) {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) return reject(new Error('FFmpeg static binary path could not be resolved.'));
@@ -89,7 +105,15 @@ export function getVideoInfo(inputVideoPath) {
       // plain stream copy can.
       const hasAudio = /Stream #\d+:\d+.*?: Audio:/.test(stderr);
 
-      resolve({ width, height, duration, hasAudio });
+      // The video's own frame rate, as an exact ffmpeg rational where the
+      // banner's rounded figure stands for an NTSC rate (29.97 is 30000/1001,
+      // not 2997/100) — the text layers are laid onto THIS frame grid (see
+      // compositeGraphicsCaptionTrack), so it has to be exact. Null when the
+      // banner has none, which leaves the compositor on its own fixed rate.
+      const fpsMatch = videoLineMatch.input.slice(videoLineMatch.index).split('\n')[0].match(/(\d+(?:\.\d+)?) fps/);
+      const frameRate = fpsMatch ? toFrameRate(parseFloat(fpsMatch[1])) : null;
+
+      resolve({ width, height, duration, hasAudio, frameRate });
     });
   });
 }
@@ -303,8 +327,14 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // direct pixel comparison during this feature's own verification). The
     // manifest's timestamps are built purely by SUMMING these already-exact
     // quantized durations, so that guarantee carries over unchanged.
-    const COMPOSITOR_FPS = 50;
-    const FRAME_QUANTUM = 1 / COMPOSITOR_FPS;
+    // The text layers run at the VIDEO's own frame rate when it is known, so
+    // their frames line up one-to-one with the picture's. At a fixed 50 fps
+    // over a 29.97 fps video, an edge snapped to the 20 ms grid could sit up
+    // to half a video frame from where the preview switched, and the frame
+    // on either side of an interlude could show the wrong thing. Falls back
+    // to the original fixed 50 when the rate is unknown.
+    const COMPOSITOR_FPS = frameRateValue(videoTransformOpts.frameRate) ? videoTransformOpts.frameRate : '50';
+    const FRAME_QUANTUM = 1 / (frameRateValue(COMPOSITOR_FPS) || 50);
 
     // Quantize each segment's BOUNDARY onto the frame grid, then take each
     // duration as the difference between consecutive boundaries — rather than
@@ -325,7 +355,21 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // Boundary quantization is drift-free by construction: each segment starts
     // at its own true time snapped to the grid, errors never compound, and the
     // total is exactly the video duration snapped to the grid.
-    const quantizeTime = (t) => Math.round(t / FRAME_QUANTUM) * FRAME_QUANTUM;
+    // Rounded UP to the frame grid, not to the nearest: the preview shows an
+    // element on a frame whose time t satisfies start <= t < end (see
+    // shared/textElement.js's getActiveTextElements), and for frame times on
+    // the grid that is exactly "from the first frame at or after start to the
+    // last frame before end" — ceil on both edges. Nearest-rounding could put
+    // the switch one frame early.
+    //
+    // The switch itself is placed a QUARTER frame before that frame, not on
+    // it: exactly on a frame's timestamp the fps resampler below may take
+    // either side, and exactly halfway it rounds a tie. A quarter frame early
+    // is unambiguously nearer the frame it belongs to.
+    const quantizeTime = (t) => {
+      const frame = Math.ceil(t / FRAME_QUANTUM - 1e-6);
+      return frame <= 0 ? 0 : (frame - 0.25) * FRAME_QUANTUM;
+    };
 
     // A segment whose quantized span is zero is SHORTER THAN ONE FRAME at the
     // compositor's rate, so it cannot be displayed at all — there is no frame
@@ -372,11 +416,22 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     const escapeConcatPath = (p) => p.replace(/\\/g, '/').replace(/'/g, `'\\''`);
     const writeConcatManifest = (entries) => {
       const listLines = [];
+      // Each PNG is read by ffmpeg's image demuxer, whose default 25 fps makes
+      // the concatenated stream's timebase 1/25 s — which re-rounded EVERY
+      // segment edge to a 40 ms grid on the way in, whatever the durations
+      // below said (measured: an interlude's last frame lost on a 29.97 fps
+      // video). A 1 kHz image rate gives the stream millisecond timestamps.
+      const imageOption = 'option framerate 1000';
       entries.forEach((entry) => {
         listLines.push(`file '${escapeConcatPath(entry.file)}'`);
-        listLines.push(`duration ${entry.duration.toFixed(3)}`);
+        listLines.push(imageOption);
+        // Microseconds, not milliseconds: at 29.97 fps a frame is 0.0333667 s,
+        // and a millisecond-rounded duration shortens EVERY segment, the error
+        // accumulating along the track.
+        listLines.push(`duration ${entry.duration.toFixed(6)}`);
       });
       listLines.push(`file '${escapeConcatPath(entries[entries.length - 1].file)}'`);
+      listLines.push(imageOption);
       const listPath = path.join(os.tmpdir(), `caption-studio-concat-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
       fs.writeFileSync(listPath, listLines.join('\n'), 'utf8');
       return listPath;
