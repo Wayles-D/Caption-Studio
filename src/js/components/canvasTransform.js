@@ -784,7 +784,7 @@ function getWordIndexesForAnimationScope(scope, wordIndex) {
  * shared field. Otherwise identical semantics to applyTransformFields:
  * "this caption" writes into captionTransforms[phraseKey]; "all captions"
  * writes the same field names onto global appState (which
- * shared/captionAnimation.js's resolveAnimationConfig already reads as the
+ * the motion engine's entranceFromParams (shared/motion) already reads as the
  * fallback for any un-overridden phrase) and releases this phrase's own
  * leftover override so it doesn't keep rendering stale.
  */
@@ -863,7 +863,7 @@ function applyAnimationFields(fields, opts) {
  * or text they're in. Separate from WHICH words are targeted (the scope
  * buttons): "All Keywords + Together" makes every keyword of a caption arrive
  * at once while its other words stay put. Read by the renderer and the
- * exporter through shared/captionAnimation.js's resolveWordAnimationWindow.
+ * exporter through the motion engine's resolveMotionWindow (shared/motion).
  */
 function getSelectedWordAnimationTiming() {
   if (selectedTextElementId && selectedTextWordIndex != null) {
@@ -1335,7 +1335,7 @@ function currentSelectionTarget() {
  * currently-selected word's own override if one is selected, else the
  * current caption/group's phrase-level override, falling back to the global
  * appState.captionAnimationType either way (the exact same fallback chain
- * shared/captionAnimation.js's resolveAnimationConfig and
+ * the motion engine's entranceFromParams (shared/motion) and
  * shared/captionTransform.js's resolvePhraseParams already use for
  * rendering, so the dropdown never shows a value the renderer wouldn't
  * actually use).

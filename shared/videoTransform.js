@@ -13,7 +13,7 @@
  *    function across the export timeline to build ffmpeg filter
  *    expressions)
  * so preview and export can never independently drift apart — exactly the
- * same guarantee shared/captionAnimation.js's getAnimationTransform already
+ * same guarantee the motion engine (shared/motion) already
  * gives entrance animations.
  *
  * Storage shape (appState.videoTransform, src/store/transformStore.js):

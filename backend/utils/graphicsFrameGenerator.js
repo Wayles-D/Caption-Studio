@@ -26,7 +26,7 @@ import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
-import { resolveAnimationConfig, resolveWordAnimationWindow } from '../../shared/captionAnimation.js';
+import { entranceFromParams, entranceFromWordOverride, resolveMotionWindow, motionActiveSpan } from '../../shared/motion/motion.js';
 import { getKeyframeTimeRange } from '../../shared/keyframes.js';
 import {
   normalizeTextElementList,
@@ -166,16 +166,16 @@ function subdivideSlicesForAnimation(slices, animStart, animEnd) {
 }
 
 /**
- * The stretch a word's own entrance is actually moving over, or null — its
- * window (shared/captionAnimation.js's resolveWordAnimationWindow, the one
- * the painter uses) cut to the configured duration, which it never outlasts.
+ * The stretch a word's own entrance is actually moving over, or null — the
+ * motion system's own answer (shared/motion/motion.js: the window the
+ * painter evaluates it in, cut to its duration), so what is sampled densely
+ * here is exactly what moves on screen.
  */
 function wordAnimationSpan(word, container, override) {
-  if (!override?.animationType || override.animationType === 'none') return null;
-  const win = resolveWordAnimationWindow(word, container, override);
-  const { duration } = resolveAnimationConfig({ captionAnimationType: override.animationType, captionAnimationDuration: override.animationDuration });
-  const end = win.start + Math.min(duration, win.end - win.start);
-  return end > win.start ? { start: win.start, end } : null;
+  const motion = entranceFromWordOverride(override);
+  if (!motion) return null;
+  const span = motionActiveSpan(motion, resolveMotionWindow(motion, word, container));
+  return span.end > span.start ? span : null;
 }
 
 /**
@@ -245,17 +245,16 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
 
   let slices = computeBoundarySlices(phrase);
 
-  // Entrance animation (shared/captionAnimation.js) needs several sampled
+  // Entrance animation (shared/motion) needs several sampled
   // frames across its own short window, not the single static frame each
   // boundary slice normally gets — see subdivideSlicesForAnimation's doc
-  // comment. The SAME clamp-to-lifetime rule getAnimationProgress applies at
+  // comment. The SAME clamp-to-lifetime rule the motion evaluator applies at
   // draw time is applied here too, so the number of subdivided slices always
   // matches how long the animation will actually run.
-  const animation = resolveAnimationConfig(staticPhraseParams);
-  if (animation.type !== 'none') {
-    const animStart = phrase.start;
-    const animEnd = animStart + Math.min(animation.duration, phrase.end - phrase.start);
-    slices = subdivideSlicesForAnimation(slices, animStart, animEnd);
+  const entrance = entranceFromParams(staticPhraseParams);
+  if (entrance) {
+    const span = motionActiveSpan(entrance, { start: phrase.start, end: phrase.end });
+    slices = subdivideSlicesForAnimation(slices, span.start, span.end);
   }
   // Real timeline keyframes on the PHRASE itself (position/scale/rotation/
   // opacity) — same dense-sampling treatment as the entrance animation
@@ -335,7 +334,7 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
-  const animation = resolveAnimationConfig(staticPhraseParams);
+  const entrance = entranceFromParams(staticPhraseParams);
   const phraseOverride = params.captionTransforms?.[getPhraseTransformKey(phrase)];
   const phraseKfRange = getKeyframeTimeRange(phraseOverride);
 
@@ -347,11 +346,10 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
   // subdivided independently, then flattened back into one time-ordered list.
   const slices = windowSlices.flatMap((slice) => {
     let subSlices = [{ start: slice.start, end: slice.end }];
-    if (animation.type !== 'none') {
+    if (entrance) {
       const activeChunk = slice.chunks[slice.chunks.length - 1];
-      const animStart = activeChunk.start;
-      const animEnd = animStart + Math.min(animation.duration, activeChunk.end - activeChunk.start);
-      subSlices = subdivideSlicesForAnimation(subSlices, animStart, animEnd);
+      const span = motionActiveSpan(entrance, { start: activeChunk.start, end: activeChunk.end });
+      subSlices = subdivideSlicesForAnimation(subSlices, span.start, span.end);
     }
     // Real timeline keyframes on the phrase itself — same treatment as
     // sentence mode's generatePhraseCaptionFrames.
@@ -523,10 +521,10 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     // — the style bag over the caption's params, its own words' map), so the
     // windows sampled here are exactly the ones that move on screen.
     const elementParams = resolveTextElementParams(params, element);
-    const animation = resolveAnimationConfig(elementParams);
-    if (animation.type !== 'none') {
-      const duration = Math.min(animation.duration, element.end - element.start);
-      if (duration > 0) addSamples(element.start, element.start + duration);
+    const entrance = entranceFromParams(elementParams);
+    if (entrance) {
+      const span = motionActiveSpan(entrance, { start: element.start, end: element.end });
+      if (span.end > span.start) addSamples(span.start, span.end);
     }
     // ...and each of its words' own entrances and keyframes.
     const phrase = textElementToPhrase(element);
