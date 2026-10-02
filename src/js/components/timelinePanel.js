@@ -29,6 +29,7 @@ import { promptForAudioFile } from './audioImport.js';
 import { getSoundDefinition } from '../../../shared/soundRegistry.js';
 import { getAudioTrackDuration } from '../../../shared/audioTimeline.js';
 import * as textElements from './textElements.js';
+import * as imageLayers from './imageLayers.js';
 import * as captionEvents from './captionEvents.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 
@@ -165,6 +166,7 @@ function applyTimelineZoom(nextZoom, anchorClientX = null) {
   // STACKING packer measures laid-out boxes — two clips that overlapped at
   // 1x may not overlap once stretched, so the rows have to be repacked.
   lastTextSignature = null;
+  lastImageSignature = null;
   lastAudioSignature = null;
 }
 
@@ -482,6 +484,20 @@ function buildDom(container, options) {
   });
   controlsRow.appendChild(addInterludeBtn);
 
+  // "+ Image" — a picture at the playhead (shared/imageLayer.js). Its lane
+  // only takes room once the project has one, like the Cinematic lane.
+  const addImageBtn = document.createElement('button');
+  addImageBtn.type = 'button';
+  addImageBtn.className = 'timeline-add-keyframe-btn timeline-add-image-btn';
+  addImageBtn.id = 'timeline-add-image-btn';
+  addImageBtn.textContent = '+ Image';
+  addImageBtn.title = 'Add a picture at the playhead (PNG, JPEG or WebP)';
+  addImageBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    imageLayers.promptForImageFile();
+  });
+  controlsRow.appendChild(addImageBtn);
+
   // Precision (X/Y/scale%/rotation°) numeric fields: shown inline (hidden by
   // default) on mobile/tablet, the same as always — the primary way to set
   // these values is direct manipulation on the canvas (drag/resize/rotate —
@@ -637,6 +653,11 @@ function buildDom(container, options) {
   interludeLane.addBtn.id = 'timeline-add-interlude-lane-btn';
   // Hidden until the project has an interlude (see refreshTextLane).
   interludeLane.row.hidden = true;
+  // IMAGE LAYERS get the lane directly under the picture they sit on — and,
+  // like the Cinematic lane, only take room once there is one.
+  const imagesLane = buildAudioLane('images', 'Images', 'Add a picture at the playhead');
+  imagesLane.row.hidden = true;
+  lanesEl.appendChild(imagesLane.row);
   lanesEl.appendChild(interludeLane.row);
   lanesEl.appendChild(captionsLane.row);
   lanesEl.appendChild(textLane.row);
@@ -742,6 +763,7 @@ function buildDom(container, options) {
     addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack,
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
     captionsTrack: captionsLane.track, interludeTrack: interludeLane.track, interludeRow: interludeLane.row, addInterludeBtn: interludeLane.addBtn,
+    imagesTrack: imagesLane.track, imagesRow: imagesLane.row, addImagesLaneBtn: imagesLane.addBtn,
     addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn,
     addCaptionBtn: captionsLane.addBtn, addVideoBtn,
     zoomInBtn, zoomOutBtn, zoomLevel
@@ -985,6 +1007,8 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  if (imageLayers.removeSelectedImageLayer()) return;
+
   if (selectedMarkerTime != null) {
     keyframeEngine.deleteKeyframeAt(selectedMarkerTime);
     selectedMarkerTime = null;
@@ -1156,7 +1180,10 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
     // Each clip family owns its own selection key, so selecting a text clip
     // never leaves a stale audio selection behind that Delete would hit
     // first (and vice versa).
-    if (kind === 'text') {
+    if (kind === 'image') {
+      // Releases every other selection in the same write.
+      imageLayers.selectImageLayer(clip.id);
+    } else if (kind === 'text') {
       textElements.selectTextElement(clip.id);
       audioTimeline.selectClip(null);
       captionEvents.selectCaptionEvent(null);
@@ -1188,7 +1215,9 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       // The text list as it was BEFORE the gesture — see endDrag.
       textBefore: kind === 'text' ? appState.textElements : null,
       // ...and the sounds, which a text move carries along if they are linked.
-      soundsBefore: kind === 'text' ? appState.soundEvents : null
+      soundsBefore: kind === 'text' ? appState.soundEvents : null,
+      // The image list, for the same rewind-then-commit.
+      imagesBefore: kind === 'image' ? appState.imageLayers : null
     };
   });
 
@@ -1213,6 +1242,9 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       // same fix the canvas gestures use (see canvasTransform.js).
       if (dragClip.kind === 'text' && dragClip.textBefore) {
         updateState({ textElements: dragClip.textBefore, soundEvents: dragClip.soundsBefore }, { recordHistory: false });
+      }
+      if (dragClip.kind === 'image' && dragClip.imagesBefore) {
+        updateState({ imageLayers: dragClip.imagesBefore }, { recordHistory: false });
       }
       applyClipDrag(e.clientX, el, { recordHistory: true });
     }
@@ -1245,6 +1277,7 @@ function applyClipDrag(clientX, el, options) {
     const nextStart = pointerTime - dragClip.grabOffsetSeconds;
     if (dragClip.kind === 'sound') audioTimeline.moveSoundEvent(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'text') textElements.moveTextElement(dragClip.id, nextStart, options);
+    else if (dragClip.kind === 'image') imageLayers.moveImageLayer(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'caption') captionEvents.moveCaptionEventTo(dragClip.id, nextStart, options);
     else audioTimeline.moveAudioTrack(dragClip.id, nextStart, options);
     return;
@@ -1255,6 +1288,11 @@ function applyClipDrag(clientX, el, options) {
   // move the source offset to keep the audio under the cursor still.
   if (dragClip.kind === 'text') {
     textElements.trimTextElement(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
+    return;
+  }
+  // A picture has no media timing either: trimming an edge is a plain retime.
+  if (dragClip.kind === 'image') {
+    imageLayers.trimImageLayer(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
     return;
   }
 
@@ -1452,6 +1490,64 @@ function buildTextClip(element, duration, isSelected) {
   });
 
   return el;
+}
+
+/**
+ * One clip for one image layer — the same `.timeline-text-clip` element
+ * (and so the same gestures, trim handles, selection and stacking) as a text
+ * clip, routed as kind 'image'; the picture itself is its thumbnail.
+ */
+function buildImageClip(layer, duration, isSelected) {
+  const el = document.createElement('div');
+  el.className = 'timeline-text-clip is-image';
+  if (isSelected) el.classList.add('selected');
+  if (!layer.enabled) el.classList.add('disabled');
+  el.style.left = `${timeToPercent(layer.start, duration)}%`;
+  el.style.width = `${Math.max(1, timeToPercent(layer.end, duration) - timeToPercent(layer.start, duration))}%`;
+  el.dataset.clipId = layer.id;
+  el.tabIndex = 0;
+  el.title = `${layer.name || 'Image'} · ${layer.start.toFixed(2)}s → ${layer.end.toFixed(2)}s — drag to move, drag an edge to retime, Delete to remove`;
+  const thumbUrl = imageLayers.getImagePictureUrl(layer.assetId);
+  if (thumbUrl) {
+    const thumb = document.createElement('span');
+    thumb.className = 'timeline-image-clip-thumb';
+    thumb.style.backgroundImage = `url("${thumbUrl}")`;
+    el.appendChild(thumb);
+  }
+  const label = document.createElement('span');
+  label.className = 'timeline-text-clip-label';
+  label.textContent = layer.name || 'Image';
+  el.appendChild(label);
+  attachClipPointerHandlers(el, layer, 'image', 'move');
+  ['start', 'end'].forEach((edge) => {
+    const handle = document.createElement('div');
+    handle.className = `timeline-text-clip-handle ${edge}`;
+    handle.title = edge === 'start' ? 'Change when it appears' : 'Change when it disappears';
+    attachClipPointerHandlers(handle, layer, 'image', edge === 'start' ? 'trim-start' : 'trim-end');
+    el.appendChild(handle);
+  });
+  return el;
+}
+
+let lastImageSignature = null;
+function refreshImageLane(duration) {
+  const layers = appState.imageLayers || [];
+  const selectedId = appState.selectedImageLayerId;
+  // The thumbnails' readiness is part of it, so a picture finishing loading
+  // after a reload shows up on its clip.
+  const thumbs = layers.map((l) => !!imageLayers.getImagePictureUrl(l.assetId));
+  const signature = JSON.stringify({ layers, selectedId, duration, thumbs });
+  if (signature === lastImageSignature || dragClip) return;
+  lastImageSignature = signature;
+  clearClips(els.imagesTrack);
+  els.imagesRow.hidden = layers.length === 0;
+  if (!(duration > 0) || !layers.length) return;
+  const clips = layers.map((layer) => {
+    const clip = buildImageClip(layer, duration, layer.id === selectedId);
+    els.imagesTrack.appendChild(clip);
+    return clip;
+  });
+  sizeLaneForRows(els.imagesTrack, stackClips(els.imagesTrack, clips));
 }
 
 /**
@@ -1909,6 +2005,7 @@ function tick() {
   // Outside the hasTarget branch below, like the audio lanes: a text overlay
   // exists independently of whatever keyframe target happens to be selected.
   refreshTextLane(duration);
+  refreshImageLane(duration);
   if (els.timeReadout) els.timeReadout.textContent = formatTime(currentTime);
 
   const paused = video?.paused ?? true;
@@ -1996,6 +2093,7 @@ export function initTimelinePanel(container, options = {}) {
   // otherwise match and the (now empty) lanes would never be repopulated.
   lastAudioSignature = null;
   lastTextSignature = null;
+  lastImageSignature = null;
   dragClip = null;
   timelineZoom = 1;
   autoFollow = true;
@@ -2119,6 +2217,11 @@ export function initTimelinePanel(container, options = {}) {
   els.addInterludeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     textElements.addInterlude();
+  });
+
+  els.addImagesLaneBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    imageLayers.promptForImageFile();
   });
 
   els.addCaptionBtn.addEventListener('click', (e) => {

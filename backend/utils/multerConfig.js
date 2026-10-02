@@ -117,3 +117,35 @@ export const uploadAudio = multer({
   // disk as easily.
   limits: { fileSize: 100 * 1024 * 1024 }
 });
+
+// --- Imported images ----------------------------------------------------------
+// Pictures placed on the timeline's Images lane (see shared/imageLayer.js).
+// Their own directory, UUID names — the same arrangement as imported audio
+// above, for the same reasons. Resolved back to a path by
+// backend/utils/imageAssets.js's resolveImageAssetPath.
+const imageDir = path.join(__dirname, '../images');
+if (!fs.existsSync(imageDir)) {
+  fs.mkdirSync(imageDir, { recursive: true });
+}
+
+// Kept in sync with the client's own picker filter (shared/imageLayer.js's IMAGE_ACCEPT).
+const allowedImageExtensions = ['.png', '.jpg', '.jpeg', '.webp'];
+const allowedImageMimes = ['image/png', 'image/jpeg', 'image/webp'];
+
+export const uploadImage = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, imageDir),
+    filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname).toLowerCase()}`)
+  }),
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const mime = (file.mimetype || '').toLowerCase();
+    if (allowedImageExtensions.includes(ext) && (allowedImageMimes.includes(mime) || mime === 'application/octet-stream' || mime === '')) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Invalid file type. Supported image formats: ${allowedImageExtensions.join(', ')}. Received: extension "${ext}", mimetype "${mime}"`), false);
+    }
+  },
+  // 25MB — a large phone photo is well under this.
+  limits: { fileSize: 25 * 1024 * 1024 }
+});

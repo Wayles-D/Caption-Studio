@@ -34,6 +34,8 @@ import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
 import { WordToolPanel } from './components/WordInspector.jsx';
+import { ImageInspector } from './components/ImageInspector.jsx';
+import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
@@ -97,6 +99,12 @@ const MOBILE_TOOLS = [
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M8 10h8M8 14h5" /></svg>
   },
   {
+    // Pictures over the video (shared/imageLayer.js) — their own tool,
+    // because they are their own kind of timeline object.
+    key: 'image-layer', label: 'Image', group: 'image',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-9 9" /></svg>
+  },
+  {
     // Sound effects + audio tracks. One tool, because they are one panel
     // (see AudioInspector.jsx) — the two CONCEPTS stay separate everywhere it
     // matters: separate lanes on the timeline, separate lists here, separate
@@ -127,7 +135,8 @@ const MOBILE_TOOLS = [
 // 'text-overlay' (the Text / Cinematic panel) lives here too on desktop: it
 // is what a selected cinematic interlude or overlay is edited in, and as a
 // bottom sheet it covered the very timeline clip being edited.
-const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay']);
+// 'image-layer' (the Image panel) too, for the same reason.
+const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay', 'image-layer']);
 
 // The desktop side panel's default/home content — always visible (an
 // anchored sidebar, like the app's original layout), showing Video
@@ -363,13 +372,25 @@ export function App() {
     });
   }, []);
 
+  // Selecting an IMAGE (on the video, on its lane, or by adding one) brings
+  // its panel up on desktop — beside the preview, where it covers nothing.
+  useEffect(() => {
+    let lastId = appState.selectedImageLayerId;
+    return subscribe('selectedImageLayerId', () => {
+      const id = appState.selectedImageLayerId;
+      if (id === lastId) return;
+      lastId = id;
+      if (id && isDesktopRef.current) setDesktopSidePanel('image-layer');
+    });
+  }, []);
+
   // While the Text & Cinematic panel is open, two more surfaces count as
   // "inside": the sound library it opens itself ("+ Sound at start"), and the
   // video, where you drag and resize the very text you are editing. Pressing
   // either used to close the panel mid-edit. Read lazily: both mount later.
   const soundLibraryElRef = useMemo(() => ({ get current() { return document.getElementById('sound-library-panel'); } }), []);
   const previewElRef = useMemo(() => ({ get current() { return document.getElementById('state-video'); } }), []);
-  const sidePanelInsideRefs = useMemo(() => (desktopSidePanel === 'text-overlay'
+  const sidePanelInsideRefs = useMemo(() => (desktopSidePanel === 'text-overlay' || desktopSidePanel === 'image-layer'
     ? [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, soundLibraryElRef, previewElRef]
     : [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef]), [desktopSidePanel, soundLibraryElRef, previewElRef]);
   useClickOutside(
@@ -422,6 +443,7 @@ export function App() {
       // for the same reason __audioTimeline is: e2e drives real clip
       // create/move/trim without depending on pointer gymnastics.
       window.__textElements = textElementsApi;
+      window.__imageLayers = imageLayersApi;
       window.__captionEvents = captionEventsApi;
     }
   }, []);
@@ -458,6 +480,14 @@ export function App() {
     setToastVisible(true);
     setTimeout(() => setToastVisible(false), 2500);
   }, []);
+
+  // A failure the editor has to tell the user about from outside React (an
+  // image that could not be imported — see imageLayers.js's promptForImageFile).
+  useEffect(() => {
+    const onToast = (e) => showToast(String(e.detail || ''));
+    window.addEventListener('bhynd:toast', onToast);
+    return () => window.removeEventListener('bhynd:toast', onToast);
+  }, [showToast]);
 
   // A render PROBLEM is not a toast. When the advanced renderer falls back,
   // the exported file is genuinely missing effects the user asked for
@@ -854,7 +884,7 @@ export function App() {
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
             <span className="text-xs font-bold uppercase tracking-wide text-[var(--text-secondary)]">
-              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : 'Video Inspector'}
+              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : desktopSidePanel === 'image-layer' ? 'Image' : 'Video Inspector'}
             </span>
             {desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT && (
               <button
@@ -880,6 +910,11 @@ export function App() {
           {desktopSidePanel === 'text-overlay' && (
             <div className="overflow-y-auto flex-1 p-4">
               <TextInspector onAddSoundAt={openSoundLibraryAt} />
+            </div>
+          )}
+          {desktopSidePanel === 'image-layer' && (
+            <div className="overflow-y-auto flex-1 p-4">
+              <ImageInspector />
             </div>
           )}
           {/* Not conditionally rendered — see relocatePrecisionFields() in
@@ -950,6 +985,10 @@ export function App() {
               ) : tool.group === 'textel' ? (
                 <div className="p-4">
                   <TextInspector onAddSoundAt={openSoundLibraryAt} />
+                </div>
+              ) : tool.group === 'image' ? (
+                <div className="p-4">
+                  <ImageInspector />
                 </div>
               ) : tool.group === 'word' ? (
                 <div className="p-4">

@@ -69,6 +69,7 @@ function run(storeName, mode, fn) {
 
 const videoKey = (baseName) => `video:${baseName}`;
 const audioKey = (assetId) => `audio:${assetId}`;
+const imageKey = (assetId) => `image:${assetId}`;
 
 /** Saves a file Blob (the video, an imported audio file) under its key. */
 function putFile(key, blob) {
@@ -92,6 +93,17 @@ export async function startProjectWithVideo(baseName, file) {
 export function rememberAudioFile(assetId, file) {
   if (!assetId || !file) return Promise.resolve(null);
   return putFile(audioKey(assetId), file);
+}
+
+/** Remembers an imported picture (shared/imageLayer.js), for the preview after a reload and for re-sending it to the server. */
+export function rememberImageFile(assetId, file) {
+  if (!assetId || !file) return Promise.resolve(null);
+  return putFile(imageKey(assetId), file);
+}
+
+/** A remembered picture, or null. */
+export function getSavedImageFile(assetId) {
+  return assetId ? getFile(imageKey(assetId)) : Promise.resolve(null);
 }
 
 let saveTimer = null;
@@ -176,15 +188,20 @@ export async function restoreSavedProject({ demoVideoUrl }) {
  * the saved copies, under the same names, so nothing in the project changes.
  */
 export async function ensureServerHasProjectFiles(apiBase) {
-  const baseName = appState.baseName;
-  if (!baseName || appState.uploadedFile?.demo) return;
-  const assetIds = (appState.audioTracks || []).map((t) => t?.assetId).filter(Boolean);
+  // Pictures are checked for every project, the demo included (a picture
+  // placed on the demo video is the user's own file, and is purged like any
+  // other); the video and audio only for a real upload, as before.
+  const isRealUpload = !!appState.baseName && !appState.uploadedFile?.demo;
+  const baseName = isRealUpload ? appState.baseName : null;
+  const assetIds = isRealUpload ? (appState.audioTracks || []).map((t) => t?.assetId).filter(Boolean) : [];
+  const imageAssetIds = [...new Set((appState.imageLayers || []).map((img) => img?.assetId).filter(Boolean))];
+  if (!baseName && !imageAssetIds.length) return;
   let status;
   try {
     const res = await fetch(`${apiBase}/api/upload/session-status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseName, assetIds })
+      body: JSON.stringify({ baseName, assetIds, imageAssetIds })
     });
     if (!res.ok) return;
     status = await res.json();
@@ -192,7 +209,7 @@ export async function ensureServerHasProjectFiles(apiBase) {
     return;
   }
 
-  if (status && status.videoPresent === false) {
+  if (baseName && status && status.videoPresent === false) {
     const blob = await getFile(videoKey(baseName));
     if (blob) {
       const form = new FormData();
@@ -208,5 +225,13 @@ export async function ensureServerHasProjectFiles(apiBase) {
     form.append('assetId', assetId);
     form.append('audio', blob, assetId);
     await fetch(`${apiBase}/api/upload/restore-audio`, { method: 'POST', body: form }).catch(() => null);
+  }
+  for (const assetId of (status?.missingImages || [])) {
+    const blob = await getFile(imageKey(assetId));
+    if (!blob) continue;
+    const form = new FormData();
+    form.append('assetId', assetId);
+    form.append('image', blob, assetId);
+    await fetch(`${apiBase}/api/upload/restore-image`, { method: 'POST', body: form }).catch(() => null);
   }
 }

@@ -37,6 +37,10 @@ Thumbs.db
 /backend/audio/*
 !/backend/audio/.gitkeep
 
+# User-imported images for the timeline's Images lane — runtime data too.
+/backend/images/*
+!/backend/images/.gitkeep
+
 # Testing Intermediates
 /backend/test-source.mp4
 /backend/test-invalid.txt

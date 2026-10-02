@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'path';
-import { uploadVideo, uploadAudio } from '../utils/multerConfig.js';
-import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent, sessionStatus, restoreVideo, restoreAudio } from '../controllers/uploadController.js';
+import { uploadVideo, uploadAudio, uploadImage } from '../utils/multerConfig.js';
+import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent, sessionStatus, restoreVideo, restoreAudio, uploadImageAsset, restoreImage } from '../controllers/uploadController.js';
 
 const router = Router();
 
@@ -56,6 +56,15 @@ router.post('/regenerate', regenerateCaptions);
 router.post('/session-status', sessionStatus);
 router.post('/restore-video', uploadVideo.single('video'), restoreVideo);
 router.post('/restore-audio', uploadAudio.single('audio'), restoreAudio);
+router.post('/restore-image', uploadImage.single('image'), restoreImage);
+
+/**
+ * @route   POST /api/upload/image
+ * @desc    Upload one picture (PNG/JPEG/WebP; max 25MB) for the timeline's
+ *          Images lane, returning the assetId the exporter resolves it by.
+ * @access  Public
+ */
+router.post('/image', uploadImage.single('image'), uploadImageAsset);
 
 /**
  * @route   POST /api/upload/audio
