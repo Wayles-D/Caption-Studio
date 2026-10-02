@@ -124,6 +124,12 @@ export function PreviewStage({
               Live for every caption mode/preset canDrawCaptionFrame() accepts
               (currently everything except Unified Shadow, which still falls
               through to the CSS overlay above); hidden/inert otherwise. */}
+          {/* Image layers placed UNDER the captions (shared/imageLayer.js) —
+              beneath the captions canvas, as the exporter composites them
+              onto the video before the caption track. Images above the
+              captions are drawn on the text canvas below, in the shared
+              stacking order. */}
+          <canvas className="images-under-canvas" id="images-under-canvas" />
           <canvas className="captions-canvas" id="captions-canvas" />
           {/* Manually placed captions + text overlays (see shared/textElement.js).
               Its own compositing layer rather than a second pass over the

@@ -55,7 +55,7 @@ import {
 } from './captionConfig.js';
 import { resolveFontFace } from './fontRegistry.js';
 import { chunkRawText } from './rollingStack.js';
-import { entranceFromParams, entranceFromWordOverride, evaluateMotion, resolveMotionWindow } from './motion/motion.js';
+import { motionsFromParams, motionsFromWordOverride, evaluateMotions } from './motion/motion.js';
 
 /**
  * Applies a motion delta (shared/motion) to `ctx`, around the object's own
@@ -71,6 +71,15 @@ import { entranceFromParams, entranceFromWordOverride, evaluateMotion, resolveMo
  * along a straight screen-space line, and the distance it travels is not
  * scaled by the motion's own scale.
  */
+/**
+ * A single word's own case, set on that word alone (the Word panel's Case):
+ * 'uppercase', 'lowercase' or 'capitalize' (first letter capital).
+ */
+function applyWordOwnCase(text, textCase) {
+  if (textCase === 'capitalize') return applyCaseTransform(text, 'sentence', true);
+  return applyCaseTransform(text, textCase, true);
+}
+
 function applyMotionTransform(ctx, d, pivotX, pivotY, unitPx, extraScale = 1) {
   if (d.offsetX || d.offsetY) ctx.translate(d.offsetX * unitPx, d.offsetY * unitPx);
   const scale = d.scale * extraScale;
@@ -652,8 +661,13 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
 
   const resolvedFontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const wordUnits = activePhrase.words.map((w, idx) => {
-    const caseForWord = resolveWordTextCase(!!w.isKeyword, keywordsEnabled, params.textCase, cssConfig.keywordTextCase);
-    const text = applyCaseTransform(w.word || w.text || '', caseForWord, idx === 0);
+    // A word's OWN case (its style override's textCase) wins over the
+    // caption's and the keyword tier's — "OFFICE" can be lowercase in an
+    // otherwise uppercase line.
+    const ownCase = resolveWordStyleOverride(params, w.wordIndex)?.textCase;
+    const text = ownCase
+      ? applyWordOwnCase(w.word || w.text || '', ownCase)
+      : applyCaseTransform(w.word || w.text || '', resolveWordTextCase(!!w.isKeyword, keywordsEnabled, params.textCase, cssConfig.keywordTextCase), idx === 0);
     // This word's own style override, applied to whichever unit the two
     // branches below produce — see applyWordStyleOverride for why the merge
     // happens on the finished unit rather than inside the style resolution.
@@ -865,8 +879,7 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
         // fixed above, before any of this: the animation only moves the word
         // relative to where it will land, so no other word ever shifts.
         if (rawOverride.animationType && rawOverride.animationType !== 'none' && sourceWord) {
-          const motion = entranceFromWordOverride(rawOverride);
-          const wordMotion = evaluateMotion(motion, currentTime, resolveMotionWindow(motion, sourceWord, activePhrase));
+          const wordMotion = evaluateMotions(motionsFromWordOverride(rawOverride), currentTime, sourceWord, activePhrase);
           applyMotionTransform(targetCtx, wordMotion, pivotX, pivotY, fontSizePx);
           targetCtx.globalAlpha *= wordMotion.opacity;
         }
@@ -930,7 +943,7 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   // when the caption block first appears, independent of animationMode's
   // per-word highlight timing. Resolves to the identity transform (no-op)
   // whenever captionAnimationType is 'none', reproducing prior output exactly.
-  const anim = evaluateMotion(entranceFromParams(params), currentTime, { start: activePhrase.start, end: activePhrase.end ?? activePhrase.start });
+  const anim = evaluateMotions(motionsFromParams(params), currentTime, activePhrase);
 
   // Phrase-level keyframed scale/opacity (see shared/captionTransform.js's
   // resolvePhraseParams / shared/keyframes.js) — composed MULTIPLICATIVELY
@@ -1393,8 +1406,12 @@ function buildChunkWordStyleUnits(ctx, spec, chunk, params, geometry) {
   const displayWords = spec.text.split(' ');
 
   const units = rawWords.map((w, i) => {
-    const text = displayWords[i] ?? (w.word || w.text || '').trim();
-    const style = applyWordStyleOverride(spec, resolveWordStyleOverride(params, w.wordIndex), geometry, spec.fontSizePx);
+    const override = resolveWordStyleOverride(params, w.wordIndex);
+    // A word's own case wins here too (see computeSentenceLines).
+    const text = override?.textCase
+      ? applyWordOwnCase((w.word || w.text || '').trim(), override.textCase)
+      : displayWords[i] ?? (w.word || w.text || '').trim();
+    const style = applyWordStyleOverride(spec, override, geometry, spec.fontSizePx);
     setCanvasFont(ctx, style.font);
     return { wordIndex: w.wordIndex, text, style, width: ctx.measureText(text).width };
   });
@@ -1578,8 +1595,7 @@ function paintRollingStackLines(ctx, positionedLines, params, currentTime, canva
         // matching addition in sentence mode's renderResolvedFrame for the
         // full rationale; anchored to this word's own [start,end).
         if (rawOverride.animationType && rawOverride.animationType !== 'none' && word.start != null) {
-          const motion = entranceFromWordOverride(rawOverride);
-          const wordMotion = evaluateMotion(motion, currentTime, resolveMotionWindow(motion, word, container));
+          const wordMotion = evaluateMotions(motionsFromWordOverride(rawOverride), currentTime, word, container);
           applyMotionTransform(ctx, wordMotion, pivotX, pivotY, fontSizePx);
           ctx.globalAlpha *= wordMotion.opacity;
         }
@@ -1642,7 +1658,7 @@ function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windo
   // stack as ONE visual unit (Rolling Stack's own layout is never touched by
   // it) — it fires once per window change, not once per word/line.
   const activeChunk = windowChunks[windowChunks.length - 1];
-  const anim = evaluateMotion(entranceFromParams(params), currentTime, { start: activeChunk.start, end: activeChunk.end ?? activeChunk.start });
+  const anim = evaluateMotions(motionsFromParams(params), currentTime, activeChunk);
 
   // Phrase-level keyframed scale/opacity — see the matching addition in
   // sentence mode's renderResolvedFrame for the full rationale. Defaults to

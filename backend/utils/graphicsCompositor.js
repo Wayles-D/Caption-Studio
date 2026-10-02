@@ -457,14 +457,19 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     //    (see graphicsFrameGenerator.js's buildTextElementSegments).
     // textBlendMode is read off the options object directly: its own
     // destructuring happens further down, after the video-transform chain.
-    const { textElementSegments, manualCaptionSegments, textBlendMode: captionBlendMode } = videoTransformOpts;
+    const { textElementSegments, manualCaptionSegments, imageUnderSegments, textBlendMode: captionBlendMode } = videoTransformOpts;
     const extraLayers = [];
-    const pushLayer = (segs, blendMode, prefix, label) => {
+    const pushLayer = (segs, blendMode, prefix, label, beneathCaptions = false) => {
       if (!segs || !segs.length) return;
       const timeline = buildLayerTimeline(segs);
       if (!timeline) return;
-      extraLayers.push({ timeline, blendMode, prefix, label });
+      extraLayers.push({ timeline, blendMode, prefix, label, beneathCaptions });
     };
+    // Image layers placed UNDER the captions (shared/imageLayer.js): a plain
+    // alpha-over onto the video, composited BEFORE the caption track — so the
+    // captions, with their own blend mode, land on top of the picture exactly
+    // as the preview's captions canvas sits above its images-under canvas.
+    pushLayer(imageUnderSegments, 'normal', 'iu', 'imgunder', true);
     pushLayer(manualCaptionSegments, captionBlendMode, 'mc', 'mcaptrack');
     pushLayer(textElementSegments, 'normal', 'tt', 'texttrack');
 
@@ -521,22 +526,24 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // LAST pass converts to yuv420p — an intermediate conversion would
     // chroma-subsample the base a following overlay is then composited
     // against (see buildCaptionCompositeStages' finalFormat).
+    // The passes, bottom first: any layer beneath the captions, the caption
+    // track, then the rest. Without an image-under layer this is exactly the
+    // chain it always was (captions, then each extra layer).
     const compositeStages = [];
     let currentBase = baseVideoLabel;
-    const chainLabelFor = (i) => (i === extraLayers.length ? '[outv]' : `[after_layer_${i}]`);
-
-    compositeStages.push(...buildCaptionCompositeStages(currentBase, textBlendMode, {
-      trackLabel: '[captrack]', outLabel: chainLabelFor(0), prefix: 'ct', finalFormat: extraLayers.length === 0
-    }));
-    currentBase = chainLabelFor(0);
-
-    extraLayers.forEach((layer, idx) => {
-      const outLabel = chainLabelFor(idx + 1);
-      compositeStages.push(...buildCaptionCompositeStages(currentBase, layer.blendMode, {
-        trackLabel: `[${layer.label}]`,
+    const passes = [
+      ...extraLayers.filter((layer) => layer.beneathCaptions),
+      { label: 'captrack', blendMode: textBlendMode, prefix: 'ct' },
+      ...extraLayers.filter((layer) => !layer.beneathCaptions)
+    ];
+    const chainLabelFor = (i) => (i === passes.length - 1 ? '[outv]' : `[after_layer_${i}]`);
+    passes.forEach((pass, idx) => {
+      const outLabel = chainLabelFor(idx);
+      compositeStages.push(...buildCaptionCompositeStages(currentBase, pass.blendMode, {
+        trackLabel: `[${pass.label}]`,
         outLabel,
-        prefix: layer.prefix,
-        finalFormat: idx === extraLayers.length - 1
+        prefix: pass.prefix,
+        finalFormat: idx === passes.length - 1
       }));
       currentBase = outLabel;
     });

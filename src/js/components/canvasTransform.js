@@ -58,6 +58,7 @@ import { setWordKeyword } from './transcriptEditorState.js';
 import { deselectVideoTarget } from './videoTransform.js';
 import { getTextElement, updateTextElement, updateTextElementStyle, setTextElementValues, selectTextElement } from './textElements.js';
 import { textElementToPhrase } from '../../../shared/textElement.js';
+import { getImageLayer, updateImageLayer, patchImageLayer, selectImageLayer } from './imageLayers.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../../../shared/captionGraphics.js';
 
@@ -140,6 +141,13 @@ let selectedTextWordIndex = null;
 // that click never lands the user inside a word unasked.
 let textSelectedOnCanvas = false;
 
+// IMAGE LAYERS (shared/imageLayer.js) — their on-screen boxes, published by
+// preview.js every frame (under-captions first, then those drawn with the
+// text, bottom to top), and the one selected. The same box element and
+// handles serve them; their gestures write the image's resting transform.
+let imageBoxes = [];
+let selectedImageId = null;
+
 /**
  * The per-word edits the current selection's words live in. A caption's
  * words are the transcript's (appState.captionTransforms); a text element's
@@ -190,6 +198,14 @@ function textWordIndexesForScope(scope, index) {
     return words.filter((w) => !!w.isKeyword === kw).map((w) => w.wordIndex);
   }
   return [index];
+}
+
+/** Back from one word of the selected text element to the whole element (the Text panel's "Whole text"). */
+export function clearTextWordSelection() {
+  if (selectedTextWordIndex == null) return;
+  selectTextWord(null);
+  positionBoxElement();
+  updateScopeButtons();
 }
 
 function selectTextWord(index) {
@@ -1160,6 +1176,10 @@ function getTextElementDisplayBox() {
 }
 
 function getDisplayBox() {
+  if (selectedImageId) {
+    const entry = imageBoxes.find((b) => b.id === selectedImageId);
+    return entry ? ensureMinimumGrabBox(inflateBox(entry.box, CAPTION_SELECTION_PADDING_CSS_PX)) : null;
+  }
   // Checked BEFORE currentBox: a text element is independent of the
   // transcript, so it can be selected (and dragged) on a frame where no
   // caption is on screen at all and currentBox is therefore null.
@@ -1309,6 +1329,7 @@ function currentSelectionTarget() {
   // group scope buttons apply to it (there is no "all captions" for an
   // object that exists exactly once), so classifying it here is what keeps
   // every one of them hidden in updateScopeButtons.
+  if (selectedImageId) return 'image';
   if (selectedTextElementId) return selectedTextWordIndex != null ? 'text-word' : 'text';
   if (selectedWordIndex == null) {
     // A partial/custom group (some caption words detached, or an explicitly
@@ -1654,9 +1675,9 @@ export function hideCanvasTransformOverlay() {
   // Reads last frame's box list, since this runs at the top of the tick
   // before syncTextElementsCanvas republishes; one frame of lag at the
   // moment the last element scrolls off is harmless.
-  const keepForText = textElementBoxes.length > 0;
+  const keepForText = textElementBoxes.length > 0 || imageBoxes.length > 0;
   if (overlayEl && !keepForText) overlayEl.classList.remove('active');
-  if (boxEl && !selectedTextElementId) boxEl.hidden = true;
+  if (boxEl && !selectedTextElementId && !selectedImageId) boxEl.hidden = true;
 }
 
 function clientToCssPoint(clientX, clientY) {
@@ -1676,6 +1697,144 @@ function clientToCssPoint(clientX, clientY) {
  * behind several early returns (demo fallback, Word Mode, no active phrase)
  * that a text element is by definition independent of.
  */
+/** Image boxes for this frame — see preview.js's paintImageLayer. Follows appState's selection, as text does. */
+export function setImageLayerBoxes(boxes) {
+  imageBoxes = Array.isArray(boxes) ? boxes : [];
+  const stateId = appState.selectedImageLayerId || null;
+  if (stateId !== selectedImageId) {
+    if (stateId) selectImageTarget(stateId, { fromState: true });
+    else clearImageSelection({ fromState: true });
+  }
+  if (!overlayEl || !boxEl) return;
+  if (imageBoxes.length) {
+    overlayEl.classList.add('active');
+    syncOverlayToContentRect(overlayEl);
+  }
+  if (!selectedImageId || drag) return;
+  // Selected but not on screen this instant: hide the handles, keep the selection.
+  if (!imageBoxes.some((b) => b.id === selectedImageId)) {
+    boxEl.hidden = true;
+    return;
+  }
+  boxEl.hidden = false;
+  positionBoxElement();
+}
+
+function selectImageTarget(id, { fromState = false } = {}) {
+  if (selectedTextElementId) clearTextElementSelection();
+  resetKeywordScopeState();
+  selected = true;
+  selectedWordIndex = null;
+  selectedGroupId = null;
+  explicitCaptionSelectionKey = null;
+  selectedImageId = id;
+  if (toolbarEl) toolbarEl.hidden = true;
+  if (!fromState) selectImageLayer(id);
+  notifySelectionChangedIfNeeded();
+}
+
+function clearImageSelection({ fromState = false } = {}) {
+  if (!selectedImageId) return;
+  selectedImageId = null;
+  selected = false;
+  if (toolbarEl) toolbarEl.hidden = false;
+  if (boxEl) boxEl.hidden = true;
+  if (!fromState) selectImageLayer(null);
+  notifySelectionChangedIfNeeded();
+}
+
+/** The topmost image whose (rotated) box contains the point, among the given placements. */
+function findImageAtClient(clientX, clientY, placements) {
+  if (!imageBoxes.length) return null;
+  const { x, y } = clientToCssPoint(clientX, clientY);
+  for (let i = imageBoxes.length - 1; i >= 0; i--) {
+    const { id, box } = imageBoxes[i];
+    if (!placements.includes(getImageLayer(id)?.layer)) continue;
+    const s = box.cssPxScale || 1;
+    const cssBox = { centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s, rotationDeg: box.rotationDeg };
+    if (pointInRotatedBox(x, y, cssBox)) return { id, box };
+  }
+  return null;
+}
+
+/** Whether the point lands on the caption currently on screen (so a caption above an image wins the click). */
+function pointHitsCaption(clientX, clientY) {
+  if (!currentBox) return false;
+  const { x, y } = clientToCssPoint(clientX, clientY);
+  const s = currentBox.cssPxScale || 1;
+  const padded = ensureMinimumGrabBox(inflateBox(currentBox, CAPTION_SELECTION_PADDING_CSS_PX));
+  return pointInRotatedBox(x, y, { centerX: padded.centerX / s, centerY: padded.centerY / s, width: padded.width / s, height: padded.height / s, rotationDeg: padded.rotationDeg });
+}
+
+/** Selects an image hit by a press and starts moving it on that same press. */
+function pressImage(e, hit) {
+  deselectVideoTarget();
+  if (selectedImageId !== hit.id) selectImageTarget(hit.id);
+  boxEl.hidden = false;
+  positionBoxElement();
+  updateScopeButtons();
+  beginImageDrag(e, 'move', hitAreaEl);
+}
+
+/**
+ * Move / resize / rotate an image: written into its resting transform
+ * (x, y — % of the frame; scale; rotation), live with history off, committed
+ * once at the end. Motion is never involved — it is applied on top at draw
+ * time — so editing an animated image edits where it RESTS.
+ */
+function beginImageDrag(e, kind, captureEl = e.target) {
+  const layer = getImageLayer(selectedImageId);
+  const box = getDisplayBox();
+  if (!layer || !box) return;
+  const { x, y, rect } = clientToCssPoint(e.clientX, e.clientY);
+  const s = box.cssPxScale || 1;
+  drag = {
+    kind,
+    pointerId: e.pointerId,
+    imageId: layer.id,
+    startLayer: JSON.parse(JSON.stringify(layer)),
+    startPointerXPct: (x / rect.width) * 100,
+    startPointerYPct: (y / rect.height) * 100,
+    startDist: Math.hypot(x - box.centerX / s, y - box.centerY / s) || 1
+  };
+  captureEl.setPointerCapture(e.pointerId);
+}
+
+function onImagePointerMove(e) {
+  if (!drag.moved) {
+    const origin = drag.pressClient || (drag.pressClient = pressClient || { x: e.clientX, y: e.clientY });
+    if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < DRAG_DEAD_ZONE_PX) return;
+    drag.moved = true;
+  }
+  const box = getDisplayBox();
+  if (!box) return;
+  const { x, y, rect } = clientToCssPoint(e.clientX, e.clientY);
+  const s = box.cssPxScale || 1;
+  const t = drag.startLayer.transform;
+  let fields;
+  if (drag.kind === 'move') {
+    fields = {
+      x: t.x + ((x / rect.width) * 100 - drag.startPointerXPct),
+      y: t.y + ((y / rect.height) * 100 - drag.startPointerYPct)
+    };
+  } else if (drag.kind === 'resize') {
+    const ratio = (Math.hypot(x - box.centerX / s, y - box.centerY / s) || 1) / drag.startDist;
+    fields = { scale: Math.max(0.05, Math.min(20, t.scale * ratio)) };
+  } else {
+    fields = { rotation: Math.round((Math.atan2(y - box.centerY / s, x - box.centerX / s) * 180) / Math.PI + 90) };
+  }
+  patchImageLayer(drag.imageId, 'transform', fields, { recordHistory: false });
+}
+
+/** One undo step per gesture; a press that never moved changes nothing. */
+function endImageDrag(d) {
+  if (!d.moved) return;
+  const final = getImageLayer(d.imageId);
+  if (!final) return;
+  updateImageLayer(d.imageId, d.startLayer, { recordHistory: false });
+  updateImageLayer(d.imageId, final, { recordHistory: true });
+}
+
 export function setTextElementBoxes(boxes) {
   textElementBoxes = Array.isArray(boxes) ? boxes : [];
 
@@ -1827,6 +1986,7 @@ function selectTextElementTarget(id) {
   selectedWordIndex = null;
   selectedGroupId = null;
   explicitCaptionSelectionKey = null;
+  selectedImageId = null;
   selectedTextElementId = id;
   selectedTextWordIndex = null;
   textSelectedOnCanvas = false;
@@ -1906,7 +2066,76 @@ function beginTextMove(e) {
   hitAreaEl.setPointerCapture(e.pointerId);
 }
 
+/**
+ * A gesture on ONE WORD of the selected text element (move / resize /
+ * rotate): written into that word's own entry (element.wordTransforms) —
+ * offset, fontScale, rotationDeg, the same per-word transform a caption word
+ * has, applied by the renderer around the word's laid-out place, so the rest
+ * of the text never moves.
+ */
+function beginTextWordDrag(e, kind) {
+  const box = getDisplayBox();
+  if (!box) return;
+  const { x, y } = clientToCssPoint(e.clientX, e.clientY);
+  const scale = box.cssPxScale || 1;
+  const index = selectedTextWordIndex;
+  const startEntry = { ...(activeWordMap()[getWordTransformKey(index)] || {}) };
+  drag = {
+    kind,
+    pointerId: e.pointerId,
+    textElementId: selectedTextElementId,
+    textWordIndex: index,
+    startEntry,
+    startPointerX: x,
+    startPointerY: y,
+    startDist: Math.hypot(x - box.centerX / scale, y - box.centerY / scale) || 1,
+    startOffsetXPx: startEntry.offsetXPx || 0,
+    startOffsetYPx: startEntry.offsetYPx || 0,
+    startScale: startEntry.fontScale != null ? startEntry.fontScale : 1
+  };
+  e.target.setPointerCapture(e.pointerId);
+}
+
+function onTextWordPointerMove(e) {
+  const box = getDisplayBox();
+  if (!box) return;
+  if (!drag.moved) {
+    const origin = drag.pressClient || (drag.pressClient = pressClient || { x: e.clientX, y: e.clientY });
+    if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < DRAG_DEAD_ZONE_PX) return;
+    drag.moved = true;
+  }
+  const { x, y } = clientToCssPoint(e.clientX, e.clientY);
+  const scale = box.cssPxScale || 1;
+  const centerX = box.centerX / scale;
+  const centerY = box.centerY / scale;
+  let fields;
+  if (drag.kind === 'move') {
+    // Authored 330-box units, as for a caption word (see the word branch of
+    // onPointerMove) — the same offset lands in the same place in export.
+    const canvasW = getCanvasBackingWidth();
+    fields = {
+      offsetXPx: drag.startOffsetXPx + canvasPxToWordOffset((x - drag.startPointerX) * scale, canvasW),
+      offsetYPx: drag.startOffsetYPx + canvasPxToWordOffset((y - drag.startPointerY) * scale, canvasW)
+    };
+  } else if (drag.kind === 'resize') {
+    const ratio = (Math.hypot(x - centerX, y - centerY) || 1) / drag.startDist;
+    fields = { fontScale: Math.max(0.3, Math.min(4, drag.startScale * ratio)) };
+  } else {
+    fields = { rotationDeg: Math.round((Math.atan2(y - centerY, x - centerX) * 180) / Math.PI + 90) };
+  }
+  writeTextWordEntries([drag.textWordIndex], (entry) => ({ ...entry, ...fields }), { recordHistory: false });
+}
+
+/** One undo step per word gesture; a click that never became a drag changes nothing. */
+function endTextWordDrag(d) {
+  if (!d.moved) return;
+  const final = { ...(activeWordMap()[getWordTransformKey(d.textWordIndex)] || {}) };
+  writeTextWordEntries([d.textWordIndex], () => d.startEntry, { recordHistory: false });
+  writeTextWordEntries([d.textWordIndex], () => final, { recordHistory: true });
+}
+
 function beginTextResize(e, corner) {
+  if (selectedTextWordIndex != null) { beginTextWordDrag(e, 'resize'); return; }
   const box = getDisplayBox();
   if (!box) return;
   const { x, y } = clientToCssPoint(e.clientX, e.clientY);
@@ -1924,6 +2153,7 @@ function beginTextResize(e, corner) {
 }
 
 function beginTextRotate(e) {
+  if (selectedTextWordIndex != null) { beginTextWordDrag(e, 'rotate'); return; }
   drag = {
     kind: 'rotate', pointerId: e.pointerId, textElementId: selectedTextElementId,
     startStyle: textElementSnapshot(selectedTextElementId)
@@ -1937,6 +2167,7 @@ function beginTextRotate(e) {
  * file and in audioTimeline.js uses).
  */
 function onTextPointerMove(e) {
+  if (drag.textWordIndex != null) { onTextWordPointerMove(e); return; }
   const box = getDisplayBox();
   if (!box) return;
   const id = drag.textElementId;
@@ -1984,6 +2215,7 @@ function onTextPointerMove(e) {
  * (confirmed: the first version of this did exactly that).
  */
 function endTextDrag(d) {
+  if (d.textWordIndex != null) { endTextWordDrag(d); return; }
   const id = d.textElementId;
   const final = textElementSnapshot(id);
   if (!final) return;
@@ -2141,6 +2373,7 @@ let pressClient = null;
 const DRAG_DEAD_ZONE_PX = 3;
 
 function onPointerMove(e) {
+  if (drag && drag.imageId) { onImagePointerMove(e); return; }
   // Checked before the currentBox guard: a text element can be dragged on a
   // frame with no caption on screen, where currentBox is null.
   if (drag && drag.textElementId) { onTextPointerMove(e); return; }
@@ -2268,6 +2501,10 @@ function endDrag() {
   const { kind, phrase, wordIndex, groupMembers, textElementId } = drag;
   drag = null;
 
+  if (finished.imageId) {
+    endImageDrag(finished);
+    return;
+  }
   if (textElementId) {
     endTextDrag(finished);
     return;
@@ -2359,6 +2596,12 @@ if (import.meta.env.DEV) {
     return { id, centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s };
   });
   window.__debugSelectedTextElementId = () => selectedTextElementId;
+  // Image boxes (CSS px in the video frame) and the selected image.
+  window.__debugImageRects = () => imageBoxes.map(({ id, box }) => {
+    const s = box.cssPxScale || 1;
+    return { id, centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s, rotationDeg: box.rotationDeg };
+  });
+  window.__debugSelectedImageId = () => selectedImageId;
 
   window.__debugWordScreenRect = (wordIndex) => {
     if (!currentBox) return null;
@@ -2518,6 +2761,12 @@ export function initCanvasTransform() {
     // normally.
     if (inlineEditingId) endInlineEdit(true);
 
+    // Top first: images above all text, then text, then images above the
+    // captions (all drawn on the text layer, in that order), then the
+    // caption, then images under the captions.
+    const overTextImage = findImageAtClient(e.clientX, e.clientY, ['over-text']);
+    if (overTextImage) { pressImage(e, overTextImage); return; }
+
     const textHit = findTextElementAtClient(e.clientX, e.clientY);
     if (textHit) {
       deselectVideoTarget();
@@ -2546,9 +2795,16 @@ export function initCanvasTransform() {
       if (drag && pendingWord != null) drag.pendingTextWord = pendingWord;
       return;
     }
-    // Clicked away from every text element — release the text selection
-    // before the caption logic below claims the click.
+    const underTextImage = findImageAtClient(e.clientX, e.clientY, ['under-text']);
+    if (underTextImage) { pressImage(e, underTextImage); return; }
+    if (!pointHitsCaption(e.clientX, e.clientY)) {
+      const underCaptionImage = findImageAtClient(e.clientX, e.clientY, ['under-captions']);
+      if (underCaptionImage) { pressImage(e, underCaptionImage); return; }
+    }
+    // Clicked away from every text element and image — release those
+    // selections before the caption logic below claims the click.
     clearTextElementSelection();
+    clearImageSelection();
 
     if (!currentBox) {
       selected = false;
@@ -2702,6 +2958,7 @@ export function initCanvasTransform() {
   boxEl.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
 
+    if (selectedImageId) { beginImageDrag(e, 'move', hitAreaEl); return; }
     // A selected text element's box sits on top of hitAreaEl, so this is
     // where its own re-drag starts — and where its second click lands, the
     // one that picks a WORD inside it (decided on release: see endTextDrag).
@@ -2714,6 +2971,10 @@ export function initCanvasTransform() {
         const { x: cx, y: cy } = clientToCssPoint(e.clientX, e.clientY);
         const s = entry.box.cssPxScale || 1;
         pendingWord = findWordAtPoint(cx * s, cy * s, entry.box)?.wordIndex ?? null;
+      }
+      if (selectedTextWordIndex != null && pendingWord === selectedTextWordIndex) {
+        beginTextWordDrag(e, 'move');
+        return;
       }
       beginTextMove(e);
       if (drag) drag.pendingTextWord = pendingWord;
@@ -2763,7 +3024,8 @@ export function initCanvasTransform() {
   boxEl.querySelectorAll('.caption-transform-handle[data-handle]').forEach((handle) => {
     handle.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      if (selectedTextElementId) beginTextResize(e, handle.dataset.handle);
+      if (selectedImageId) beginImageDrag(e, 'resize');
+      else if (selectedTextElementId) beginTextResize(e, handle.dataset.handle);
       else beginResize(e, handle.dataset.handle);
     });
   });
@@ -2771,7 +3033,8 @@ export function initCanvasTransform() {
   if (rotateHandleEl) {
     rotateHandleEl.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      if (selectedTextElementId) beginTextRotate(e);
+      if (selectedImageId) beginImageDrag(e, 'rotate');
+      else if (selectedTextElementId) beginTextRotate(e);
       else beginRotate(e);
     });
   }
@@ -3097,7 +3360,9 @@ export function onSelectionChange(cb) {
 
 function notifySelectionChangedIfNeeded() {
   const target = getKeyframeTarget();
-  const signature = selectedTextElementId
+  const signature = selectedImageId
+    ? `image:${selectedImageId}`
+    : selectedTextElementId
     ? `text:${selectedTextElementId}:${selectedTextWordIndex ?? ''}`
     : target ? `${target.kind}:${(target.wordIndexes || []).join(',')}` : 'none';
   if (signature === lastSelectionSignature) return;

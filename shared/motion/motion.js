@@ -31,6 +31,22 @@ import { getMotionPreset, IDENTITY_DELTA, HIDDEN_DELTA } from './presets.js';
 import { applyEasing, isEasing, DEFAULT_EASING } from './easing.js';
 
 export const MOTION_KINDS = ['entrance', 'exit', 'emphasis', 'loop'];
+
+/**
+ * The kinds whose TIMING is implemented. Today that is the entrance alone:
+ * anchored at its window's start, running for its duration, hidden before it
+ * begins (motionProgress / evaluateMotion). An exit needs its window anchored
+ * to the END, a loop needs a period, an emphasis its own placement in the
+ * object's life — none of which exists yet. A motion of any other kind is
+ * therefore INERT (evaluates to no change, is never sampled) rather than
+ * silently run with entrance timing; implementing a kind means adding its
+ * timing here, beside the entrance's.
+ */
+const TIMED_KINDS = new Set(['entrance']);
+
+export function isMotionKindTimed(kind) {
+  return TIMED_KINDS.has(kind);
+}
 export const DEFAULT_MOTION_DURATION = 0.25;
 
 /**
@@ -88,6 +104,67 @@ export function entranceFromWordOverride(override) {
   });
 }
 
+// --- An object's motions -----------------------------------------------------
+//
+// Every object is evaluated through its LIST of motions — at most one per
+// kind (an entrance, later an emphasis and an exit beside it) — never through
+// "its entrance" directly. The renderer and the exporter only ever call
+// motionsFrom* / evaluateMotions / motionActiveSpans, so giving an object
+// a second kind of motion later changes the adapters below and the timing
+// above, and nothing that draws or samples.
+//
+// Storage is unchanged: a caption's, card's or word's entrance stays in the
+// fields it has always had, and these adapters read it into the list. A
+// future stored list (other kinds) would be read here too, beside them.
+
+/**
+ * A clean motion list: normalized motions, at most ONE PER KIND, in
+ * MOTION_KINDS order. Kinds never displace each other; a later motion of the
+ * same kind replaces the earlier one (as any second write to one slot does).
+ */
+export function normalizeMotionList(list) {
+  const byKind = new Map();
+  (Array.isArray(list) ? list : []).forEach((raw) => {
+    const motion = normalizeMotion(raw);
+    if (motion) byKind.set(motion.kind, motion);
+  });
+  return MOTION_KINDS.filter((k) => byKind.has(k)).map((k) => byKind.get(k));
+}
+
+const NO_MOTIONS = Object.freeze([]);
+const listOf = (motion) => (motion ? [motion] : NO_MOTIONS);
+
+/** The motions a params bag gives its object (a caption, or a text element's style). */
+export function motionsFromParams(params) {
+  return listOf(entranceFromParams(params));
+}
+
+/** The motions a single word's override gives it. */
+export function motionsFromWordOverride(override) {
+  return listOf(entranceFromWordOverride(override));
+}
+
+/**
+ * All of an object's motions at `time`, as one delta — each in its own
+ * window (resolveMotionWindow, from the object's span and its container's),
+ * combined with combineMotionDeltas. With one motion this IS evaluateMotion.
+ */
+export function evaluateMotions(motions, time, own, container = own) {
+  if (!motions || !motions.length) return IDENTITY_DELTA;
+  if (motions.length === 1) return evaluateMotion(motions[0], time, resolveMotionWindow(motions[0], own, container));
+  return motions.reduce((d, motion) => combineMotionDeltas(d, evaluateMotion(motion, time, resolveMotionWindow(motion, own, container))), IDENTITY_DELTA);
+}
+
+/** Where any of an object's motions is moving — what the exporter samples densely. */
+export function motionActiveSpans(motions, own, container = own) {
+  const spans = [];
+  (motions || []).forEach((motion) => {
+    const span = motionActiveSpan(motion, resolveMotionWindow(motion, own, container));
+    if (span) spans.push(span);
+  });
+  return spans;
+}
+
 // --- Timing ------------------------------------------------------------------
 
 /**
@@ -112,7 +189,7 @@ export function resolveMotionWindow(motion, own, container = own) {
  * exporter samples densely (backend/utils/graphicsFrameGenerator.js).
  */
 export function motionActiveSpan(motion, window) {
-  if (!motion) return null;
+  if (!motion || !TIMED_KINDS.has(motion.kind)) return null;
   const end = window.start + Math.min(motion.duration, window.end - window.start);
   return { start: window.start, end };
 }
@@ -142,7 +219,7 @@ export function motionProgress(motion, time, window) {
  *    entrance has not arrived before it.
  */
 export function evaluateMotion(motion, time, window) {
-  if (!motion) return IDENTITY_DELTA;
+  if (!motion || !TIMED_KINDS.has(motion.kind)) return IDENTITY_DELTA;
   if (motion.kind === 'entrance' && time < window.start) return HIDDEN_DELTA;
   const progress = motionProgress(motion, time, window);
   if (progress >= 1) return IDENTITY_DELTA;

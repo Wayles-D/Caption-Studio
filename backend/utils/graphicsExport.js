@@ -17,6 +17,14 @@ import fs from 'fs';
 import path from 'path';
 import { canGenerateGraphicsFrames, buildFullTimelineSegments } from './graphicsFrameGenerator.js';
 import { compositeGraphicsCaptionTrack, getVideoInfo } from './graphicsCompositor.js';
+import { normalizeImageLayerList } from '../../shared/imageLayer.js';
+import { loadImageSources } from './imageAssets.js';
+
+/** Whether a project has anything only this pipeline can draw: text elements or image layers. */
+function hasVisualObjects(params) {
+  return normalizeTextElementList(params.textElements).some(isTextElementRenderable)
+    || normalizeImageLayerList(params.imageLayers).some((img) => img.enabled !== false);
+}
 import { groupWordsToPhrases, sanitizePhraseTimings } from './phraseGrouper.js';
 import { normalizeCaptionEventList, resolveCaptionPhrases } from '../../shared/captionEvent.js';
 import { getASSStyleFromConfig } from '../../shared/captionConfig.js';
@@ -65,20 +73,24 @@ export function getLastGraphicsFailure() {
  */
 export async function compositeTextElementsOnto(videoPath, styles, outputPath, framesDir) {
   const params = styles || {};
-  if (!normalizeTextElementList(params.textElements).some(isTextElementRenderable)) return false;
+  if (!hasVisualObjects(params)) return false;
   try {
     const { width, height, duration, frameRate } = await getVideoInfo(videoPath);
-    const { captions, manualCaptions, text } = buildFullTimelineSegments([], params, width, height, duration, framesDir, { frameRate });
+    const imageSources = await loadImageSources(normalizeImageLayerList(params.imageLayers));
+    const { captions, imagesUnder, manualCaptions, text } = buildFullTimelineSegments([], params, width, height, duration, framesDir, { frameRate, imageSources });
     await compositeGraphicsCaptionTrack(videoPath, captions, outputPath, {
       frameRate,
       duration,
       canvasWidth: width,
       canvasHeight: height,
       textBlendMode: getASSStyleFromConfig(params).textBlendMode,
+      // The fallback's captions are already burned in, so an image placed
+      // "under the captions" can only go on top of them here.
+      imageUnderSegments: imagesUnder,
       manualCaptionSegments: manualCaptions,
       textElementSegments: text
     });
-    console.log(`[GraphicsExport] Composited ${text.length + manualCaptions.length} text segments onto the fallback render.`);
+    console.log(`[GraphicsExport] Composited ${text.length + manualCaptions.length + imagesUnder.length} text/image segments onto the fallback render.`);
     return true;
   } finally {
     try { fs.rmSync(framesDir, { recursive: true, force: true }); } catch { /* best effort */ }
@@ -106,7 +118,8 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   // pipeline (the ASS fallback cannot draw them). So an empty transcript
   // falls back only when there is no text to draw either; otherwise the
   // caption layer is simply empty.
-  const hasTextElements = normalizeTextElementList(params.textElements).some(isTextElementRenderable);
+  // ...and the same for image layers: they too exist only in this pipeline.
+  const hasTextElements = hasVisualObjects(params);
   const hasWords = Array.isArray(words) && words.length > 0;
   if (!hasWords && !hasTextElements) {
     return recordFailure('no-words', 'No words supplied to render.');
@@ -138,8 +151,10 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // caption's Text Blend Mode cannot bleed onto text the user coloured
     // deliberately — see buildTextElementSegments. `text` is empty (and no
     // second layer is added) for a project with no text elements.
-    const { captions: segments, manualCaptions: manualCaptionSegments, text: textSegments } =
-      buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, { frameRate });
+    // Every picture the image layers use, decoded once for the whole render.
+    const imageSources = await loadImageSources(normalizeImageLayerList(params.imageLayers));
+    const { captions: segments, imagesUnder: imageUnderSegments, manualCaptions: manualCaptionSegments, text: textSegments } =
+      buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, { frameRate, imageSources });
     // The VIDEO's own keyframed transform (see shared/videoTransform.js) —
     // passed through so the exported file reproduces the same zoom/pan/
     // rotate/fade the live preview shows, independent of captions. The
@@ -162,6 +177,8 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       // OVERLAYS composite with a plain alpha-over, never that blend. Both
       // are empty for a project without them, in which case no extra layer
       // is added at all.
+      // Image layers placed under the captions (empty without any).
+      imageUnderSegments,
       manualCaptionSegments,
       textElementSegments: textSegments,
       // The audio timeline (sound effects + imported audio tracks — see

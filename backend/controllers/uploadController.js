@@ -33,6 +33,7 @@ async function addTextElementsToFallbackRender(renderedVideoPath, styles, frames
 import { getVideoInfo, getAudioInfo } from '../utils/graphicsCompositor.js';
 import { normalizeAudioTimeline, hasAnyAudio } from '../../shared/audioTimeline.js';
 import { normalizeTextElementList, isTextElementRenderable } from '../../shared/textElement.js';
+import { normalizeImageLayerList } from '../../shared/imageLayer.js';
 
 /**
  * Everything the ASS/libass fallback burn needs to mix the audio timeline
@@ -466,7 +467,8 @@ export async function regenerateCaptions(req, res, next) {
 
   // An empty transcript is allowed when there is text to draw: a video with no
   // speech can still carry cinematic text and overlays (see graphicsExport.js).
-  const hasTextElements = normalizeTextElementList(styles?.textElements).some(isTextElementRenderable);
+  const hasTextElements = normalizeTextElementList(styles?.textElements).some(isTextElementRenderable)
+    || normalizeImageLayerList(styles?.imageLayers).some((img) => img.enabled !== false);
   if (!words || !Array.isArray(words) || (words.length === 0 && !hasTextElements)) {
     return res.status(400).json({ success: false, message: 'words array is required and must not be empty.' });
   }
@@ -632,14 +634,20 @@ function findUploadedVideo(baseName) {
   return null;
 }
 
-/** POST /api/upload/session-status — { baseName, assetIds } → { videoPresent, missingAssets } */
+/** POST /api/upload/session-status — { baseName, assetIds, imageAssetIds } → { videoPresent, missingAssets, missingImages } */
 export async function sessionStatus(req, res) {
-  const { baseName, assetIds } = req.body || {};
-  if (!isValidJobId(baseName)) return res.status(400).json({ success: false, message: 'baseName must be a valid job ID.' });
-  const ids = Array.isArray(assetIds) ? assetIds.filter((id) => typeof id === 'string' && AUDIO_ASSET_ID.test(id)) : [];
+  const { baseName, assetIds, imageAssetIds } = req.body || {};
+  const { IMAGE_ASSET_ID, resolveImageAssetPath } = await import('../utils/imageAssets.js');
+  const imageIds = Array.isArray(imageAssetIds) ? imageAssetIds.filter((id) => typeof id === 'string' && IMAGE_ASSET_ID.test(id)) : [];
+  // A project's pictures can be asked about on their own (the demo video
+  // has no job of its own, but pictures placed on it do need restoring).
+  const hasJob = isValidJobId(baseName);
+  if (!hasJob && !imageIds.length) return res.status(400).json({ success: false, message: 'baseName must be a valid job ID.' });
+  const ids = hasJob && Array.isArray(assetIds) ? assetIds.filter((id) => typeof id === 'string' && AUDIO_ASSET_ID.test(id)) : [];
   const { AUDIO_UPLOADS_DIR } = await import('../utils/audioMixFilter.js');
   const missingAssets = ids.filter((id) => !fs.existsSync(path.join(AUDIO_UPLOADS_DIR, id)));
-  return res.json({ success: true, videoPresent: !!findUploadedVideo(baseName), missingAssets });
+  const missingImages = imageIds.filter((id) => !resolveImageAssetPath(id));
+  return res.json({ success: true, videoPresent: hasJob ? !!findUploadedVideo(baseName) : null, missingAssets, missingImages });
 }
 
 /** POST /api/upload/restore-video — multipart { baseName, video } → stores it as <baseName><ext> if missing. */
@@ -677,5 +685,34 @@ export async function restoreAudio(req, res) {
   if (fs.existsSync(target)) { discard(); return res.json({ success: true, restored: false }); }
   fs.renameSync(file.path, target);
   console.log(`[Restore] Audio asset ${assetId} restored from the client's saved copy.`);
+  return res.json({ success: true, restored: true });
+}
+
+/**
+ * POST /api/upload/image — one picture for the Images lane. Returns the
+ * assetId the exporter resolves it by (backend/utils/imageAssets.js). The
+ * file is stored as uploaded and never modified: crop, size, corners and the
+ * rest are properties of the layer, applied when it is drawn.
+ */
+export async function uploadImageAsset(req, res) {
+  const file = req.file;
+  if (!file) return res.status(400).json({ success: false, message: 'No image file provided or file rejected by validations.' });
+  console.log(`[ImageUpload] Stored "${file.originalname}" as ${file.filename} (${(file.size / 1024).toFixed(0)} KB).`);
+  return res.status(200).json({ success: true, assetId: file.filename, name: file.originalname });
+}
+
+/** POST /api/upload/restore-image — multipart { assetId, image } → stores it under that exact assetId if missing. */
+export async function restoreImage(req, res) {
+  const assetId = req.body?.assetId;
+  const file = req.file;
+  const discard = () => { try { if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch { /* best effort */ } };
+  if (!file) return res.status(400).json({ success: false, message: 'image file is required.' });
+  const { IMAGE_ASSET_ID, IMAGE_UPLOADS_DIR, resolveImageAssetPath } = await import('../utils/imageAssets.js');
+  if (typeof assetId !== 'string' || !IMAGE_ASSET_ID.test(assetId)) { discard(); return res.status(400).json({ success: false, message: 'assetId is invalid.' }); }
+  if (resolveImageAssetPath(assetId)) { discard(); return res.json({ success: true, restored: false }); }
+  const target = path.join(IMAGE_UPLOADS_DIR, assetId);
+  if (path.dirname(path.resolve(target)) !== path.resolve(IMAGE_UPLOADS_DIR)) { discard(); return res.status(400).json({ success: false, message: 'assetId is invalid.' }); }
+  fs.renameSync(file.path, target);
+  console.log(`[Restore] Image asset ${assetId} restored from the client's saved copy.`);
   return res.json({ success: true, restored: true });
 }

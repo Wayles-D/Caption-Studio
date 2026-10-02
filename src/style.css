@@ -287,6 +287,22 @@ body.light-theme {
   cursor: grabbing;
 }
 
+/* Image layers under the captions (see PreviewStage.jsx) — one level below
+   the captions canvas. */
+.images-under-canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9;
+  display: none;
+}
+
+.images-under-canvas.active {
+  display: block;
+}
+
 .captions-canvas {
   position: absolute;
   top: 0; left: 0;
@@ -1857,9 +1873,21 @@ body.light-theme {
   color: var(--accent-color);
 }
 
-/* A word inside a text element is selected: its own box is shown, but the
-   resize/rotate handles act on whole elements, so they are not offered on it. */
-#caption-transform-box.is-text-word .caption-transform-handle,
-#caption-transform-box.is-text-word .caption-transform-rotate-line {
-  display: none;
+/* An IMAGE layer's clip (see timelinePanel.js's buildImageClip): the same
+   clip as a text one, with the picture itself as a thumbnail at its head. */
+.timeline-text-clip.is-image {
+  min-width: 6px;
+  padding: 0 6px 0 0;
+  gap: 6px;
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-card));
+}
+
+.timeline-image-clip-thumb {
+  flex: none;
+  align-self: stretch;
+  width: 28px;
+  background-size: cover;
+  background-position: center;
+  border-right: 1px solid var(--border-color);
+  border-radius: 3px 0 0 3px;
 }

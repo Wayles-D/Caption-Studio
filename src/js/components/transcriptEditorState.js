@@ -51,7 +51,7 @@ export function buildWordChip(wordObj, idx) {
   chip.spellcheck = false;
   chip.textContent = wordObj.word || '';
   chip.dataset.index = idx;
-  chip.dataset.originalText = wordObj.word || '';
+  chip.dataset.originalText = wordObj.originalWord ?? wordObj.word ?? '';
   // Keyword status is purely a DISPLAY concern here (see setWordKeyword's
   // doc comment) — gated by the "AI Keywords" toggle (appState.
   // enableKeywordHighlighting) so turning that off hides the indication
@@ -60,6 +60,7 @@ export function buildWordChip(wordObj, idx) {
   // `enableKeywordHighlighting` changes, so this class always reflects the
   // current toggle state.
   chip.classList.toggle('word-chip-keyword', !!wordObj.isKeyword && !!appState.enableKeywordHighlighting);
+  if ((chip.textContent || '').trim() !== chip.dataset.originalText) chip.classList.add(...WORD_CHIP_EDITED_CLASSES);
 
   chip.addEventListener('input', () => {
     const currentText = chip.textContent.trim();
@@ -77,6 +78,10 @@ export function buildWordChip(wordObj, idx) {
       chip.blur();
     }
   });
+
+  // Leaving the chip (or Enter) COMMITS the edit into the transcript itself
+  // — see commitWordEdit.
+  chip.addEventListener('blur', () => commitWordEdit(idx, chip.textContent.trim()));
 
   // Selecting a chip is this word's "edit target": scrub the preview to its
   // own timestamp (when it isn't already the one on screen) so the canvas is
@@ -150,12 +155,42 @@ function applyLiveWordEdit(flatWordIndex, newText) {
 
   const targetPhrase = phrases[phraseIdx];
   const nextWords = targetPhrase.words.slice();
-  nextWords[wordIdx] = { ...nextWords[wordIdx], text: newText };
+  // Both fields: the renderer reads `word` first (shared/captionGraphics.js),
+  // and phrases resolved from caption events carry both — so setting only
+  // `text`, as this used to, left the old `word` on screen and the edit
+  // never appeared.
+  nextWords[wordIdx] = { ...nextWords[wordIdx], word: newText, text: newText };
 
   const nextPhrases = phrases.slice();
   nextPhrases[phraseIdx] = { ...targetPhrase, words: nextWords };
 
   updateState({ phrases: nextPhrases }, { recordHistory: false });
+}
+
+/**
+ * Commits a typed word into the TRANSCRIPT (appState.words), the source
+ * every caption is resolved from. Typing only patches the on-screen phrases
+ * (applyLiveWordEdit — instant, and it can't disturb the caret); this makes
+ * the edit stick: without it, anything that rebuilds the captions from the
+ * transcript — moving or splitting a caption on the timeline, reopening the
+ * project — quietly brought the old word back.
+ *
+ * The word keeps its original text (originalWord) so the chip can still
+ * show it was edited. Every phrase copy of the word is patched in the same
+ * write, as setWordKeyword does.
+ */
+function commitWordEdit(flatWordIndex, newText) {
+  const idx = Number(flatWordIndex);
+  const words = appState.words || [];
+  const current = words[idx];
+  if (!current || current.word === newText) return;
+  const nextWords = words.slice();
+  nextWords[idx] = { ...current, word: newText, originalWord: current.originalWord ?? current.word };
+  const nextPhrases = (appState.phrases || []).map((phrase) => {
+    if (!(phrase.words || []).some((w) => w.wordIndex === idx)) return phrase;
+    return { ...phrase, words: phrase.words.map((w) => (w.wordIndex === idx ? { ...w, word: newText, text: newText } : w)) };
+  });
+  updateState({ words: nextWords, phrases: nextPhrases }, { recordHistory: true });
 }
 
 /**

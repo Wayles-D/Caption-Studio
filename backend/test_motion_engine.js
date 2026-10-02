@@ -13,7 +13,8 @@ import {
   normalizeMotion, entranceFromParams, entranceFromWordOverride, resolveMotionWindow, motionActiveSpan,
   motionProgress, evaluateMotion, combineMotionDeltas, applyMotionToState, isIdentityDelta,
   IDENTITY_DELTA, HIDDEN_DELTA, SLIDE_DISTANCE, registerMotionPreset, getMotionPreset, listMotionPresets,
-  registerEasing, applyEasing, EASING_TYPES, evaluatePropertyAtTime
+  registerEasing, applyEasing, EASING_TYPES, evaluatePropertyAtTime,
+  isMotionKindTimed, normalizeMotionList, motionsFromParams, motionsFromWordOverride, evaluateMotions, motionActiveSpans
 } from '../shared/motion/index.js';
 import { ANIMATION_TYPES, getAnimationTransform } from '../shared/captionAnimation.js';
 
@@ -135,14 +136,62 @@ console.log('\n[Test 6] Object-agnostic and extensible without touching the engi
   assert.deepStrictEqual(listMotionPresets('emphasis'), ['test-spin']);
   const spin = normalizeMotion({ preset: 'test-spin', duration: 1, easing: 'test-step' });
   assert.strictEqual(spin.kind, 'emphasis');
-  assert.deepStrictEqual(evaluateMotion(spin, 0.3, { start: 0, end: 2 }), { opacity: 1, scale: 1, offsetX: 0, offsetY: 0, rotation: 360 }, 'a partial preset result is completed');
   assert.ok(getMotionPreset('test-spin'));
   assert.ok(!ANIMATION_TYPES.includes('test-spin'), 'the editor menu lists entrances only');
+  // An emphasis has no TIMING yet, so it is inert — not run as an entrance.
+  assert.ok(!isMotionKindTimed('emphasis') && isMotionKindTimed('entrance'));
+  assert.strictEqual(evaluateMotion(spin, 0.3, { start: 0, end: 2 }), IDENTITY_DELTA, 'a kind without timing changes nothing');
+  assert.strictEqual(motionActiveSpan(spin, { start: 0, end: 2 }), null, 'and is never sampled');
+  // A preset may return only what it changes; the rest is filled in.
+  registerMotionPreset({ id: 'test-tilt', kind: 'entrance', evaluate: (q) => ({ rotation: 30 * (1 - q) }) });
+  assert.deepStrictEqual(evaluateMotion(normalizeMotion({ preset: 'test-tilt', duration: 1, easing: 'linear' }), 0.5, { start: 0, end: 2 }),
+    { opacity: 1, scale: 1, offsetX: 0, offsetY: 0, rotation: 15 }, 'a partial preset result is completed');
 }
-console.log('✓ Same motion, same change, whatever the object; new curves and presets register in');
+console.log('✓ Same motion, same change, whatever the object; new curves and presets register in; untimed kinds are inert');
 
 // ---------------------------------------------------------------------------
-console.log('\n[Test 7] Keyframes share the engine\'s easing');
+console.log('\n[Test 7] An object\'s motions are a list — one per kind — and today\'s projects read into it unchanged');
+{
+  // Existing single-entrance storage → a one-motion list; nothing → none.
+  const stored = { captionAnimationType: 'slide-up', captionAnimationDuration: 0.4, captionAnimationEasing: 'ease-in' };
+  assert.deepStrictEqual(motionsFromParams(stored), [entranceFromParams(stored)]);
+  assert.deepStrictEqual(motionsFromParams({ captionAnimationType: 'none' }), []);
+  assert.deepStrictEqual(motionsFromWordOverride({ animationType: 'pop', animationTiming: 'together' }), [entranceFromWordOverride({ animationType: 'pop', animationTiming: 'together' })]);
+  assert.deepStrictEqual(motionsFromWordOverride({ offsetXPx: 3 }), []);
+
+  // Evaluating the list is evaluating its one entrance — same result, same windows.
+  const [entrance] = motionsFromParams(stored);
+  const own = { start: 1.5, end: 1.9 };
+  const caption = { start: 1, end: 3 };
+  for (const t of [1.4, 1.5, 1.6, 1.8, 2.5]) {
+    assert.deepStrictEqual(evaluateMotions([entrance], t, own, caption), evaluateMotion(entrance, t, resolveMotionWindow(entrance, own, caption)), `t=${t}`);
+  }
+  assert.strictEqual(evaluateMotions([], 2, own), IDENTITY_DELTA);
+  assert.deepStrictEqual(motionActiveSpans([entrance], own, caption), [motionActiveSpan(entrance, resolveMotionWindow(entrance, own, caption))]);
+
+  // Several kinds coexist, one slot each, in a fixed order; a second motion of
+  // a kind replaces the first, and never displaces another kind.
+  const list = normalizeMotionList([
+    { preset: 'test-spin', duration: 2 },
+    { preset: 'slide-up', duration: 0.3 },
+    { preset: 'pop', duration: 0.5 },
+    { preset: 'warp-drive' }
+  ]);
+  assert.deepStrictEqual(list.map((x) => [x.kind, x.preset]), [['entrance', 'pop'], ['emphasis', 'test-spin']]);
+  assert.deepStrictEqual(normalizeMotionList(JSON.parse(JSON.stringify(list))), list, 'a list survives a JSON round trip');
+  assert.deepStrictEqual(normalizeMotionList(null), []);
+
+  // With an (inert, untimed) emphasis beside it, the entrance evaluates — and
+  // is sampled — exactly as it does alone.
+  for (const t of [0.9, 1.0, 1.1, 1.3, 2]) {
+    assert.deepStrictEqual(evaluateMotions(list, t, caption), evaluateMotions([list[0]], t, caption), `t=${t}`);
+  }
+  assert.deepStrictEqual(motionActiveSpans(list, caption), motionActiveSpans([list[0]], caption));
+}
+console.log('✓ Lists of motions: legacy storage reads in unchanged; kinds coexist without displacing each other');
+
+// ---------------------------------------------------------------------------
+console.log('\n[Test 8] Keyframes share the engine\'s easing');
 {
   const kfs = [{ t: 0, values: { positionX: 100 } }, { t: 1, easing: 'ease-in', values: { positionX: 500 } }, { t: 2, easing: 'linear', values: { positionX: 200 } }];
   close(evaluatePropertyAtTime(kfs, 'positionX', 0.5), 100 + 400 * applyEasing(0.5, 'ease-in'), 'eased between the first two');

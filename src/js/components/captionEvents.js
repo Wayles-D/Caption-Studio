@@ -225,7 +225,9 @@ export function updateCaptionEvent(id, patch, options) {
 
 export function selectCaptionEvent(id) {
   if (appState.selectedCaptionEventId === id) return;
-  updateState({ selectedCaptionEventId: id }, { recordHistory: false });
+  updateState({ selectedCaptionEventId: id,
+  // Selecting this releases a selected image (src/js/components/imageLayers.js) — one selection at a time.
+  ...(id && appState.selectedImageLayerId ? { selectedImageLayerId: null } : {}) }, { recordHistory: false });
 }
 
 export function getSelectedCaptionEvent() {

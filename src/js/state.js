@@ -16,6 +16,7 @@ import { useEditorStore, STYLE_DEFAULTS, SESSION_DEFAULTS } from '../store/edito
 import { useTransformStore, TRANSFORM_DEFAULTS } from '../store/transformStore.js';
 import { useAudioStore, AUDIO_DEFAULTS, AUDIO_DOCUMENT_KEYS } from '../store/audioStore.js';
 import { useTextElementStore, TEXT_ELEMENT_DEFAULTS, TEXT_ELEMENT_DOCUMENT_KEYS } from '../store/textElementStore.js';
+import { useImageLayerStore, IMAGE_LAYER_DEFAULTS, IMAGE_LAYER_DOCUMENT_KEYS } from '../store/imageLayerStore.js';
 
 export const MOCK_SUBTITLES = [
   { start: 0.0, end: 2.2, text: "WELCOME TO BHYND." },
@@ -41,6 +42,7 @@ export const initialStyleState = { ...STYLE_DEFAULTS, ...TRANSFORM_DEFAULTS };
 const TRANSFORM_KEYS = new Set(Object.keys(TRANSFORM_DEFAULTS));
 const AUDIO_KEYS = new Set(Object.keys(AUDIO_DEFAULTS));
 const TEXT_ELEMENT_KEYS = new Set(Object.keys(TEXT_ELEMENT_DEFAULTS));
+const IMAGE_LAYER_KEYS = new Set(Object.keys(IMAGE_LAYER_DEFAULTS));
 
 /**
  * What undo/redo snapshots: every caption/transform style field, PLUS the
@@ -64,7 +66,10 @@ const UNDO_TRACKED_KEYS = [
   // same footing as a placed sound effect: undoable, but NOT reset by the
   // toolbar's "Reset Style" (see the superset note above), and their
   // selection id is excluded for the same reason selectedAudioClipId is.
-  ...TEXT_ELEMENT_DOCUMENT_KEYS
+  ...TEXT_ELEMENT_DOCUMENT_KEYS,
+  // Image layers: content, like text elements — undoable, saved with the
+  // project, never touched by "Reset Style".
+  ...IMAGE_LAYER_DOCUMENT_KEYS
 ];
 
 /**
@@ -107,6 +112,7 @@ function storeFor(key) {
   if (TRANSFORM_KEYS.has(key)) return useTransformStore;
   if (AUDIO_KEYS.has(key)) return useAudioStore;
   if (TEXT_ELEMENT_KEYS.has(key)) return useTextElementStore;
+  if (IMAGE_LAYER_KEYS.has(key)) return useImageLayerStore;
   return useEditorStore;
 }
 
@@ -131,7 +137,8 @@ export const appState = new Proxy({}, {
     return prop in useEditorStore.getState()
       || prop in useTransformStore.getState()
       || prop in useAudioStore.getState()
-      || prop in useTextElementStore.getState();
+      || prop in useTextElementStore.getState()
+      || prop in useImageLayerStore.getState();
   }
 });
 
@@ -351,6 +358,9 @@ export function getStyleParams() {
     // timeline does: the exporter must resolve what text is on screen from
     // exactly the data the preview drew it from, never a second source.
     textElements: appState.textElements,
+    // Image layers (shared/imageLayer.js) — drawn by the exporter from the
+    // same records the preview draws them from.
+    imageLayers: appState.imageLayers,
     // The transcript's OWN captions, now that they are edited rather than
     // re-derived (see shared/captionEvent.js). The exporter renders these
     // instead of regrouping the word list, which is what makes a retimed,

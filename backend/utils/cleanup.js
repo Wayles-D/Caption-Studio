@@ -16,6 +16,9 @@ const subtitlesDir = path.resolve(__dirname, '../subtitles');
 // sweep would delete it out from under a session still using it. It gets its
 // own, far longer retention instead (see purgeExpiredAudioAssets).
 const audioDir = path.resolve(__dirname, '../audio');
+// Imported images (see multerConfig.js's uploadImage) — the same lifetime as
+// imported audio: referenced by a timeline for a whole editing session.
+const imageDir = path.resolve(__dirname, '../images');
 
 /**
  * Cleans up all files generated for a specific job session.
@@ -81,6 +84,7 @@ export function runPeriodicCleanup() {
   const dirs = [uploadsDir, outputDir, transcriptsDir, subtitlesDir];
 
   purgeExpiredAudioAssets(now);
+  purgeExpiredImageAssets(now);
 
   dirs.forEach(dir => {
     if (!fs.existsSync(dir)) return;
@@ -168,6 +172,29 @@ export function purgeExpiredAudioAssets(now = Date.now()) {
           } else {
             console.log(`[Cleanup Daemon] Purged expired audio asset: ${file}`);
           }
+        });
+      });
+    });
+  });
+}
+
+/** Imported images that have gone stale — purgeExpiredAudioAssets' rule, for the images directory (IMAGE_RETENTION_MS, default 24h). */
+export function purgeExpiredImageAssets(now = Date.now()) {
+  const retentionMs = parseInt(process.env.IMAGE_RETENTION_MS || '86400000', 10);
+  if (!fs.existsSync(imageDir)) return;
+  fs.readdir(imageDir, (err, files) => {
+    if (err) {
+      console.error(`[Cleanup Daemon] Error reading image directory ${imageDir}:`, err.message);
+      return;
+    }
+    files.forEach((file) => {
+      if (file.startsWith('.')) return;
+      const filePath = path.join(imageDir, file);
+      fs.stat(filePath, (statErr, stats) => {
+        if (statErr || !stats.isFile() || now - stats.mtimeMs <= retentionMs) return;
+        fs.unlink(filePath, (unlinkErr) => {
+          if (unlinkErr) console.error(`[Cleanup Daemon] Failed to delete expired image asset ${file}:`, unlinkErr.message);
+          else console.log(`[Cleanup Daemon] Purged expired image asset: ${file}`);
         });
       });
     });

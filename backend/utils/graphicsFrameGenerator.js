@@ -26,7 +26,7 @@ import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
-import { entranceFromParams, entranceFromWordOverride, resolveMotionWindow, motionActiveSpan } from '../../shared/motion/motion.js';
+import { motionsFromParams, motionsFromWordOverride, motionActiveSpans } from '../../shared/motion/motion.js';
 import { getKeyframeTimeRange } from '../../shared/keyframes.js';
 import {
   normalizeTextElementList,
@@ -39,6 +39,7 @@ import {
   resolveInterludeBackground
 } from '../../shared/textElement.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
+import { normalizeImageLayerList, getImageLayerBoundaryTimes, imageLayerMotionSpans, drawImageLayer, textLayerStack } from '../../shared/imageLayer.js';
 
 /**
  * Whether a job with this style should render via the graphics pipeline
@@ -166,16 +167,13 @@ function subdivideSlicesForAnimation(slices, animStart, animEnd) {
 }
 
 /**
- * The stretch a word's own entrance is actually moving over, or null — the
- * motion system's own answer (shared/motion/motion.js: the window the
- * painter evaluates it in, cut to its duration), so what is sampled densely
+ * The stretches a word's own motions are actually moving over — the motion
+ * system's own answer (shared/motion/motion.js: the windows the painter
+ * evaluates them in, cut to their durations), so what is sampled densely
  * here is exactly what moves on screen.
  */
-function wordAnimationSpan(word, container, override) {
-  const motion = entranceFromWordOverride(override);
-  if (!motion) return null;
-  const span = motionActiveSpan(motion, resolveMotionWindow(motion, word, container));
-  return span.end > span.start ? span : null;
+function wordAnimationSpans(word, container, override) {
+  return motionActiveSpans(motionsFromWordOverride(override), word, container).filter((s) => s.end > s.start);
 }
 
 /**
@@ -197,8 +195,7 @@ function subdivideForWordAnimations(slices, words, params, container) {
   (words || []).forEach((w) => {
     const override = resolveWordOverride(params, w.wordIndex);
     if (!override) return;
-    const win = wordAnimationSpan(w, container, override);
-    if (win) result = subdivideSlicesForAnimation(result, win.start, win.end);
+    wordAnimationSpans(w, container, override).forEach((win) => { result = subdivideSlicesForAnimation(result, win.start, win.end); });
     // Real timeline keyframes (see shared/keyframes.js) need the exact same
     // dense-sampling treatment as an entrance animation — otherwise a
     // word's keyframed position/scale/rotation/opacity would render as a
@@ -251,11 +248,9 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
   // comment. The SAME clamp-to-lifetime rule the motion evaluator applies at
   // draw time is applied here too, so the number of subdivided slices always
   // matches how long the animation will actually run.
-  const entrance = entranceFromParams(staticPhraseParams);
-  if (entrance) {
-    const span = motionActiveSpan(entrance, { start: phrase.start, end: phrase.end });
+  motionActiveSpans(motionsFromParams(staticPhraseParams), phrase).forEach((span) => {
     slices = subdivideSlicesForAnimation(slices, span.start, span.end);
-  }
+  });
   // Real timeline keyframes on the PHRASE itself (position/scale/rotation/
   // opacity) — same dense-sampling treatment as the entrance animation
   // above, over the union range of every keyframed property (see
@@ -334,7 +329,7 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
   const canvas = createCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
-  const entrance = entranceFromParams(staticPhraseParams);
+  const motions = motionsFromParams(staticPhraseParams);
   const phraseOverride = params.captionTransforms?.[getPhraseTransformKey(phrase)];
   const phraseKfRange = getKeyframeTimeRange(phraseOverride);
 
@@ -346,11 +341,10 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
   // subdivided independently, then flattened back into one time-ordered list.
   const slices = windowSlices.flatMap((slice) => {
     let subSlices = [{ start: slice.start, end: slice.end }];
-    if (entrance) {
-      const activeChunk = slice.chunks[slice.chunks.length - 1];
-      const span = motionActiveSpan(entrance, { start: activeChunk.start, end: activeChunk.end });
+    const activeChunk = slice.chunks[slice.chunks.length - 1];
+    motionActiveSpans(motions, activeChunk).forEach((span) => {
       subSlices = subdivideSlicesForAnimation(subSlices, span.start, span.end);
-    }
+    });
     // Real timeline keyframes on the phrase itself — same treatment as
     // sentence mode's generatePhraseCaptionFrames.
     if (phraseKfRange) {
@@ -479,11 +473,21 @@ function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
  *
  * @returns {{start:number,end:number,file:string}[]} Contiguous segments covering [0, videoDuration), or [] when there is no text at all (in which case the caller adds no second layer and the export is byte-identical to one without this feature).
  */
-function buildTextElementSegments(textElements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile) {
+/**
+ * @param {object} [layerImages] - Image layers drawn in this layer
+ *   (shared/imageLayer.js): `images` (already normalized), the decoded
+ *   `imageSources` (assetId → image, see backend/utils/imageAssets.js), and
+ *   the PNG `filePrefix`. Without images, every frame is exactly what it was
+ *   before images existed.
+ */
+function buildTextElementSegments(textElements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { images = [], imageSources = null, filePrefix = 'text', imagesOnly = false } = {}) {
   // The same "does it draw anything" rule the preview uses — an interlude
   // with no words still draws its background (see isTextElementRenderable).
   const active = (textElements || []).filter(isTextElementRenderable);
-  if (!active.length) return [];
+  // Only images whose picture actually decoded — a missing one is skipped
+  // (with a warning, by loadImageSources), not drawn as nothing at its edges.
+  const activeImages = (images || []).filter((img) => img.enabled !== false && imageSources?.has(img.assetId));
+  if (!active.length && !activeImages.length) return [];
 
   registerBackendCanvasFonts();
 
@@ -491,6 +495,7 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
   const cuts = new Set([0, videoDuration]);
   const addCut = (t) => { if (t > 0 && t < videoDuration) cuts.add(t); };
   getTextElementBoundaryTimes(active).forEach(addCut);
+  getImageLayerBoundaryTimes(activeImages).forEach(addCut);
 
   // ...plus dense sample points wherever an element is actually MOVING. Each
   // segment is one static PNG drawn at its own start time, so a stretch cut
@@ -521,21 +526,23 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     // — the style bag over the caption's params, its own words' map), so the
     // windows sampled here are exactly the ones that move on screen.
     const elementParams = resolveTextElementParams(params, element);
-    const entrance = entranceFromParams(elementParams);
-    if (entrance) {
-      const span = motionActiveSpan(entrance, { start: element.start, end: element.end });
+    motionActiveSpans(motionsFromParams(elementParams), element).forEach((span) => {
       if (span.end > span.start) addSamples(span.start, span.end);
-    }
+    });
     // ...and each of its words' own entrances and keyframes.
     const phrase = textElementToPhrase(element);
     phrase.words.forEach((w) => {
       const override = resolveWordOverride(elementParams, w.wordIndex);
       if (!override) return;
-      const win = wordAnimationSpan(w, phrase, override);
-      if (win) addSamples(Math.max(win.start, element.start), Math.min(win.end, element.end));
+      wordAnimationSpans(w, phrase, override).forEach((win) => addSamples(Math.max(win.start, element.start), Math.min(win.end, element.end)));
       const wordKf = getKeyframeTimeRange(override);
       if (wordKf) addSamples(Math.max(wordKf.min, element.start), Math.min(wordKf.max, element.end));
     });
+  });
+
+  // An image's motions, sampled on the same grid as an element's.
+  activeImages.forEach((img) => {
+    imageLayerMotionSpans(img).forEach((span) => addSamples(Math.max(span.start, img.start), Math.min(span.end, img.end)));
   });
 
   const boundaries = Array.from(cuts).sort((a, b) => a - b);
@@ -567,7 +574,10 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     // Drawn in the preview's order (orderForCompositing): at most one
     // interlude, which covers the frame, with overlays on top of it.
     const visible = orderForCompositing(active.filter((el) => el.start < end && el.end > start));
-    if (!visible.length) {
+    // Images over the same half-open span — cut at their own edges, so
+    // "overlaps" is "covers" here too.
+    const visibleImages = activeImages.filter((img) => img.start < end && img.end > start);
+    if (!visible.length && !visibleImages.length) {
       // Nothing on screen — the shared fully-transparent frame, exactly as
       // the caption stream fills its own gaps.
       segments.push({ start, end, file: blankFile });
@@ -575,7 +585,19 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     }
 
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    visible.forEach((element) => {
+    // The shared stacking order (shared/imageLayer.js's textLayerStack) — the
+    // order the preview's text canvas draws in. The images-under layer has no
+    // text in it: its images, in list order (the preview's images-under canvas).
+    const stack = imagesOnly
+      ? visibleImages.map((item) => ({ type: 'image', item }))
+      : textLayerStack(visible, visibleImages);
+    stack.forEach(({ type, item: element }) => {
+      if (type === 'image') {
+        drawImageLayer(ctx, element, imageSources.get(element.assetId), {
+          canvasWidth, canvasHeight, time: start, createOffscreenCanvas: (w, h) => createCanvas(w, h)
+        });
+        return;
+      }
       // A cinematic interlude's full-frame background: an OPAQUE PNG for this
       // segment, so the plain alpha-over composite of this layer hides the
       // video and the caption layers beneath it — while the audio, which
@@ -602,7 +624,7 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
       });
     });
 
-    const file = path.join(outDir, `text-${Math.round(start * 1000)}.png`);
+    const file = path.join(outDir, `${filePrefix}-${Math.round(start * 1000)}.png`);
     fs.writeFileSync(file, canvas.toBuffer('image/png'));
     segments.push({ start, end, file });
   }
@@ -610,19 +632,26 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
   return segments;
 }
 
-export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, { frameRate = null } = {}) {
+/**
+ * @param {object} [options]
+ * @param {string|number} [options.frameRate] - The output's frame rate (the sampling grid).
+ * @param {Map} [options.imageSources] - Decoded pictures for params.imageLayers
+ *   (backend/utils/imageAssets.js's loadImageSources). Image layers are drawn
+ *   only when it is given.
+ */
+export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, { frameRate = null, imageSources = null } = {}) {
   // Everything below is synchronous, so the sampling grid set here is the
   // one every animation in this build is sampled on (see animationSampleTimes).
   const previousFps = sampleFps;
   sampleFps = parseFrameRate(frameRate);
   try {
-    return buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir);
+    return buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources);
   } finally {
     sampleFps = previousFps;
   }
 }
 
-function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir) {
+function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources) {
   const blankFile = generateBlankFrame(canvasWidth, canvasHeight, outDir);
   const pushGap = (segments, start, end) => {
     if (end - start >= 0.001) segments.push({ start, end, file: blankFile });
@@ -665,13 +694,22 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
   // Both are built by the SAME function — one model, one renderer; only
   // which stream they land in differs.
   const allElements = normalizeTextElementList(params.textElements);
-  const buildLayer = (elements) => buildTextElementSegments(
-    elements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile
+  const buildLayer = (elements, layerImages) => buildTextElementSegments(
+    elements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, layerImages
   );
+  // IMAGE LAYERS (shared/imageLayer.js): those above the captions are drawn
+  // INTO the text layer, in the shared stacking order (textLayerStack);
+  // those under the captions are a layer of their own, composited onto the
+  // video before the captions (graphicsCompositor's imageUnderSegments).
+  // Both are empty for a project without images.
+  const images = imageSources ? normalizeImageLayerList(params.imageLayers) : [];
+  const under = images.filter((img) => img.layer === 'under-captions');
+  const above = images.filter((img) => img.layer !== 'under-captions');
 
   return {
     captions: segments,
+    imagesUnder: buildLayer([], { images: under, imageSources, filePrefix: 'img-under', imagesOnly: true }),
     manualCaptions: buildLayer(allElements.filter((el) => el.kind === 'caption')),
-    text: buildLayer(allElements.filter((el) => el.kind !== 'caption'))
+    text: buildLayer(allElements.filter((el) => el.kind !== 'caption'), { images: above, imageSources })
   };
 }

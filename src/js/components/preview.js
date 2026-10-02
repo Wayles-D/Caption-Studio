@@ -6,7 +6,9 @@ import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, 
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
 import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolveRollingStackWindow } from '../../../shared/rollingStack.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame, paintFrameBackground } from '../../../shared/captionGraphics.js';
-import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay, setTextElementBoxes } from './canvasTransform.js';
+import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay, setTextElementBoxes, setImageLayerBoxes } from './canvasTransform.js';
+import { isImageLayerActive, drawImageLayer, textLayerStack } from '../../../shared/imageLayer.js';
+import { getImagePicture, setImagePictureListener } from './imageLayers.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
 import { getActiveTextElements, textElementToPhrase, resolveTextElementParams, orderForCompositing, resolveInterludeBackground } from '../../../shared/textElement.js';
 import { initVideoCanvasControls } from './videoCanvasControls.js';
@@ -188,20 +190,78 @@ function prepareGraphicsCanvas(canvas, fontFamily, fontWeight, fontSizePx) {
  * drawn with `clearCanvas: false` — the same compositing order the exporter
  * uses.
  */
+const makeOffscreenCanvas = (w, h) => {
+  const off = document.createElement('canvas');
+  off.width = w;
+  off.height = h;
+  return off;
+};
+
+/**
+ * Draws one image layer (shared/imageLayer.js's drawImageLayer — the call
+ * the exporter makes) and returns its resting box for the transform layer,
+ * in the same shape a text element's box has. Nothing is drawn until the
+ * picture has decoded; the box is still published so it can be selected.
+ */
+function paintImageLayer(ctx, layer, currentTime, prepped) {
+  const g = drawImageLayer(ctx, layer, getImagePicture(layer.assetId), {
+    canvasWidth: prepped.targetW,
+    canvasHeight: prepped.targetH,
+    time: currentTime,
+    createOffscreenCanvas: makeOffscreenCanvas
+  });
+  return {
+    id: layer.id,
+    box: {
+      x: g.centerX - g.width / 2, y: g.centerY - g.height / 2, width: g.width, height: g.height,
+      centerX: g.centerX, centerY: g.centerY, rotationDeg: g.rotationDeg,
+      cssPxScale: prepped.targetW / prepped.cssPixelWidth
+    }
+  };
+}
+
+/**
+ * Image layers placed UNDER the captions: their own canvas, beneath the
+ * captions canvas — the exporter's imagesUnder stream, composited onto the
+ * video before the caption track. Returns their boxes.
+ */
+function syncImagesUnderCanvas(currentTime) {
+  const canvas = document.getElementById('images-under-canvas');
+  if (!canvas) return [];
+  const layers = (appState.imageLayers || []).filter((img) => img.layer === 'under-captions' && isImageLayerActive(img, currentTime));
+  if (!layers.length) {
+    canvas.classList.remove('active');
+    return [];
+  }
+  const prepped = prepareGraphicsCanvas(canvas, 'Montserrat', '400', 14);
+  if (!prepped) return [];
+  prepped.ctx.clearRect(0, 0, prepped.targetW, prepped.targetH);
+  const boxes = layers.map((layer) => paintImageLayer(prepped.ctx, layer, currentTime, prepped));
+  canvas.classList.add('active');
+  return boxes;
+}
+
 function syncTextElementsCanvas(currentTime, baseStyleParams) {
   const canvas = document.getElementById('text-elements-canvas');
-  if (!canvas) return;
+  // Image layers on every canvas, published as ONE list (hit-testing walks
+  // it top first) — under-captions first, then those drawn with the text.
+  const imageBoxes = syncImagesUnderCanvas(currentTime);
+  if (!canvas) { setImageLayerBoxes(imageBoxes); return; }
 
   // orderForCompositing: manual captions, then at most ONE cinematic
   // interlude (which covers the frame — see paintFrameBackground below), then
   // overlays on top. The exporter draws in this same order.
   const active = orderForCompositing(getActiveTextElements(appState.textElements || [], currentTime));
-  if (!active.length) {
+  // Image layers above the captions are drawn on THIS canvas, in the shared
+  // stacking order (textLayerStack) — the order the exporter's text layer uses.
+  const images = (appState.imageLayers || []).filter((img) => img.layer !== 'under-captions' && isImageLayerActive(img, currentTime));
+  if (!active.length && !images.length) {
     canvas.classList.remove('active');
     // Must still publish the (empty) box list, or the transform layer keeps
     // hit-testing against last frame's boxes and a click lands on text that
     // isn't on screen any more.
     setTextElementBoxes([]);
+    setImageLayerBoxes(imageBoxes);
     return;
   }
 
@@ -221,7 +281,11 @@ function syncTextElementsCanvas(currentTime, baseStyleParams) {
   // can wrap it — see canvasTransform.js's setTextElementBoxes.
   const boxes = [];
 
-  active.forEach((element) => {
+  textLayerStack(active, images).forEach(({ type, item: element }) => {
+    if (type === 'image') {
+      imageBoxes.push(paintImageLayer(prepped.ctx, element, currentTime, prepped));
+      return;
+    }
     // A cinematic interlude replaces the PICTURE: its background fills this
     // whole layer (the composition frame — the same box the video is laid
     // out in), hiding the video and the captions beneath it. The video keeps
@@ -287,6 +351,7 @@ function syncTextElementsCanvas(currentTime, baseStyleParams) {
   });
 
   setTextElementBoxes(boxes);
+  setImageLayerBoxes(imageBoxes);
   canvas.classList.add('active');
 }
 
@@ -370,6 +435,10 @@ function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, currentTime, 
 let initialized = false;
 
 export function initPreviewWorkspace() {
+  // A picture finishing decoding (an import, or a reopened project's saved
+  // copy) redraws the frame — a paused video would otherwise keep showing
+  // the image as missing.
+  setImagePictureListener(() => syncVideoSubtitles());
   if (initialized) return;
   initialized = true;
 
