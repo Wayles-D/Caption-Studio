@@ -36,12 +36,16 @@ import { AudioInspector } from './components/AudioInspector.jsx';
 import { WordToolPanel } from './components/WordInspector.jsx';
 import { ImageInspector } from './components/ImageInspector.jsx';
 import { ShapeInspector } from './components/ShapeInspector.jsx';
+import { CanvasInspector } from './components/CanvasInspector.jsx';
 import { LayersPanel } from './components/LayerControls.jsx';
 import * as shapeLayersApi from './js/components/shapeLayers.js';
 import * as layerStackApi from './js/components/layerStack.js';
+import * as compositionApi from './js/components/composition.js';
+import * as compositionViewApi from './js/components/compositionView.js';
+import * as videoTransformApi from './js/components/videoTransform.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
-import { TimelinePanel } from './components/TimelinePanel.jsx';
+import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
 
@@ -119,6 +123,12 @@ const MOBILE_TOOLS = [
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="m12 3 9 5-9 5-9-5 9-5z" /><path d="m3 13 9 5 9-5" /></svg>
   },
   {
+    // The composition (shared/composition.js): the canvas's shape and
+    // background, and the video placed and styled inside it.
+    key: 'canvas', label: 'Canvas', group: 'canvas',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="3" width="18" height="18" rx="2" /><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+  },
+  {
     // Sound effects + audio tracks. One tool, because they are one panel
     // (see AudioInspector.jsx) — the two CONCEPTS stay separate everywhere it
     // matters: separate lanes on the timeline, separate lists here, separate
@@ -150,7 +160,7 @@ const MOBILE_TOOLS = [
 // is what a selected cinematic interlude or overlay is edited in, and as a
 // bottom sheet it covered the very timeline clip being edited.
 // 'image-layer' (the Image panel) too, for the same reason.
-const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay', 'image-layer', 'shape-layer', 'layers']);
+const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas']);
 
 // The desktop side panel's default/home content — always visible (an
 // anchored sidebar, like the app's original layout), showing Video
@@ -160,7 +170,6 @@ const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-
 const DESKTOP_SIDE_PANEL_DEFAULT = 'video-info';
 
 const MOBILE_TOOLBAR_HEIGHT = 80; // px — kept in sync with the `h-20` toolbar below
-const TIMELINE_HEIGHT = 272; // px — kept in sync with TimelinePanel.jsx's `h-[272px]` (grew to fit the SFX + Audio lanes)
 const DESKTOP_BREAKPOINT_QUERY = '(min-width: 1024px)'; // Tailwind's `lg`
 
 // Bottom-sheet resize: the sheet used to always render at `max-h-[65vh]`
@@ -283,6 +292,9 @@ export function App() {
   // — not in an effect, so the editor is never briefly visible before the
   // splash lands on top of it.
   const [splashing, setSplashing] = useState(shouldShowSplash);
+  // The timeline's height — the user drags its top edge to slide it up or
+  // down (see TimelinePanel.jsx). The side panels end where it begins.
+  const [timelineHeight, setTimelineHeight] = useState(readStoredTimelineHeight);
 
   const [soundLibraryOpen, setSoundLibraryOpen] = useState(false);
   // Which clip the library is REPLACING the sound on, or null when it is
@@ -430,7 +442,7 @@ export function App() {
   // either used to close the panel mid-edit. Read lazily: both mount later.
   const soundLibraryElRef = useMemo(() => ({ get current() { return document.getElementById('sound-library-panel'); } }), []);
   const previewElRef = useMemo(() => ({ get current() { return document.getElementById('state-video'); } }), []);
-  const sidePanelInsideRefs = useMemo(() => (['text-overlay', 'image-layer', 'shape-layer', 'layers'].includes(desktopSidePanel)
+  const sidePanelInsideRefs = useMemo(() => (['text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas'].includes(desktopSidePanel)
     ? [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, soundLibraryElRef, previewElRef]
     : [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef]), [desktopSidePanel, soundLibraryElRef, previewElRef]);
   useClickOutside(
@@ -486,6 +498,9 @@ export function App() {
       window.__imageLayers = imageLayersApi;
       window.__shapeLayers = shapeLayersApi;
       window.__layerStack = layerStackApi;
+      // The video's own placement (videoTransform.js) rides along: it is the
+      // composition object the panel and the on-video gestures move.
+      window.__composition = { ...compositionApi, ...compositionViewApi, ...videoTransformApi };
       window.__captionEvents = captionEventsApi;
     }
   }, []);
@@ -891,6 +906,8 @@ export function App() {
           onSoundLibraryToggle={toggleSoundLibrary}
           onSoundLibraryClose={closeSoundLibrary}
           onSoundReplace={openSoundReplace}
+          height={timelineHeight}
+          onHeightChange={setTimelineHeight}
         />
       </div>
 
@@ -908,7 +925,7 @@ export function App() {
         <div
           id="sound-library-panel"
           className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
-          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
+          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + timelineHeight }}
         >
           <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} placeAt={soundPlaceAt} />
         </div>
@@ -932,12 +949,13 @@ export function App() {
       {isDesktop && (
         <div
           ref={desktopSidePanelElRef}
+          id="desktop-side-panel"
           className="flex flex-col fixed top-14 right-0 z-40 w-[340px] bg-[var(--bg-sidebar)] border-l border-[var(--border-color)]"
-          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
+          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + timelineHeight }}
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
             <span className="text-xs font-bold uppercase tracking-wide text-[var(--text-secondary)]">
-              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : desktopSidePanel === 'image-layer' ? 'Image' : desktopSidePanel === 'shape-layer' ? 'Shape' : desktopSidePanel === 'layers' ? 'Layers' : 'Video Inspector'}
+              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : desktopSidePanel === 'image-layer' ? 'Image' : desktopSidePanel === 'shape-layer' ? 'Shape' : desktopSidePanel === 'layers' ? 'Layers' : desktopSidePanel === 'canvas' ? 'Canvas' : 'Video Inspector'}
             </span>
             {desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT && (
               <button
@@ -978,6 +996,11 @@ export function App() {
           {desktopSidePanel === 'layers' && (
             <div className="overflow-y-auto flex-1 p-4">
               <LayersPanel />
+            </div>
+          )}
+          {desktopSidePanel === 'canvas' && (
+            <div className="overflow-y-auto flex-1 p-4">
+              <CanvasInspector />
             </div>
           )}
           {/* Not conditionally rendered — see relocatePrecisionFields() in
@@ -1060,6 +1083,10 @@ export function App() {
               ) : tool.group === 'layers' ? (
                 <div className="p-4">
                   <LayersPanel />
+                </div>
+              ) : tool.group === 'canvas' ? (
+                <div className="p-4">
+                  <CanvasInspector />
                 </div>
               ) : tool.group === 'word' ? (
                 <div className="p-4">

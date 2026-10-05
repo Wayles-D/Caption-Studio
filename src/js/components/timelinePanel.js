@@ -96,6 +96,7 @@ let activeOptions = null; // see initTimelinePanel's options param
 let rafId = null;
 let dragMarker = null; // { fromTime }
 let selectedMarkerTime = null;
+let lastTargetHostKey = null;
 let advancedExpanded = false;
 
 // TIMELINE ZOOM. 1 means "the whole clip fits the panel exactly", which is
@@ -469,7 +470,11 @@ function buildDom(container, options) {
   addBtn.className = 'timeline-add-keyframe-btn';
   addBtn.id = 'timeline-add-keyframe-btn';
   addBtn.innerHTML = '◆ Keyframe';
-  addBtn.addEventListener('click', () => keyframeEngine.addOrUpdateKeyframeAtPlayhead());
+  // CapCut's toggle: on a keyframe it removes it, anywhere else it adds one.
+  addBtn.addEventListener('click', () => {
+    keyframeEngine.toggleKeyframeAtPlayhead();
+    selectedMarkerTime = null;
+  });
   controlsRow.appendChild(addBtn);
 
   // "+ Cinematic": a cinematic text interlude starting exactly at the
@@ -634,6 +639,8 @@ function buildDom(container, options) {
   // others, stays put while the strip pans beneath it.
   const addVideoBtn = buildAddButton('timeline-add-video-btn', 'Upload a video');
   filmstripGutter.appendChild(addVideoBtn);
+  filmstripRow.dataset.lane = 'video';
+  addCollapseToggle(filmstripRow, filmstripGutter, 'video', 'Video');
   filmstripRow.appendChild(filmstripGutter);
   filmstripRow.appendChild(filmstripStack);
   scroll.appendChild(filmstripRow);
@@ -800,6 +807,56 @@ function buildDom(container, options) {
  * lanes so they read as one system; only the label, the button and what the
  * button does differ.
  */
+// --- Collapsing a lane -------------------------------------------------------
+//
+// Any lane — the video strip included — folds down to a slim strip that still
+// shows WHERE its clips are, so a busy lane (a project's SFX can run to dozens
+// of clips) can be put out of the way to work on another. Which lanes are
+// folded is an editor preference, remembered per browser, not project data.
+const COLLAPSED_STORAGE_KEY = 'bhynd.timeline.collapsed';
+
+function readCollapsedLanes() {
+  try {
+    const list = JSON.parse(window.localStorage.getItem(COLLAPSED_STORAGE_KEY) || '[]');
+    return new Set(Array.isArray(list) ? list : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeCollapsedLanes(set) {
+  try { window.localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify([...set])); } catch { /* preference only */ }
+}
+
+function setLaneCollapsed(row, button, key, label, collapsed) {
+  row.classList.toggle('is-collapsed', collapsed);
+  button.setAttribute('aria-expanded', String(!collapsed));
+  button.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${label}`);
+  button.title = collapsed ? `Expand ${label}` : `Collapse ${label}`;
+}
+
+/** Puts the fold toggle at the front of a lane's label column, restoring how the user last left it. */
+function addCollapseToggle(row, gutter, key, label) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'timeline-lane-collapse';
+  button.dataset.collapseLane = key;
+  button.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+  // Never a scrub or a clip gesture underneath.
+  button.addEventListener('pointerdown', (e) => e.stopPropagation());
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const collapsed = readCollapsedLanes();
+    const next = !row.classList.contains('is-collapsed');
+    if (next) collapsed.add(key); else collapsed.delete(key);
+    writeCollapsedLanes(collapsed);
+    setLaneCollapsed(row, button, key, label, next);
+  });
+  setLaneCollapsed(row, button, key, label, readCollapsedLanes().has(key));
+  gutter.insertBefore(button, gutter.firstChild);
+  return button;
+}
+
 function buildAudioLane(key, label, addTitle) {
   const row = document.createElement('div');
   row.className = 'timeline-lane timeline-audio-lane';
@@ -830,6 +887,7 @@ function buildAudioLane(key, label, addTitle) {
   // mounted here is always reachable at any zoom or scroll position, and
   // unlike a sticky in-strip button it can never sit on top of a clip.
   gutter.appendChild(buildAddButton(`timeline-add-${key}-btn`, addTitle));
+  addCollapseToggle(row, gutter, key, label);
 
   row.appendChild(gutter);
   row.appendChild(track);
@@ -921,7 +979,37 @@ function clearMarkers(track) {
   track.querySelectorAll('.timeline-marker').forEach((el) => el.remove());
 }
 
-function buildMarker(entry, duration, role) {
+/**
+ * Where a time sits across a host's span, as a CSS left: a clamp keeps a
+ * diamond exactly on a clip's start or end edge whole instead of half-hidden
+ * by the clip's own clipping.
+ */
+function markerLeft(t, span) {
+  const pct = ((t - span.start) / Math.max(1e-6, span.end - span.start)) * 100;
+  return span.clamp ? `clamp(5px, ${pct}%, calc(100% - 5px))` : `${pct}%`;
+}
+
+/**
+ * A keyframe of something that is NOT selected, on its own clip: a small dim
+ * diamond that only says "this has a keyframe here". Selecting the object
+ * turns its diamonds into the editable ones (buildMarker).
+ */
+function buildPassiveMarker(t, span) {
+  const marker = document.createElement('div');
+  marker.className = 'timeline-marker filled is-passive';
+  marker.style.left = markerLeft(t, span);
+  marker.title = `Keyframe @ ${t.toFixed(2)}s — select this to edit it`;
+  return marker;
+}
+
+/**
+ * One editable keyframe of the ACTIVE target, on that target's own clip (or
+ * on the video strip, for the video). `span` is the time range the host
+ * element covers — the whole clip for the video strip, the clip's own
+ * [start, end] for a caption or text clip — so position and drag both map
+ * through it.
+ */
+function buildMarker(entry, span, role) {
   const marker = document.createElement('div');
   marker.className = 'timeline-marker';
   // Every entry on the unified lane always has at least one property value
@@ -939,7 +1027,7 @@ function buildMarker(entry, duration, role) {
   // distinguish it FROM).
   if (role === 'end') marker.classList.add('marker-end');
   if (selectedMarkerTime != null && Math.abs(entry.t - selectedMarkerTime) <= 0.03) marker.classList.add('selected');
-  marker.style.left = `${(entry.t / duration) * 100}%`;
+  marker.style.left = markerLeft(entry.t, span);
   marker.dataset.time = String(entry.t);
   const roleLabel = role === 'start' ? 'Start ' : role === 'end' ? 'End ' : '';
   marker.title = `${roleLabel}keyframe @ ${entry.t.toFixed(2)}s — click to jump, drag to retime, Delete to remove`;
@@ -967,14 +1055,14 @@ function buildMarker(entry, duration, role) {
     dragMarker.moved = true;
     const rect = marker.parentElement.getBoundingClientRect();
     const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
-    marker.style.left = `${(x / rect.width) * 100}%`;
+    marker.style.left = markerLeft(span.start + (x / rect.width) * (span.end - span.start), span);
   });
   marker.addEventListener('pointerup', (e) => {
     if (!dragMarker) return;
     if (dragMarker.moved) {
       const rect = marker.parentElement.getBoundingClientRect();
       const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
-      const newTime = xToTime(x, rect.width, getVideo()?.duration || 0);
+      const newTime = span.start + (x / rect.width) * (span.end - span.start);
       keyframeEngine.moveKeyframeAt(dragMarker.fromTime, newTime);
       selectedMarkerTime = newTime;
     }
@@ -989,6 +1077,10 @@ function buildMarker(entry, duration, role) {
   marker.addEventListener('keydown', (e) => {
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
+      // Handled HERE, and only here: left to bubble, the same key reached the
+      // document's Delete handler next — which, the keyframe now gone, deleted
+      // whatever object was selected (a cinematic card, with its keyframe).
+      e.stopPropagation();
       keyframeEngine.deleteKeyframeAt(entry.t);
       selectedMarkerTime = null;
     }
@@ -1013,11 +1105,21 @@ document.addEventListener('keydown', (e) => {
     || focused.isContentEditable
   )) return;
 
-  // A selected AUDIO clip takes precedence over a selected keyframe: selecting
-  // a clip is the more recent, more specific intent, and the two selections
-  // are independent (a keyframe can stay selected on a caption while the user
-  // goes and clicks a sound effect). Without this ordering, Delete would
-  // silently remove a keyframe the user had stopped thinking about.
+  // A SELECTED KEYFRAME comes first. Its diamonds only show on the object
+  // that is selected, so that object is always selected too — and checking
+  // the object first made Backspace on a cinematic card's keyframe delete the
+  // whole card. The keyframe selection can't go stale: it is cleared the
+  // moment the user moves on (a clip pressed, empty lane pressed, a
+  // different target selected, the keyframe button pressed).
+  if (selectedMarkerTime != null) {
+    e.preventDefault();
+    keyframeEngine.deleteKeyframeAt(selectedMarkerTime);
+    selectedMarkerTime = null;
+    return;
+  }
+
+  // A selected AUDIO clip next: selecting a clip is a more specific intent
+  // than the object a stale selection might still point at.
   if (appState.selectedAudioClipId) {
     audioTimeline.removeSelectedClip();
     return;
@@ -1032,12 +1134,7 @@ document.addEventListener('keydown', (e) => {
   }
 
   if (imageLayers.removeSelectedImageLayer()) return;
-  if (shapeLayers.removeSelectedShapeLayer()) return;
-
-  if (selectedMarkerTime != null) {
-    keyframeEngine.deleteKeyframeAt(selectedMarkerTime);
-    selectedMarkerTime = null;
-  }
+  shapeLayers.removeSelectedShapeLayer();
 });
 
 // Signature of "what markers should exist right now" (entry times + values +
@@ -1050,26 +1147,136 @@ document.addEventListener('keydown', (e) => {
 // highlight) actually changes, and never while a marker is being dragged —
 // scrubbing the playhead alone never touches this signature, so it doesn't
 // disturb an in-progress interaction either.
-let lastLaneSignature = null;
+// --- Which clip a keyframe belongs to ----------------------------------------
+//
+// Keyframes are drawn ON THE CLIP THEY ANIMATE (CapCut-style): the video's on
+// the video strip, a caption's on its caption clip, a text overlay's or
+// cinematic card's on its own clip. Before, every target's diamonds went on
+// the video strip, so a caption's keyframes looked like the video's.
+
+/** The caption clip (shared/captionEvent.js) a transcript caption, word or group is in. */
+function captionEventFor({ phraseStart = null, wordIndex = null }) {
+  const events = appState.captionEvents || [];
+  if (wordIndex != null) {
+    const byWord = events.find((e) => (e.wordIndices || []).includes(wordIndex));
+    if (byWord) return byWord;
+  }
+  if (phraseStart == null) return null;
+  // A phrase's transform key is its start in hundredths (shared/captionTransform.js).
+  return events.find((e) => Math.round(e.start * 100) === Math.round(phraseStart * 100))
+    || events.find((e) => phraseStart >= e.start && phraseStart < e.end)
+    || null;
+}
+
+function clipElement(id) {
+  return id ? els.scroll.querySelector(`[data-clip-id="${CSS.escape(id)}"]`) : null;
+}
+
+const VIDEO_HOST_KEY = 'video';
+
+/** The active target's host: the element its diamonds go on, and the time span that element covers. */
+function activeKeyframeHost(duration) {
+  const host = keyframeEngine.getActiveTargetHost();
+  const videoHost = { key: VIDEO_HOST_KEY, el: els.keyframeTrack, span: { start: 0, end: duration } };
+  if (!host || host.kind === 'video') return videoHost;
+  if (host.kind === 'text') {
+    const element = (appState.textElements || []).find((e) => e.id === host.id);
+    const el = clipElement(host.id);
+    return element && el ? { key: host.id, el, span: { start: element.start, end: element.end, clamp: true } } : videoHost;
+  }
+  const event = captionEventFor({ phraseStart: host.phrase?.start ?? null, wordIndex: host.wordIndexes?.[0] ?? null });
+  const el = event && clipElement(event.id);
+  // A caption with no clip of its own on the timeline (no caption events
+  // yet) keeps the old home rather than losing its diamonds.
+  return event && el ? { key: event.id, el, span: { start: event.start, end: event.end, clamp: true } } : videoHost;
+}
+
+/**
+ * Everything ELSE that has keyframes, grouped by the clip it is on — shown
+ * as passive diamonds so a keyframed caption or overlay is recognisable at a
+ * glance without selecting it. `activeEntries` is skipped (it is drawn as the
+ * editable set).
+ */
+function passiveKeyframeHosts(duration, activeEntries) {
+  const byKey = new Map();
+  const add = (key, el, span, entries) => {
+    if (!el || !entries?.length || entries === activeEntries) return;
+    const host = byKey.get(key) || { key, el, span, times: new Set() };
+    entries.forEach((k) => host.times.add(k.t));
+    byKey.set(key, host);
+  };
+  add(VIDEO_HOST_KEY, els.keyframeTrack, { start: 0, end: duration }, appState.videoTransform?.keyframes);
+  (appState.textElements || []).forEach((element) => {
+    add(element.id, clipElement(element.id), { start: element.start, end: element.end, clamp: true }, element.keyframes);
+  });
+  Object.entries(appState.captionTransforms || {}).forEach(([key, override]) => {
+    if (!override?.keyframes?.length) return;
+    const event = /^w\d+$/.test(key)
+      ? captionEventFor({ wordIndex: Number(key.slice(1)) })
+      : captionEventFor({ phraseStart: Number(key) / 100 });
+    if (event) add(event.id, clipElement(event.id), { start: event.start, end: event.end, clamp: true }, override.keyframes);
+  });
+  return [...byKey.values()];
+}
+
+/** The marker layer inside a host element (the video strip's overlay IS its layer). */
+function markerLayer(hostEl) {
+  if (hostEl === els.keyframeTrack) return hostEl;
+  let layer = hostEl.querySelector(':scope > .timeline-kf-layer');
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.className = 'timeline-kf-layer';
+    hostEl.appendChild(layer);
+  }
+  return layer;
+}
 
 function refreshLanes(duration) {
-  const entries = keyframeEngine.getKeyframeEntries();
-  const signature = JSON.stringify({ entries, selected: selectedMarkerTime, duration });
-
-  if (signature !== lastLaneSignature && !dragMarker) {
-    lastLaneSignature = signature;
-    clearMarkers(els.keyframeTrack);
-    // `entries` is time-sorted (shared/keyframes.js's upsertKeyframeEntry/
-    // moveKeyframeEntry both keep it that way) — so index 0 and the last
-    // index really are the earliest/latest keyframes, not just whichever
-    // happen to be first/last in insertion order.
-    const lastIdx = entries.length - 1;
-    entries.forEach((entry, idx) => {
-      const role = entries.length < 2 ? null : idx === 0 ? 'start' : idx === lastIdx ? 'end' : null;
-      els.keyframeTrack.appendChild(buildMarker(entry, duration, role));
+  // Never while a diamond is being dragged: rebuilding would destroy it
+  // mid-gesture. Otherwise each layer is rebuilt only when what it should
+  // show changes — and a clip that was itself rebuilt (losing its layer)
+  // simply gets a new one. Scrubbing alone changes nothing here.
+  if (!dragMarker) {
+    const entries = keyframeEngine.getKeyframeEntries();
+    const active = activeKeyframeHost(duration);
+    const passive = passiveKeyframeHosts(duration, entries);
+    const wanted = new Map();
+    const want = (host, build, sig) => {
+      const layer = markerLayer(host.el);
+      const prev = wanted.get(layer);
+      wanted.set(layer, { sig: (prev?.sig || '') + sig, builds: [...(prev?.builds || []), build] });
+    };
+    if (entries.length) {
+      want(active, (layer) => {
+        // `entries` is time-sorted (shared/keyframes.js keeps it so), so the
+        // first and last really are the earliest and latest.
+        const lastIdx = entries.length - 1;
+        entries.forEach((entry, idx) => {
+          const role = entries.length < 2 ? null : idx === 0 ? 'start' : idx === lastIdx ? 'end' : null;
+          layer.appendChild(buildMarker(entry, active.span, role));
+        });
+      }, JSON.stringify({ a: entries, s: selectedMarkerTime, span: active.span }));
+    }
+    passive.forEach((host) => {
+      const times = [...host.times].sort((a, b) => a - b);
+      want(host, (layer) => times.forEach((t) => layer.appendChild(buildPassiveMarker(t, host.span))), JSON.stringify({ p: times, span: host.span }));
+    });
+    // Rebuild what changed; empty the layers nothing wants any more.
+    wanted.forEach(({ sig, builds }, layer) => {
+      if (layer.dataset.sig === sig) return;
+      clearMarkers(layer);
+      builds.forEach((b) => b(layer));
+      layer.dataset.sig = sig;
+    });
+    [els.keyframeTrack, ...els.scroll.querySelectorAll('.timeline-kf-layer')].forEach((layer) => {
+      if (wanted.has(layer) || !layer.dataset.sig) return;
+      clearMarkers(layer);
+      layer.dataset.sig = '';
     });
   }
 
+  // The value fields show the SELECTED target's values — nothing to show without one.
+  if (!keyframeEngine.getActiveTarget()) return;
   LANES.forEach((lane) => {
     const { inputs } = laneEls[lane.key];
     lane.properties.forEach(({ property }) => {
@@ -1202,6 +1409,8 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
   el.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     el.setPointerCapture(e.pointerId);
+    // Pressing a clip moves on from any selected keyframe: Delete now means the clip.
+    selectedMarkerTime = null;
     // Each clip family owns its own selection key, so selecting a text clip
     // never leaves a stale audio selection behind that Delete would hit
     // first (and vice versa).
@@ -2198,6 +2407,15 @@ function tick() {
 
   const target = keyframeEngine.getActiveTarget();
   const targetKind = target?.kind ?? null;
+  // A selected keyframe belongs to ONE object: selecting another — even of
+  // the same kind (a second card, another caption) — lets it go, so Delete
+  // can never remove a keyframe from something no longer selected.
+  const host = keyframeEngine.getActiveTargetHost();
+  const hostKey = host ? `${host.kind}|${host.id ?? ''}|${host.phrase?.start ?? ''}|${(host.wordIndexes || []).join(',')}` : '';
+  if (hostKey !== lastTargetHostKey) {
+    lastTargetHostKey = hostKey;
+    selectedMarkerTime = null;
+  }
   if (targetKind !== lastTargetKind) {
     lastTargetKind = targetKind;
     selectedMarkerTime = null;
@@ -2212,18 +2430,29 @@ function tick() {
   const hasTarget = !!target;
   if (els.addBtn) {
     els.addBtn.disabled = !hasTarget;
-    els.addBtn.classList.toggle('active', hasTarget && keyframeEngine.hasKeyframeAtPlayhead());
+    const onKeyframe = hasTarget && keyframeEngine.hasKeyframeAtPlayhead();
+    els.addBtn.classList.toggle('active', onKeyframe);
+    // Says what the press will do.
+    const label = onKeyframe ? '◇ Remove keyframe' : '◆ Keyframe';
+    if (els.addBtn.textContent !== label) {
+      els.addBtn.textContent = label;
+      els.addBtn.title = onKeyframe ? 'Remove the keyframe at the playhead' : 'Add a keyframe at the playhead';
+    }
   }
   LANES.forEach((lane) => {
     const { inputs } = laneEls[lane.key];
     lane.properties.forEach(({ property }) => { inputs[property].disabled = !hasTarget; });
   });
 
-  if (hasTarget && duration > 0) {
+  // Even with nothing selected: every keyframed clip still shows that it
+  // has keyframes (passively) — see refreshLanes.
+  if (duration > 0) {
     refreshLanes(duration);
   } else {
-    clearMarkers(els.keyframeTrack);
-    lastLaneSignature = null;
+    [els.keyframeTrack, ...els.scroll.querySelectorAll('.timeline-kf-layer')].forEach((layer) => {
+      clearMarkers(layer);
+      layer.dataset.sig = '';
+    });
   }
 
   rafId = requestAnimationFrame(tick);
@@ -2336,15 +2565,40 @@ export function initTimelinePanel(container, options = {}) {
   els.filmstripTrack.addEventListener('pointermove', (e) => { if (filmstripScrubbing) scrubFilmstrip(e.clientX); });
   els.filmstripTrack.addEventListener('pointerup', () => { filmstripScrubbing = false; });
 
+  // Empty space on ANY lane scrubs too, like the ruler and the video strip:
+  // press anywhere along the timeline to put the playhead there, drag to
+  // scrub. Every lane track shares the ruler's axis, so the track pressed is
+  // its own reference. Clips, diamonds and buttons are not empty space —
+  // they keep their own gestures.
+  let laneScrubTrack = null;
+  const scrubLane = (clientX) => {
+    const video = getVideo();
+    const duration = video?.duration || 0;
+    if (!video || duration <= 0 || !laneScrubTrack) return;
+    const rect = laneScrubTrack.getBoundingClientRect();
+    if (!rect.width) return;
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    video.currentTime = xToTime(x, rect.width, duration);
+  };
   els.scroll.addEventListener('pointerdown', (e) => {
     // Clicking empty lane space (not a marker/clip) clears BOTH selections —
     // the "selected keyframe" and the selected audio clip — so the Delete key
     // has no stale target left over from an earlier selection.
-    if (e.target === els.scroll || e.target.classList?.contains('timeline-lane-track')) {
+    const onEmptyTrack = e.target.classList?.contains('timeline-lane-track');
+    if (e.target === els.scroll || onEmptyTrack) {
       selectedMarkerTime = null;
       audioTimeline.selectClip(null);
     }
+    if (onEmptyTrack && e.button === 0) {
+      laneScrubTrack = e.target;
+      laneScrubTrack.setPointerCapture(e.pointerId);
+      scrubLane(e.clientX);
+    }
   });
+  els.scroll.addEventListener('pointermove', (e) => { if (laneScrubTrack) scrubLane(e.clientX); });
+  const endLaneScrub = () => { laneScrubTrack = null; };
+  els.scroll.addEventListener('pointerup', endLaneScrub);
+  els.scroll.addEventListener('pointercancel', endLaneScrub);
 
   // "+ Sound" opens the sound picker (audition, then place at the playhead);
   // "+ Audio" goes straight to the OS file picker, since choosing a file IS

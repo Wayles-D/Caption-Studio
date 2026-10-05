@@ -13,6 +13,7 @@
  * so unlike text elements it is never re-sorted by time.
  */
 import { appState, updateState } from '../state.js';
+import { getComposition } from './compositionView.js';
 import { createImageLayer, normalizeImageLayer, IMAGE_ACCEPT } from '../../../shared/imageLayer.js';
 import { rememberImageFile, getSavedImageFile } from '../projectPersistence.js';
 import { getPlayheadTime } from './textElements.js';
@@ -116,8 +117,9 @@ export async function importImageFile(file, { start = getPlayheadTime() } = {}) 
   rememberImageFile(payload.assetId, file);
   loadPicture(payload.assetId, file);
 
-  const video = document.getElementById('preview-video');
-  const frameAspect = video?.videoWidth && video?.videoHeight ? video.videoWidth / video.videoHeight : 9 / 16;
+  // The CANVAS's shape (shared/composition.js), which is no longer always the video's.
+  const comp = getComposition();
+  const frameAspect = comp.width / comp.height;
   const duration = videoDuration();
   const at = clampToTimeline(start);
   const layer = createImageLayer({

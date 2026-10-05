@@ -246,15 +246,72 @@ function isIdentitySample(s) {
 }
 
 /**
+ * The video as an object in the composition, before its own transform: fitted
+ * into its resting box, its corners rounded, its shadow beneath and border
+ * on top — one RGBA layer the box plus `pad` on every side, the video
+ * centred in it, so the transform below (scale/rotate about the centre,
+ * position by the centre) carries the decoration with it exactly as the
+ * preview's CSS transform carries the element's box-shadow.
+ *
+ * Every stage keeps the SOURCE's frame timing: the transparent canvas the
+ * shadow is laid on is made from the video's own frames (split + a clearing
+ * drawbox) rather than from a generator or the still image, for the reason
+ * the `[vt_bg]` background is — a generator would resample the frame rate.
+ */
+function buildCompositionLayerStages(inLabel, outLabel, comp) {
+  const { boxWidth: bw, boxHeight: bh, pad, inputs = {} } = comp;
+  const stages = [`${inLabel}scale=${bw}:${bh},setsar=1,format=rgba[vd_box]`];
+  let current = 'vd_box';
+  if (inputs.mask) {
+    stages.push(`${inputs.mask}format=gray,scale=${bw}:${bh}[vd_mask]`);
+    stages.push(`[${current}][vd_mask]alphamerge=shortest=1[vd_rounded]`);
+    current = 'vd_rounded';
+  }
+  if (pad > 0) {
+    stages.push(`[${current}]pad=${bw + 2 * pad}:${bh + 2 * pad}:${pad}:${pad}:color=black@0,split=2[vd_top][vd_base]`);
+    stages.push('[vd_base]drawbox=x=0:y=0:w=iw:h=ih:color=black@0:t=fill:replace=1[vd_clear]');
+    let below = 'vd_clear';
+    if (inputs.under) {
+      stages.push(`[vd_clear]${inputs.under}overlay=0:0:format=auto[vd_shadowed]`);
+      below = 'vd_shadowed';
+    }
+    stages.push(`[${below}][vd_top]overlay=0:0:format=auto[vd_placed]`);
+    current = 'vd_placed';
+    if (inputs.over) {
+      stages.push(`[vd_placed]${inputs.over}overlay=0:0:format=auto[vd_bordered]`);
+      current = 'vd_bordered';
+    }
+  }
+  stages.push(`[${current}]format=rgba${outLabel}`);
+  return stages;
+}
+
+/**
  * @param {object} videoTransform - appState.videoTransform (raw, may be undefined).
  * @param {number} duration - Export duration in seconds.
  * @param {number} canvasWidth
  * @param {number} canvasHeight
- * @returns {{filterComplex: string, outputLabel: string}|null} null when the transform is the plain identity (no filter needed — `[0:v]` should be used as-is).
+ * @param {object|null} [composition] - backend/utils/videoDecoration.js's prepareVideoComposition result, plus
+ *   `inputs: {mask?, under?, over?}` — the filter labels its decoration images arrive on. When it is not a
+ *   passthrough, the output is the COMPOSITION's size and background, with the video fitted into its box and
+ *   decorated before its own transform applies; canvasWidth/canvasHeight are then the composition's size too.
+ * @returns {{filterComplex: string, outputLabel: string}|null} null when the transform is the plain identity
+ *   and the composition adds nothing (no filter needed — `[0:v]` should be used as-is).
  */
-export function buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight) {
-  if (isIdentityVideoTransform(videoTransform)) return null;
+export function buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition = null) {
+  // A composition that is just the source frame, undecorated, renders exactly
+  // as before it existed — every pre-V1.5 project takes this path.
+  const comp = composition && !composition.passthrough ? composition : null;
+  if (isIdentityVideoTransform(videoTransform) && !comp) return null;
   if (!(duration > 0)) return null;
+  // The layer the transform moves: the source frame, or — in a composition —
+  // the fitted video plus room for its decoration.
+  const layerW = comp ? comp.boxWidth + 2 * comp.pad : canvasWidth;
+  const layerH = comp ? comp.boxHeight + 2 * comp.pad : canvasHeight;
+  // What shows where the video doesn't: the canvas background. Black is
+  // emitted as the literal it always was, so the graph stays byte-identical.
+  const bgHex = composition?.background && composition.background !== '#000000' ? composition.background : null;
+  const bgColor = bgHex ? `0x${bgHex.slice(1)}` : 'black';
 
   const rawTimes = getSortedKeyframeTimes(videoTransform);
   // The animated window — before it and after it, the resolved transform is
@@ -278,8 +335,10 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
   // correct constant value out there — it's a cheap constant per-pixel op,
   // not a growing expression, so this costs nothing extra to compute, only
   // to render, and only when actually needed).
-  const preIsIdentity = !rawTimes.length || isIdentitySample(samples[0]);
-  const postIsIdentity = !rawTimes.length || isIdentitySample(samples[samples.length - 1]);
+  // Never in a composition: there, even an untransformed frame is a fitted,
+  // decorated video on a background — not the raw source.
+  const preIsIdentity = !comp && (!rawTimes.length || isIdentitySample(samples[0]));
+  const postIsIdentity = !comp && (!rawTimes.length || isIdentitySample(samples[samples.length - 1]));
   const trimStart = preIsIdentity ? windowStart : 0;
   const trimEnd = postIsIdentity ? windowEnd : duration;
 
@@ -358,8 +417,8 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
     // takes the union of the bounding box AT EVERY SAMPLED angle — not just
     // the single largest-magnitude one — rather than assume the extreme
     // angle alone is always the worst case.
-    const scaledW = canvasWidth * maxScale;
-    const scaledH = canvasHeight * maxScale;
+    const scaledW = layerW * maxScale;
+    const scaledH = layerH * maxScale;
     let neededW = 0;
     let neededH = 0;
     samples.forEach((s) => {
@@ -404,8 +463,9 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
   // explicit scale keeps the documented guarantee that the composite canvas is
   // exactly canvasWidth x canvasHeight even if that ever differs from the
   // source's own dimensions (a same-size scale is a verified no-op).
-  activeStages.push(`[vt_bg_src]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,scale=${canvasWidth}:${canvasHeight},format=yuv420p,setsar=1[vt_bg]`);
-  activeStages.push(`[vt_active_src]format=rgba[vt_fmt]`);
+  activeStages.push(`[vt_bg_src]drawbox=x=0:y=0:w=iw:h=ih:color=${bgColor}:t=fill,scale=${canvasWidth}:${canvasHeight},format=yuv420p,setsar=1[vt_bg]`);
+  if (comp) activeStages.push(...buildCompositionLayerStages('[vt_active_src]', '[vt_fmt]', comp));
+  else activeStages.push(`[vt_active_src]format=rgba[vt_fmt]`);
   activeStages.push(`[vt_fmt]scale=w='iw*(${scaleExpr})':h='ih*(${scaleExpr})'${sizeEval}[vt_scaled]`);
 
   let afterGeometry = 'vt_scaled';
@@ -474,8 +534,8 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
     // Only when scale actually ANIMATES: a constant scale already produces a
     // constant size, so a static transform emits a byte-identical graph to
     // before this branch existed.
-    const boxW = Math.ceil(canvasWidth * maxScale);
-    const boxH = Math.ceil(canvasHeight * maxScale);
+    const boxW = Math.ceil(layerW * maxScale);
+    const boxH = Math.ceil(layerH * maxScale);
     // Same `max(...,iw)` safety floor as the rotation branch — see its doc
     // comment: padW/padH come from a probe of the source dimensions, and
     // `pad` fails outright if it ever resolves smaller than its real input.

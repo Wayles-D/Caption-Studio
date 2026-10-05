@@ -495,6 +495,24 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       inputArgs.push('-f', 'concat', '-safe', '0', '-i', layer.concatListPath);
     });
 
+    // THE COMPOSITION's decoration images (backend/utils/videoDecoration.js):
+    // still PNGs the video is masked by and laid between. The mask is looped —
+    // alphamerge needs one per video frame; the two overlays repeat their
+    // single frame on their own. Absent for an undecorated video.
+    const composition = videoTransformOpts.composition || null;
+    const decorationInputs = {};
+    let nextInputIndex = 2 + extraLayers.length;
+    const decorationFiles = composition?.files || {};
+    if (decorationFiles.mask) {
+      inputArgs.push('-loop', '1', '-t', String(Math.ceil((videoTransformOpts.duration || 1) + 1)), '-i', decorationFiles.mask);
+      decorationInputs.mask = `[${nextInputIndex++}:v]`;
+    }
+    ['under', 'over'].forEach((part) => {
+      if (!decorationFiles[part]) return;
+      inputArgs.push('-i', decorationFiles[part]);
+      decorationInputs[part] = `[${nextInputIndex++}:v]`;
+    });
+
     // `fps=` resamples the demuxer's variable, duration-driven timestamps
     // into the same fixed-rate stream `-loop 1 -r 50 -t X` used to produce
     // per segment; `format=rgba` guarantees the fps filter's own output
@@ -518,7 +536,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // zero change to every existing export.
     const { videoTransform, duration, canvasWidth, canvasHeight, textBlendMode } = videoTransformOpts;
     const videoTransformChain = (duration && canvasWidth && canvasHeight)
-      ? buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight)
+      ? buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition ? { ...composition, inputs: decorationInputs } : null)
       : null;
     const baseVideoLabel = videoTransformChain ? videoTransformChain.outputLabel : '[0:v]';
 
@@ -570,7 +588,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // existed, including still being a stream copy rather than a re-encode.
     const { audio, hasSourceAudio } = videoTransformOpts;
     const audioMix = (audio && duration)
-      ? buildAudioMixGraph(audio, { duration, hasSourceAudio: hasSourceAudio !== false, firstInputIndex: 2 + extraLayers.length })
+      ? buildAudioMixGraph(audio, { duration, hasSourceAudio: hasSourceAudio !== false, firstInputIndex: nextInputIndex })
       : null;
     if (audioMix) inputArgs.push(...audioMix.inputArgs);
 

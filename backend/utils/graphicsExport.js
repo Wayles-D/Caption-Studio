@@ -20,6 +20,7 @@ import { compositeGraphicsCaptionTrack, getVideoInfo } from './graphicsComposito
 import { normalizeImageLayerList } from '../../shared/imageLayer.js';
 import { normalizeShapeLayerList } from '../../shared/shapeLayer.js';
 import { loadImageSources } from './imageAssets.js';
+import { prepareVideoComposition, compositionNeedsRender } from './videoDecoration.js';
 
 /** Whether a project has anything only this pipeline can draw: text elements, image layers or shapes. */
 function hasVisualObjects(params) {
@@ -119,7 +120,8 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   // falls back only when there is no text to draw either; otherwise the
   // caption layer is simply empty.
   // ...and the same for image layers: they too exist only in this pipeline.
-  const hasTextElements = hasVisualObjects(params);
+  // ...and a reshaped canvas or a decorated video (shared/composition.js).
+  const hasTextElements = hasVisualObjects(params) || compositionNeedsRender(params);
   const hasWords = Array.isArray(words) && words.length > 0;
   if (!hasWords && !hasTextElements) {
     return recordFailure('no-words', 'No words supplied to render.');
@@ -145,7 +147,19 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   if (!phrases.length && !hasTextElements) return recordFailure('no-phrases', 'Word list produced no renderable phrases.');
 
   try {
-    const { width, height, duration, hasAudio, frameRate } = await getVideoInfo(videoPath);
+    const { width: sourceWidth, height: sourceHeight, duration, hasAudio, frameRate } = await getVideoInfo(videoPath);
+    // THE COMPOSITION (shared/composition.js): everything below renders at the
+    // CANVAS's size, which is the source's own unless the project reshaped it.
+    // The video is placed into it, with its decoration, by the compositor's
+    // video chain (backend/utils/videoTransformFilter.js).
+    const composition = prepareVideoComposition({
+      composition: params.composition,
+      videoStyle: params.videoStyle,
+      sourceWidth,
+      sourceHeight,
+      outDir: path.join(framesDir, 'composition')
+    });
+    const { width, height } = composition;
     // Two independently composited layers: the transcript's captions, and
     // manually placed captions / text overlays. They are kept apart so the
     // caption's Text Blend Mode cannot bleed onto text the user coloured
@@ -171,6 +185,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       duration,
       canvasWidth: width,
       canvasHeight: height,
+      composition,
       textBlendMode: getASSStyleFromConfig(params).textBlendMode,
       // Manually placed CAPTIONS composite with the caption's own blend mode
       // (they are meant to look like the transcript's captions); text

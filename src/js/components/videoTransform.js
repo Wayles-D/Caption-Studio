@@ -22,7 +22,7 @@ import {
   findKeyframeEntryNear,
   evaluatePropertyAtTime
 } from '../../../shared/keyframes.js';
-import { resolveVideoTransformAtTime, isIdentityVideoTransform } from '../../../shared/videoTransform.js';
+import { applyVideoPlacement } from './compositionView.js';
 
 const STATIC_FIELD_BY_PROPERTY = { positionX: 'offsetXPct', positionY: 'offsetYPct', scale: 'scale', rotation: 'rotation', opacity: 'opacity' };
 const PROPERTY_DEFAULTS = { positionX: 0, positionY: 0, scale: 1, rotation: 0, opacity: 100 };
@@ -163,17 +163,7 @@ export function onVideoTargetChange(cb) {
  * are entirely unaffected (see src/components/PreviewStage.jsx's layering).
  */
 export function applyVideoTransformToElement(currentTime) {
-  const video = document.getElementById('preview-video');
-  if (!video) return;
-  const override = appState.videoTransform;
-  if (isIdentityVideoTransform(override)) {
-    // Common case (no override at all) — leave the element untouched rather
-    // than writing a no-op identity transform every frame.
-    if (video.style.transform) video.style.transform = '';
-    if (video.style.opacity) video.style.opacity = '';
-    return;
-  }
-  const resolved = resolveVideoTransformAtTime(override, currentTime);
-  video.style.transform = `translate(${resolved.offsetXPct}%, ${resolved.offsetYPct}%) scale(${resolved.scale}) rotate(${resolved.rotation}deg)`;
-  video.style.opacity = String(resolved.opacity / 100);
+  // The video is placed inside the COMPOSITION now (its resting box, then this
+  // transform, then its corners/border/shadow) — see compositionView.js.
+  applyVideoPlacement(currentTime);
 }

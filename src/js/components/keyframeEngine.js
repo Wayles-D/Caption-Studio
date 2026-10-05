@@ -24,6 +24,7 @@
  * The selections are mutually exclusive (each module deselects the others on
  * its own selection — see their own doc comments).
  */
+import { appState } from '../state.js';
 import {
   getKeyframeTarget as getCanvasKeyframeTarget,
   addOrUpdateKeyframeAtPlayhead as addOrUpdateCanvasKeyframeAtPlayhead,
@@ -84,6 +85,21 @@ export function getActiveTarget() {
   return { kind: canvasTarget.kind, label: CAPTION_KIND_LABELS[canvasTarget.kind] || 'Selection' };
 }
 
+/**
+ * WHAT the active target's keyframes belong to on the timeline, so the
+ * timeline can draw them on that object's own clip rather than on the video
+ * strip: the video, a text element (by id), or a transcript caption (by the
+ * phrase it is in, and — for a word, keyword or group — its word indexes).
+ * @returns {{kind:'video'}|{kind:'text', id:string}|{kind:'caption', phrase:object|null, wordIndexes:number[]|null}|null}
+ */
+export function getActiveTargetHost() {
+  if (isVideoTargetSelected()) return { kind: 'video' };
+  if (isTextTargetSelected()) return { kind: 'text', id: appState.selectedTextElementId };
+  const canvasTarget = getCanvasKeyframeTarget();
+  if (!canvasTarget) return null;
+  return { kind: 'caption', phrase: canvasTarget.phrase || null, wordIndexes: canvasTarget.wordIndexes || null };
+}
+
 export function selectVideoTarget() {
   selectVideo();
   deselectCanvasSelection();
@@ -95,6 +111,22 @@ export function addOrUpdateKeyframeAtPlayhead() {
   if (isVideoTargetSelected()) addOrUpdateVideoKeyframeAtPlayhead();
   else if (isTextTargetSelected()) addOrUpdateTextElementKeyframeAtPlayhead();
   else addOrUpdateCanvasKeyframeAtPlayhead();
+}
+
+/**
+ * The keyframe button, CapCut-style: on a keyframe it REMOVES it; anywhere
+ * else it adds one. Pressing it twice without moving the playhead undoes the
+ * first press.
+ */
+export function toggleKeyframeAtPlayhead() {
+  if (!hasKeyframeAtPlayhead()) {
+    addOrUpdateKeyframeAtPlayhead();
+    return;
+  }
+  const t = document.getElementById('preview-video')?.currentTime ?? 0;
+  const entries = getKeyframeEntries();
+  const nearest = entries.reduce((best, k) => (best == null || Math.abs(k.t - t) < Math.abs(best.t - t) ? k : best), null);
+  if (nearest) deleteKeyframeAt(nearest.t);
 }
 
 export function hasKeyframeAtPlayhead() {

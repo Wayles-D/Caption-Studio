@@ -24,8 +24,9 @@ import {
   applyVideoTransformToElement
 } from './videoTransform.js';
 import { resolveVideoTransformAtTime } from '../../../shared/videoTransform.js';
-import { appState } from '../state.js';
+import { appState, updateState } from '../state.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
+import { getVideoBoxFraction } from './compositionView.js';
 
 let overlayEl, boxEl, hitAreaEl, rotateHandleEl;
 let drag = null; // { kind: 'move'|'resize'|'rotate', startClientX, startClientY, start*, moved }
@@ -63,8 +64,27 @@ export function updateVideoTransformOverlay(currentTime) {
   const resolved = resolveVideoTransformAtTime(appState.videoTransform, currentTime);
   if (boxEl) {
     boxEl.hidden = false;
-    boxEl.style.transform = `translate(${resolved.offsetXPct}%, ${resolved.offsetYPct}%) scale(${resolved.scale}) rotate(${resolved.rotation}deg)`;
+    // Wraps the video's own box inside the composition — the same resting box
+    // and the same canvas-relative translate compositionView.js places the
+    // <video> with.
+    // A video that fills the frame keeps the box's original 3% inset (see
+    // PreviewStage.jsx), so its handles never sit on the frame's own edge.
+    const { width: fw, height: fh } = getVideoBoxFraction();
+    const inset = fw > 0.999 && fh > 0.999 ? 0.06 : 0;
+    boxEl.style.left = `${((1 - fw + inset) / 2) * 100}%`;
+    boxEl.style.top = `${((1 - fh + inset) / 2) * 100}%`;
+    boxEl.style.width = `${(fw - inset) * 100}%`;
+    boxEl.style.height = `${(fh - inset) * 100}%`;
+    boxEl.style.transform = `translate(${resolved.offsetXPct / (fw - inset)}%, ${resolved.offsetYPct / (fh - inset)}%) scale(${resolved.scale}) rotate(${resolved.rotation}deg)`;
   }
+}
+
+/** The video's centre on screen: the frame's centre moved by its current position — the point it scales and rotates about. */
+function videoCenter(rect) {
+  return {
+    x: rect.left + rect.width / 2 + (getCurrentVideoValue('positionX') / 100) * rect.width,
+    y: rect.top + rect.height / 2 + (getCurrentVideoValue('positionY') / 100) * rect.height
+  };
 }
 
 export function hideVideoTransformOverlay() {
@@ -75,6 +95,7 @@ export function hideVideoTransformOverlay() {
 function beginMove(e) {
   drag = {
     kind: 'move',
+    startTransform: JSON.parse(JSON.stringify(appState.videoTransform ?? null)),
     startClientX: e.clientX,
     startClientY: e.clientY,
     startX: getCurrentVideoValue('positionX'),
@@ -87,10 +108,10 @@ function beginMove(e) {
 function beginResize(e) {
   const rect = getPhoneFrameRect();
   if (!rect) return;
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
+  const { x: centerX, y: centerY } = videoCenter(rect);
   drag = {
     kind: 'resize',
+    startTransform: JSON.parse(JSON.stringify(appState.videoTransform ?? null)),
     startDist: Math.hypot(e.clientX - centerX, e.clientY - centerY) || 1,
     startScale: getCurrentVideoValue('scale'),
     moved: false
@@ -101,10 +122,10 @@ function beginResize(e) {
 function beginRotate(e) {
   const rect = getPhoneFrameRect();
   if (!rect) return;
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
+  const { x: centerX, y: centerY } = videoCenter(rect);
   drag = {
     kind: 'rotate',
+    startTransform: JSON.parse(JSON.stringify(appState.videoTransform ?? null)),
     startAngle: (Math.atan2(e.clientY - centerY, e.clientX - centerX) * 180) / Math.PI,
     startRotation: getCurrentVideoValue('rotation'),
     moved: false
@@ -129,8 +150,7 @@ function onPointerMove(e) {
     const yPct = drag.startY + (deltaY / rect.height) * 100;
     setVideoValues({ positionX: xPct, positionY: yPct }, { recordHistory: false });
   } else if (drag.kind === 'resize') {
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
+    const { x: centerX, y: centerY } = videoCenter(rect);
     const dist = Math.hypot(e.clientX - centerX, e.clientY - centerY) || 1;
     if (!drag.moved && Math.abs(dist - drag.startDist) < MOVE_CLICK_THRESHOLD_PX) return;
     drag.moved = true;
@@ -138,8 +158,7 @@ function onPointerMove(e) {
     const nextScale = Math.max(0.3, Math.min(3, drag.startScale * ratio));
     setVideoValue('scale', nextScale, { recordHistory: false });
   } else if (drag.kind === 'rotate') {
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
+    const { x: centerX, y: centerY } = videoCenter(rect);
     const angleDeg = (Math.atan2(e.clientY - centerY, e.clientX - centerX) * 180) / Math.PI;
     drag.moved = true;
     const nextRotation = Math.round(drag.startRotation + (angleDeg - drag.startAngle));
@@ -149,7 +168,7 @@ function onPointerMove(e) {
 
 function endDrag() {
   if (!drag) return;
-  const { kind, moved } = drag;
+  const { kind, moved, startTransform } = drag;
   drag = null;
 
   // A plain click (no real movement) on the move hit-area deselects the
@@ -163,16 +182,15 @@ function endDrag() {
   }
   if (!moved) return;
 
-  // Re-commit the final value as one undo step (mirrors canvasTransform.js's
-  // own begin/move/end-drag commit pattern) — the live values during the
-  // drag were written with recordHistory:false.
-  if (kind === 'move') {
-    setVideoValues({ positionX: getCurrentVideoValue('positionX'), positionY: getCurrentVideoValue('positionY') }, { recordHistory: true });
-  } else if (kind === 'resize') {
-    setVideoValue('scale', getCurrentVideoValue('scale'), { recordHistory: true });
-  } else if (kind === 'rotate') {
-    setVideoValue('rotation', getCurrentVideoValue('rotation'), { recordHistory: true });
-  }
+  // One undo step for the whole gesture: REWIND to where it started, then
+  // write the final value with history on — the same rewind-then-commit the
+  // image and shape gestures use. The live values during the drag were
+  // written with recordHistory:false, so committing the final value WITHOUT
+  // the rewind recorded a "before" that was already the final state, and Undo
+  // did nothing.
+  const finalTransform = JSON.parse(JSON.stringify(appState.videoTransform ?? null));
+  updateState({ videoTransform: startTransform }, { recordHistory: false });
+  updateState({ videoTransform: finalTransform }, { recordHistory: true });
 }
 
 export function initVideoCanvasControls() {

@@ -18,6 +18,7 @@ import { useAudioStore, AUDIO_DEFAULTS, AUDIO_DOCUMENT_KEYS } from '../store/aud
 import { useTextElementStore, TEXT_ELEMENT_DEFAULTS, TEXT_ELEMENT_DOCUMENT_KEYS } from '../store/textElementStore.js';
 import { useImageLayerStore, IMAGE_LAYER_DEFAULTS, IMAGE_LAYER_DOCUMENT_KEYS } from '../store/imageLayerStore.js';
 import { useShapeLayerStore, SHAPE_LAYER_DEFAULTS, SHAPE_LAYER_DOCUMENT_KEYS } from '../store/shapeLayerStore.js';
+import { useCompositionStore, COMPOSITION_STORE_DEFAULTS, COMPOSITION_DOCUMENT_KEYS } from '../store/compositionStore.js';
 
 export const MOCK_SUBTITLES = [
   { start: 0.0, end: 2.2, text: "WELCOME TO BHYND." },
@@ -45,6 +46,7 @@ const AUDIO_KEYS = new Set(Object.keys(AUDIO_DEFAULTS));
 const TEXT_ELEMENT_KEYS = new Set(Object.keys(TEXT_ELEMENT_DEFAULTS));
 const IMAGE_LAYER_KEYS = new Set(Object.keys(IMAGE_LAYER_DEFAULTS));
 const SHAPE_LAYER_KEYS = new Set(Object.keys(SHAPE_LAYER_DEFAULTS));
+const COMPOSITION_KEYS = new Set(Object.keys(COMPOSITION_STORE_DEFAULTS));
 
 /**
  * What undo/redo snapshots: every caption/transform style field, PLUS the
@@ -73,7 +75,9 @@ const UNDO_TRACKED_KEYS = [
   // project, never touched by "Reset Style".
   ...IMAGE_LAYER_DOCUMENT_KEYS,
   // Shapes and the layer stack's stored order — content too.
-  ...SHAPE_LAYER_DOCUMENT_KEYS
+  ...SHAPE_LAYER_DOCUMENT_KEYS,
+  // The canvas (shape, background) and the video's styling inside it.
+  ...COMPOSITION_DOCUMENT_KEYS
 ];
 
 /**
@@ -118,6 +122,7 @@ function storeFor(key) {
   if (TEXT_ELEMENT_KEYS.has(key)) return useTextElementStore;
   if (IMAGE_LAYER_KEYS.has(key)) return useImageLayerStore;
   if (SHAPE_LAYER_KEYS.has(key)) return useShapeLayerStore;
+  if (COMPOSITION_KEYS.has(key)) return useCompositionStore;
   return useEditorStore;
 }
 
@@ -144,7 +149,8 @@ export const appState = new Proxy({}, {
       || prop in useAudioStore.getState()
       || prop in useTextElementStore.getState()
       || prop in useImageLayerStore.getState()
-      || prop in useShapeLayerStore.getState();
+      || prop in useShapeLayerStore.getState()
+      || prop in useCompositionStore.getState();
   }
 });
 
@@ -371,6 +377,10 @@ export function getStyleParams() {
     // order (shared/visualLayers.js) — the exporter composites in it.
     shapeLayers: appState.shapeLayers,
     layerOrder: appState.layerOrder,
+    // The composition (shared/composition.js): the canvas the exporter renders
+    // into, and the video's styling inside it.
+    composition: appState.composition,
+    videoStyle: appState.videoStyle,
     // The transcript's OWN captions, now that they are edited rather than
     // re-derived (see shared/captionEvent.js). The exporter renders these
     // instead of regrouping the word list, which is what makes a retimed,

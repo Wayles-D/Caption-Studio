@@ -1927,3 +1927,113 @@ body.light-theme {
 .timeline-shape-clip-swatch.kind-pill { border-radius: 5px; }
 .timeline-shape-clip-swatch.kind-line { height: 2px; }
 .timeline-shape-clip-swatch.kind-arrow { clip-path: polygon(0 35%, 60% 35%, 60% 0, 100% 50%, 60% 100%, 60% 65%, 0 65%); }
+
+/* KEYFRAMES ON THEIR OWN CLIP (timelinePanel.js's refreshLanes): a caption's
+   or text clip's diamonds sit inside that clip, along its bottom edge, so
+   it reads as "this clip is animated" without covering its label. */
+.timeline-kf-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.timeline-kf-layer .timeline-marker {
+  pointer-events: auto;
+  top: auto;
+  bottom: 1px;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
+}
+
+.timeline-kf-layer .timeline-marker.selected {
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55), 0 0 0 4px var(--accent-glow);
+}
+
+/* Something NOT selected that has keyframes: a quiet "this is animated" —
+   select it to get the editable diamonds. */
+.timeline-marker.is-passive {
+  pointer-events: none;
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* LANE COLLAPSE (timelinePanel.js's addCollapseToggle). The chevron points
+   down while open, right while folded. */
+.timeline-lane-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  padding: 0;
+  margin-right: 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 150ms, transform 150ms;
+}
+
+.timeline-lane-collapse:hover {
+  color: var(--accent-color);
+}
+
+.is-collapsed > .timeline-lane-gutter .timeline-lane-collapse,
+.is-collapsed > .timeline-filmstrip-gutter .timeline-lane-collapse {
+  transform: rotate(-90deg);
+}
+
+/* Folded: a slim strip, its clips thin bars at their real times — enough to
+   see where things are, nothing to read. The inline heights stackClips gives
+   tracks and clips are overridden; nothing else about a clip changes. */
+.timeline-lane.is-collapsed {
+  min-height: 18px !important;
+}
+
+.timeline-lane.is-collapsed .timeline-lane-track {
+  height: 10px !important;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+.timeline-lane.is-collapsed .timeline-lane-track > * {
+  top: 2px !important;
+  bottom: auto !important;
+  height: 6px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  transform: none !important;
+  border-width: 0 !important;
+  border-radius: 2px !important;
+}
+
+.timeline-lane.is-collapsed .timeline-lane-track > * > * {
+  display: none !important;
+}
+
+.timeline-lane.is-collapsed .timeline-add-clip-btn,
+.timeline-filmstrip-row.is-collapsed .timeline-add-clip-btn {
+  display: none;
+}
+
+.timeline-filmstrip-row.is-collapsed .timeline-filmstrip-track {
+  height: 10px;
+}
+
+.timeline-filmstrip-row.is-collapsed .timeline-filmstrip-track > *,
+.timeline-filmstrip-row.is-collapsed .timeline-keyframe-overlay {
+  display: none;
+}
+
+/* Some clips draw their shape with an inner element (an SFX clip's pill),
+   which the fold hides — so every folded clip gets a plain fill of its own. */
+.timeline-lane.is-collapsed .timeline-lane-track > * {
+  background: color-mix(in srgb, var(--accent-color) 70%, transparent) !important;
+  min-width: 3px;
+}
