@@ -457,7 +457,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     //    (see graphicsFrameGenerator.js's buildTextElementSegments).
     // textBlendMode is read off the options object directly: its own
     // destructuring happens further down, after the video-transform chain.
-    const { textElementSegments, manualCaptionSegments, imageUnderSegments, textBlendMode: captionBlendMode } = videoTransformOpts;
+    const { textElementSegments, manualCaptionSegments, imageUnderSegments, layerRuns, textBlendMode: captionBlendMode } = videoTransformOpts;
     const extraLayers = [];
     const pushLayer = (segs, blendMode, prefix, label, beneathCaptions = false) => {
       if (!segs || !segs.length) return;
@@ -465,13 +465,26 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       if (!timeline) return;
       extraLayers.push({ timeline, blendMode, prefix, label, beneathCaptions });
     };
-    // Image layers placed UNDER the captions (shared/imageLayer.js): a plain
-    // alpha-over onto the video, composited BEFORE the caption track — so the
-    // captions, with their own blend mode, land on top of the picture exactly
-    // as the preview's captions canvas sits above its images-under canvas.
-    pushLayer(imageUnderSegments, 'normal', 'iu', 'imgunder', true);
-    pushLayer(manualCaptionSegments, captionBlendMode, 'mc', 'mcaptrack');
-    pushLayer(textElementSegments, 'normal', 'tt', 'texttrack');
+    if (Array.isArray(layerRuns)) {
+      // THE LAYER STACK's runs (shared/visualLayers.js), bottom to top: each
+      // its own stream, composited in order — those beneath the captions
+      // before the caption track, the rest after it. A manual-caption run
+      // takes the caption's blend mode; every other run is a plain alpha-over.
+      layerRuns.forEach((run, i) => pushLayer(
+        run.segments,
+        run.kind === 'caption-blend' ? captionBlendMode : 'normal',
+        `lr${i}_`,
+        `layer${i}`,
+        !!run.beneathCaptions
+      ));
+    } else {
+      // The V1.3 names: image layers placed UNDER the captions (a plain
+      // alpha-over composited BEFORE the caption track), manual captions
+      // (the caption's blend mode), then text (plain).
+      pushLayer(imageUnderSegments, 'normal', 'iu', 'imgunder', true);
+      pushLayer(manualCaptionSegments, captionBlendMode, 'mc', 'mcaptrack');
+      pushLayer(textElementSegments, 'normal', 'tt', 'texttrack');
+    }
 
     const concatListPath = writeConcatManifest(orderedSegments);
     const inputArgs = ['-y', '-i', inputVideoPath, '-f', 'concat', '-safe', '0', '-i', concatListPath];

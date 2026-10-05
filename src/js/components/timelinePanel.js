@@ -15,7 +15,9 @@
  * container; rebuilds its own children imperatively.
  */
 import * as keyframeEngine from './keyframeEngine.js';
-import { undo, redo, getHistoryState, appState, updateState } from '../state.js';
+import { undo, redo, getHistoryState, appState, updateState, getStyleParams } from '../state.js';
+import { resolveTextElementParams } from '../../../shared/textElement.js';
+import { entranceFromParams, normalizeMotion } from '../../../shared/motion/motion.js';
 import {
   getFilmstripWindow,
   chooseSecondsPerTile,
@@ -30,6 +32,8 @@ import { getSoundDefinition } from '../../../shared/soundRegistry.js';
 import { getAudioTrackDuration } from '../../../shared/audioTimeline.js';
 import * as textElements from './textElements.js';
 import * as imageLayers from './imageLayers.js';
+import * as shapeLayers from './shapeLayers.js';
+import { SHAPE_KINDS, SHAPE_LABELS } from '../../../shared/shapeLayer.js';
 import * as captionEvents from './captionEvents.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 
@@ -167,6 +171,7 @@ function applyTimelineZoom(nextZoom, anchorClientX = null) {
   // 1x may not overlap once stretched, so the rows have to be repacked.
   lastTextSignature = null;
   lastImageSignature = null;
+  lastShapeSignature = null;
   lastAudioSignature = null;
 }
 
@@ -498,6 +503,20 @@ function buildDom(container, options) {
   });
   controlsRow.appendChild(addImageBtn);
 
+  // "+ Shape" — a generated shape at the playhead (shared/shapeLayer.js),
+  // picked from a short menu of the kinds there are.
+  const addShapeBtn = document.createElement('button');
+  addShapeBtn.type = 'button';
+  addShapeBtn.className = 'timeline-add-keyframe-btn timeline-add-shape-btn';
+  addShapeBtn.id = 'timeline-add-shape-btn';
+  addShapeBtn.textContent = '+ Shape';
+  addShapeBtn.title = 'Add a shape at the playhead';
+  addShapeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleShapeMenu(addShapeBtn);
+  });
+  controlsRow.appendChild(addShapeBtn);
+
   // Precision (X/Y/scale%/rotation°) numeric fields: shown inline (hidden by
   // default) on mobile/tablet, the same as always — the primary way to set
   // these values is direct manipulation on the canvas (drag/resize/rotate —
@@ -658,6 +677,10 @@ function buildDom(container, options) {
   const imagesLane = buildAudioLane('images', 'Images', 'Add a picture at the playhead');
   imagesLane.row.hidden = true;
   lanesEl.appendChild(imagesLane.row);
+  // SHAPE LAYERS: their own lane, like images — and only once there is one.
+  const shapesLane = buildAudioLane('shapes', 'Shapes', 'Add a shape at the playhead');
+  shapesLane.row.hidden = true;
+  lanesEl.appendChild(shapesLane.row);
   lanesEl.appendChild(interludeLane.row);
   lanesEl.appendChild(captionsLane.row);
   lanesEl.appendChild(textLane.row);
@@ -764,6 +787,7 @@ function buildDom(container, options) {
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
     captionsTrack: captionsLane.track, interludeTrack: interludeLane.track, interludeRow: interludeLane.row, addInterludeBtn: interludeLane.addBtn,
     imagesTrack: imagesLane.track, imagesRow: imagesLane.row, addImagesLaneBtn: imagesLane.addBtn,
+    shapesTrack: shapesLane.track, shapesRow: shapesLane.row, addShapesLaneBtn: shapesLane.addBtn,
     addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn,
     addCaptionBtn: captionsLane.addBtn, addVideoBtn,
     zoomInBtn, zoomOutBtn, zoomLevel
@@ -1008,6 +1032,7 @@ document.addEventListener('keydown', (e) => {
   }
 
   if (imageLayers.removeSelectedImageLayer()) return;
+  if (shapeLayers.removeSelectedShapeLayer()) return;
 
   if (selectedMarkerTime != null) {
     keyframeEngine.deleteKeyframeAt(selectedMarkerTime);
@@ -1183,6 +1208,8 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
     if (kind === 'image') {
       // Releases every other selection in the same write.
       imageLayers.selectImageLayer(clip.id);
+    } else if (kind === 'shape') {
+      shapeLayers.selectShapeLayer(clip.id);
     } else if (kind === 'text') {
       textElements.selectTextElement(clip.id);
       audioTimeline.selectClip(null);
@@ -1217,7 +1244,8 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       // ...and the sounds, which a text move carries along if they are linked.
       soundsBefore: kind === 'text' ? appState.soundEvents : null,
       // The image list, for the same rewind-then-commit.
-      imagesBefore: kind === 'image' ? appState.imageLayers : null
+      imagesBefore: kind === 'image' ? appState.imageLayers : null,
+      shapesBefore: kind === 'shape' ? appState.shapeLayers : null
     };
   });
 
@@ -1246,6 +1274,9 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       if (dragClip.kind === 'image' && dragClip.imagesBefore) {
         updateState({ imageLayers: dragClip.imagesBefore }, { recordHistory: false });
       }
+      if (dragClip.kind === 'shape' && dragClip.shapesBefore) {
+        updateState({ shapeLayers: dragClip.shapesBefore }, { recordHistory: false });
+      }
       applyClipDrag(e.clientX, el, { recordHistory: true });
     }
     dragClip = null;
@@ -1256,12 +1287,42 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
   el.addEventListener('click', (e) => {
     e.stopPropagation();
     // A plain click (no drag) selects and moves the playhead to the clip, so
-    // pressing play immediately auditions it in context. Matches what
+    // what you clicked is on the canvas, ready to edit. Matches what
     // clicking a keyframe marker already does.
     if (dragClip?.moved) return;
     const video = getVideo();
-    if (video && mode === 'move') video.currentTime = clip.startTime ?? clip.start ?? 0;
+    if (!video || mode !== 'move') return;
+    const start = clip.startTime ?? clip.start ?? 0;
+    const shown = clipShownTime(kind, clip, start);
+    // Already on the visible part of it: leave the playhead where it is.
+    const end = clip.end ?? null;
+    if (shown > start && video.currentTime >= shown && end != null && video.currentTime < end) return;
+    video.currentTime = shown;
   });
+}
+
+/**
+ * Where a click on a clip puts the playhead: its first frame, or — for
+ * anything that ENTERS (fades, pops, slides in) — the first frame its entrance
+ * has finished. An entrance starts fully transparent, so its first frame
+ * shows nothing: a cinematic interlude clicked on the timeline showed only
+ * its background, the text invisible until the playhead was nudged forward.
+ * Capped at the clip's middle so a short clip with a long entrance still
+ * lands inside itself. Sounds and audio keep their start — there, the start
+ * is what you want to hear.
+ */
+function clipShownTime(kind, clip, start) {
+  let entrance = null;
+  if (kind === 'text') {
+    entrance = entranceFromParams(resolveTextElementParams(getStyleParams(), clip, start));
+  } else if (kind === 'caption') {
+    entrance = entranceFromParams(getStyleParams());
+  } else if (kind === 'image' || kind === 'shape') {
+    entrance = (clip.motions || []).map(normalizeMotion).find((m) => m?.kind === 'entrance') || null;
+  }
+  if (!entrance || !(entrance.duration > 0)) return start;
+  const end = Number.isFinite(clip.end) ? clip.end : start + entrance.duration;
+  return Math.min(start + entrance.duration, start + (end - start) / 2);
 }
 
 /** Translates the pointer's X into the timeline edit this drag represents. */
@@ -1278,6 +1339,7 @@ function applyClipDrag(clientX, el, options) {
     if (dragClip.kind === 'sound') audioTimeline.moveSoundEvent(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'text') textElements.moveTextElement(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'image') imageLayers.moveImageLayer(dragClip.id, nextStart, options);
+    else if (dragClip.kind === 'shape') shapeLayers.moveShapeLayer(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'caption') captionEvents.moveCaptionEventTo(dragClip.id, nextStart, options);
     else audioTimeline.moveAudioTrack(dragClip.id, nextStart, options);
     return;
@@ -1293,6 +1355,10 @@ function applyClipDrag(clientX, el, options) {
   // A picture has no media timing either: trimming an edge is a plain retime.
   if (dragClip.kind === 'image') {
     imageLayers.trimImageLayer(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
+    return;
+  }
+  if (dragClip.kind === 'shape') {
+    shapeLayers.trimShapeLayer(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
     return;
   }
 
@@ -1527,6 +1593,86 @@ function buildImageClip(layer, duration, isSelected) {
     el.appendChild(handle);
   });
   return el;
+}
+
+/** One clip for one shape layer — the same clip element and gestures, kind 'shape'. Its fill colour is its swatch. */
+function buildShapeClip(shape, duration, isSelected) {
+  const el = document.createElement('div');
+  el.className = 'timeline-text-clip is-shape';
+  if (isSelected) el.classList.add('selected');
+  if (!shape.enabled) el.classList.add('disabled');
+  el.style.left = `${timeToPercent(shape.start, duration)}%`;
+  el.style.width = `${Math.max(1, timeToPercent(shape.end, duration) - timeToPercent(shape.start, duration))}%`;
+  el.style.setProperty('--shape-swatch', shape.appearance.fill.enabled ? shape.appearance.fill.color : 'transparent');
+  el.dataset.clipId = shape.id;
+  el.tabIndex = 0;
+  el.title = `${SHAPE_LABELS[shape.kind]} · ${shape.start.toFixed(2)}s → ${shape.end.toFixed(2)}s — drag to move, drag an edge to retime, Delete to remove`;
+  const swatch = document.createElement('span');
+  swatch.className = `timeline-shape-clip-swatch kind-${shape.kind}`;
+  el.appendChild(swatch);
+  const label = document.createElement('span');
+  label.className = 'timeline-text-clip-label';
+  label.textContent = SHAPE_LABELS[shape.kind];
+  el.appendChild(label);
+  attachClipPointerHandlers(el, shape, 'shape', 'move');
+  ['start', 'end'].forEach((edge) => {
+    const handle = document.createElement('div');
+    handle.className = `timeline-text-clip-handle ${edge}`;
+    handle.title = edge === 'start' ? 'Change when it appears' : 'Change when it disappears';
+    attachClipPointerHandlers(handle, shape, 'shape', edge === 'start' ? 'trim-start' : 'trim-end');
+    el.appendChild(handle);
+  });
+  return el;
+}
+
+let lastShapeSignature = null;
+function refreshShapeLane(duration) {
+  const shapes = appState.shapeLayers || [];
+  const selectedId = appState.selectedShapeLayerId;
+  const signature = JSON.stringify({ shapes, selectedId, duration });
+  if (signature === lastShapeSignature || dragClip) return;
+  lastShapeSignature = signature;
+  clearClips(els.shapesTrack);
+  els.shapesRow.hidden = shapes.length === 0;
+  if (!(duration > 0) || !shapes.length) return;
+  const clips = shapes.map((shape) => {
+    const clip = buildShapeClip(shape, duration, shape.id === selectedId);
+    els.shapesTrack.appendChild(clip);
+    return clip;
+  });
+  sizeLaneForRows(els.shapesTrack, stackClips(els.shapesTrack, clips));
+}
+
+/** The "+ Shape" menu: one row per kind; picking one adds it at the playhead. */
+function closeShapeMenu() {
+  document.getElementById('timeline-shape-menu')?.remove();
+}
+function toggleShapeMenu(anchor) {
+  if (document.getElementById('timeline-shape-menu')) { closeShapeMenu(); return; }
+  const menu = document.createElement('div');
+  menu.id = 'timeline-shape-menu';
+  menu.className = 'timeline-convert-menu';
+  SHAPE_KINDS.forEach((kind) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'timeline-convert-menu-item';
+    item.dataset.shapeKind = kind;
+    item.textContent = SHAPE_LABELS[kind];
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeShapeMenu();
+      shapeLayers.addShapeLayer(kind);
+    });
+    menu.appendChild(item);
+  });
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.left = `${Math.round(r.left)}px`;
+  menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  setTimeout(() => document.addEventListener('pointerdown', function away(ev) {
+    if (!menu.contains(ev.target)) { closeShapeMenu(); document.removeEventListener('pointerdown', away, true); }
+  }, true), 0);
 }
 
 let lastImageSignature = null;
@@ -2006,6 +2152,7 @@ function tick() {
   // exists independently of whatever keyframe target happens to be selected.
   refreshTextLane(duration);
   refreshImageLane(duration);
+  refreshShapeLane(duration);
   if (els.timeReadout) els.timeReadout.textContent = formatTime(currentTime);
 
   const paused = video?.paused ?? true;
@@ -2094,6 +2241,7 @@ export function initTimelinePanel(container, options = {}) {
   lastAudioSignature = null;
   lastTextSignature = null;
   lastImageSignature = null;
+  lastShapeSignature = null;
   dragClip = null;
   timelineZoom = 1;
   autoFollow = true;
@@ -2217,6 +2365,11 @@ export function initTimelinePanel(container, options = {}) {
   els.addInterludeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     textElements.addInterlude();
+  });
+
+  els.addShapesLaneBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleShapeMenu(els.addShapesLaneBtn);
   });
 
   els.addImagesLaneBtn.addEventListener('click', (e) => {

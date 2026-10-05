@@ -13,9 +13,10 @@
  * so unlike text elements it is never re-sorted by time.
  */
 import { appState, updateState } from '../state.js';
-import { createImageLayer, normalizeImageLayer, IMAGE_LAYER_PLACEMENTS, IMAGE_ACCEPT } from '../../../shared/imageLayer.js';
+import { createImageLayer, normalizeImageLayer, IMAGE_ACCEPT } from '../../../shared/imageLayer.js';
 import { rememberImageFile, getSavedImageFile } from '../projectPersistence.js';
 import { getPlayheadTime } from './textElements.js';
+import { placeAboveInLayerOrder } from './layerStack.js';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const MIN_DURATION = 0.1;
@@ -190,37 +191,11 @@ export function trimImageLayer(id, edge, time, options) {
   return updateImageLayer(id, { end: Math.max(t, layer.start + MIN_DURATION) }, options);
 }
 
-/** Its stacking placement: under the captions, above them, or above all text. */
-export function setImageLayerPlacement(id, placement) {
-  if (!IMAGE_LAYER_PLACEMENTS.includes(placement)) return null;
-  return updateImageLayer(id, { layer: placement });
-}
-
-/**
- * Restacks it among the images at its own placement: 'forward' / 'backward'
- * one step, or to the 'front' / 'back'. Only the images sharing its
- * placement are reordered; the rest keep their places.
- */
-export function reorderImageLayer(id, direction) {
-  const layers = getImageLayers();
-  const layer = layers.find((img) => img.id === id);
-  if (!layer) return null;
-  const group = layers.filter((img) => img.layer === layer.layer);
-  const pos = group.indexOf(layer);
-  const target = direction === 'front' ? group.length - 1
-    : direction === 'back' ? 0
-      : direction === 'forward' ? Math.min(group.length - 1, pos + 1)
-        : Math.max(0, pos - 1);
-  if (target === pos) return layer;
-  const reordered = group.slice();
-  reordered.splice(pos, 1);
-  reordered.splice(target, 0, layer);
-  // Put the group back into the slots it occupied in the full list.
-  let k = 0;
-  const next = layers.map((img) => (img.layer === layer.layer ? reordered[k++] : img));
-  writeImageLayers(next);
-  return layer;
-}
+// Its place among everything else is the one layer stack's
+// (shared/visualLayers.js, ./layerStack.js). The `layer` field V1.3 wrote
+// ('under-captions' / 'under-text' / 'over-text') is still READ — it places
+// the picture in the derived default order of a project nobody has
+// restacked — but nothing writes it any more.
 
 /** A copy with its own identity, placed directly above the original and selected. */
 export function duplicateImageLayer(id) {
@@ -232,7 +207,7 @@ export function duplicateImageLayer(id) {
   const copy = normalizeImageLayer({ ...JSON.parse(JSON.stringify(layers[idx])), id: undefined });
   const next = layers.slice();
   next.splice(idx + 1, 0, copy);
-  writeImageLayers(next);
+  updateState({ imageLayers: next, ...placeAboveInLayerOrder(copy.id, id) }, { recordHistory: true });
   selectImageLayer(copy.id);
   return copy;
 }
@@ -267,6 +242,7 @@ export function selectImageLayer(id) {
   }
   updateState({
     selectedImageLayerId: id,
+    selectedShapeLayerId: null,
     selectedTextElementId: null,
     selectedCaptionEventId: null,
     selectedAudioClipId: null

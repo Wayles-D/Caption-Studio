@@ -38,7 +38,7 @@ const ROW = `w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm
   text-left cursor-pointer transition-colors duration-150
   hover:border-[var(--accent-color)] hover:bg-[rgba(0,246,172,0.06)]`;
 
-export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTextElementId = null }) {
+export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTextElementId = null, placeAt = null }) {
   const rootRef = useRef(null);
   const [query, setQuery] = useState('');
   const sections = useMemo(() => listSoundSections(), []);
@@ -161,6 +161,8 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
                           // From an interlude's "+ Sound at start": placed at
                           // its first frame and linked, so it moves with it.
                           else if (attachToTextElementId) textElements.addLinkedSound(attachToTextElementId, sound.id);
+                          // From a transcript word's ♪: on that word's start.
+                          else if (Number.isFinite(placeAt)) audioTimeline.addSoundEvent(sound.id, placeAt);
                           else audioTimeline.addSoundEvent(sound.id);
                           onClose();
                         }}

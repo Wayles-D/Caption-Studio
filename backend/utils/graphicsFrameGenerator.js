@@ -39,7 +39,9 @@ import {
   resolveInterludeBackground
 } from '../../shared/textElement.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
-import { normalizeImageLayerList, getImageLayerBoundaryTimes, imageLayerMotionSpans, drawImageLayer, textLayerStack } from '../../shared/imageLayer.js';
+import { normalizeImageLayerList, getImageLayerBoundaryTimes, imageLayerMotionSpans, drawImageLayer } from '../../shared/imageLayer.js';
+import { normalizeShapeLayerList, getShapeLayerBoundaryTimes, shapeLayerMotionSpans, drawShapeLayer } from '../../shared/shapeLayer.js';
+import { resolveLayerStack, layerRuns } from '../../shared/visualLayers.js';
 
 /**
  * Whether a job with this style should render via the graphics pipeline
@@ -474,20 +476,32 @@ function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
  * @returns {{start:number,end:number,file:string}[]} Contiguous segments covering [0, videoDuration), or [] when there is no text at all (in which case the caller adds no second layer and the export is byte-identical to one without this feature).
  */
 /**
- * @param {object} [layerImages] - Image layers drawn in this layer
- *   (shared/imageLayer.js): `images` (already normalized), the decoded
- *   `imageSources` (assetId → image, see backend/utils/imageAssets.js), and
- *   the PNG `filePrefix`. Without images, every frame is exactly what it was
- *   before images existed.
+ * One compositing RUN of the layer stack (shared/visualLayers.js's
+ * layerRuns) as a stream of PNG segments: its text elements, image layers
+ * and shape layers, each drawn by its own shared drawing function, in the
+ * run's stack order — the order the preview draws the same run in.
+ *
+ * @param {object[]} entries - The run's stack entries, bottom to top ({ type, id, item }).
+ * @param {object} options - `imageSources` (assetId → decoded picture, see
+ *   backend/utils/imageAssets.js; an image whose picture is missing is
+ *   skipped) and the run's own PNG `filePrefix` (unique per run, so two runs
+ *   never write the same file).
  */
-function buildTextElementSegments(textElements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { images = [], imageSources = null, filePrefix = 'text', imagesOnly = false } = {}) {
-  // The same "does it draw anything" rule the preview uses — an interlude
-  // with no words still draws its background (see isTextElementRenderable).
-  const active = (textElements || []).filter(isTextElementRenderable);
-  // Only images whose picture actually decoded — a missing one is skipped
-  // (with a warning, by loadImageSources), not drawn as nothing at its edges.
-  const activeImages = (images || []).filter((img) => img.enabled !== false && imageSources?.has(img.assetId));
-  if (!active.length && !activeImages.length) return [];
+function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources = null, filePrefix = 'run' } = {}) {
+  // What this run can actually draw: text elements by the preview's own "does
+  // it draw anything" rule (an interlude with no words still draws its
+  // background — isTextElementRenderable), images whose picture decoded,
+  // enabled shapes.
+  const drawable = (entries || []).filter(({ type, item }) => (
+    type === 'text' ? isTextElementRenderable(item)
+      : type === 'image' ? item.enabled !== false && !!imageSources?.has(item.assetId)
+        : type === 'shape' ? item.enabled !== false
+          : false
+  ));
+  if (!drawable.length) return [];
+  const active = drawable.filter((e) => e.type === 'text').map((e) => e.item);
+  const activeImages = drawable.filter((e) => e.type === 'image').map((e) => e.item);
+  const activeShapes = drawable.filter((e) => e.type === 'shape').map((e) => e.item);
 
   registerBackendCanvasFonts();
 
@@ -496,6 +510,7 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
   const addCut = (t) => { if (t > 0 && t < videoDuration) cuts.add(t); };
   getTextElementBoundaryTimes(active).forEach(addCut);
   getImageLayerBoundaryTimes(activeImages).forEach(addCut);
+  getShapeLayerBoundaryTimes(activeShapes).forEach(addCut);
 
   // ...plus dense sample points wherever an element is actually MOVING. Each
   // segment is one static PNG drawn at its own start time, so a stretch cut
@@ -540,9 +555,12 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     });
   });
 
-  // An image's motions, sampled on the same grid as an element's.
+  // Image and shape motions, sampled on the same grid as an element's.
   activeImages.forEach((img) => {
     imageLayerMotionSpans(img).forEach((span) => addSamples(Math.max(span.start, img.start), Math.min(span.end, img.end)));
+  });
+  activeShapes.forEach((shape) => {
+    shapeLayerMotionSpans(shape).forEach((span) => addSamples(Math.max(span.start, shape.start), Math.min(span.end, shape.end)));
   });
 
   const boundaries = Array.from(cuts).sort((a, b) => a - b);
@@ -571,13 +589,12 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     // A plain overlap test is exact here with no epsilon, because the cuts
     // are taken AT every element boundary: no element can partially cover a
     // segment, so "overlaps" and "covers" are the same thing.
-    // Drawn in the preview's order (orderForCompositing): at most one
-    // interlude, which covers the frame, with overlays on top of it.
-    const visible = orderForCompositing(active.filter((el) => el.start < end && el.end > start));
-    // Images over the same half-open span — cut at their own edges, so
-    // "overlaps" is "covers" here too.
-    const visibleImages = activeImages.filter((img) => img.start < end && img.end > start);
-    if (!visible.length && !visibleImages.length) {
+    // Drawn in the run's stack order. (A cinematic card's background is
+    // opaque and full-frame, so when two overlap, the upper one covers the
+    // lower exactly as V1.3's "only the latest-starting card" did — the
+    // default stack puts the latest-starting one on top.)
+    const visible = drawable.filter(({ item }) => item.start < end && item.end > start);
+    if (!visible.length) {
       // Nothing on screen — the shared fully-transparent frame, exactly as
       // the caption stream fills its own gaps.
       segments.push({ start, end, file: blankFile });
@@ -585,17 +602,16 @@ function buildTextElementSegments(textElements, params, canvasWidth, canvasHeigh
     }
 
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    // The shared stacking order (shared/imageLayer.js's textLayerStack) — the
-    // order the preview's text canvas draws in. The images-under layer has no
-    // text in it: its images, in list order (the preview's images-under canvas).
-    const stack = imagesOnly
-      ? visibleImages.map((item) => ({ type: 'image', item }))
-      : textLayerStack(visible, visibleImages);
-    stack.forEach(({ type, item: element }) => {
+    // Each object draws itself — the same shared functions the preview calls.
+    visible.forEach(({ type, item: element }) => {
       if (type === 'image') {
         drawImageLayer(ctx, element, imageSources.get(element.assetId), {
           canvasWidth, canvasHeight, time: start, createOffscreenCanvas: (w, h) => createCanvas(w, h)
         });
+        return;
+      }
+      if (type === 'shape') {
+        drawShapeLayer(ctx, element, { canvasWidth, canvasHeight, time: start, createOffscreenCanvas: (w, h) => createCanvas(w, h) });
         return;
       }
       // A cinematic interlude's full-frame background: an OPAQUE PNG for this
@@ -693,23 +709,42 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
   //
   // Both are built by the SAME function — one model, one renderer; only
   // which stream they land in differs.
+  // THE LAYER STACK (shared/visualLayers.js): every text element, image and
+  // shape, and the transcript's captions, in one order — cut into runs that
+  // composite the same way. Each run below and above the captions becomes
+  // one stream of its own (graphicsCompositor's layerRuns), composited in
+  // order. A project nobody has restacked uses the derived default order,
+  // which reproduces V1.3 — the same four streams, the same frames.
   const allElements = normalizeTextElementList(params.textElements);
-  const buildLayer = (elements, layerImages) => buildTextElementSegments(
-    elements, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, layerImages
-  );
-  // IMAGE LAYERS (shared/imageLayer.js): those above the captions are drawn
-  // INTO the text layer, in the shared stacking order (textLayerStack);
-  // those under the captions are a layer of their own, composited onto the
-  // video before the captions (graphicsCompositor's imageUnderSegments).
-  // Both are empty for a project without images.
-  const images = imageSources ? normalizeImageLayerList(params.imageLayers) : [];
-  const under = images.filter((img) => img.layer === 'under-captions');
-  const above = images.filter((img) => img.layer !== 'under-captions');
+  const stack = resolveLayerStack({
+    layerOrder: Array.isArray(params.layerOrder) ? params.layerOrder : safeJsonList(params.layerOrder),
+    textElements: allElements,
+    imageLayers: normalizeImageLayerList(params.imageLayers),
+    shapeLayers: normalizeShapeLayerList(params.shapeLayers)
+  });
+  const runs = layerRuns(stack)
+    .filter((run) => run.kind !== 'captions')
+    .map((run) => ({
+      kind: run.kind,
+      beneathCaptions: run.beneathCaptions,
+      segments: buildRunSegments(run.entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources, filePrefix: `run${run.index}` })
+    }))
+    .filter((run) => run.segments.length);
+  // The V1.3 names, for the default stack's shape (one stream beneath the
+  // captions, one blended manual-caption stream, one plain stream above):
+  // kept so callers and tests that speak in them still work.
+  const firstRun = (pred) => runs.find(pred)?.segments || [];
 
   return {
     captions: segments,
-    imagesUnder: buildLayer([], { images: under, imageSources, filePrefix: 'img-under', imagesOnly: true }),
-    manualCaptions: buildLayer(allElements.filter((el) => el.kind === 'caption')),
-    text: buildLayer(allElements.filter((el) => el.kind !== 'caption'), { images: above, imageSources })
+    runs,
+    imagesUnder: firstRun((r) => r.beneathCaptions),
+    manualCaptions: firstRun((r) => !r.beneathCaptions && r.kind === 'caption-blend'),
+    text: firstRun((r) => !r.beneathCaptions && r.kind === 'plain')
   };
+}
+
+function safeJsonList(raw) {
+  if (typeof raw !== 'string') return null;
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v : null; } catch { return null; }
 }

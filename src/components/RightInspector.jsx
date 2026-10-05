@@ -21,7 +21,8 @@
  */
 import { useEffect, useRef } from 'react';
 import { useEditorStore } from '../store/editorStore.js';
-import { buildWordChip } from '../js/components/transcriptEditorState.js';
+import { useAudioStore } from '../store/audioStore.js';
+import { buildWordChip, refreshWordSoundMarks } from '../js/components/transcriptEditorState.js';
 
 // Matches SidebarInspector's SIDEBAR_SECTION_KEYS pattern — App.jsx's mobile
 // bottom toolbar uses these two ids to show just one block at a time.
@@ -57,6 +58,11 @@ export function RightInspector({ onRegenerateCaptions, sectionFilter }) {
       container.appendChild(buildWordChip(wordObj, idx));
     });
   }, [words, enableKeywordHighlighting]);
+
+  // Each chip's ♪ shows whether a sound sits on that word — kept current as
+  // clips are added, moved or deleted, without rebuilding the chips.
+  const soundEvents = useAudioStore((s) => s.soundEvents);
+  useEffect(() => refreshWordSoundMarks(chipsContainerRef.current), [soundEvents, words, enableKeywordHighlighting]);
 
   const mins = Math.floor((videoDuration || 0) / 60);
   const secs = Math.floor((videoDuration || 0) % 60);

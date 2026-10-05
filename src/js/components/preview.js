@@ -6,8 +6,10 @@ import { getCSSPreviewFromConfig, applyCaseTransform, resolveWordStyleMetadata, 
 import { resolveFontFace } from '../../../shared/fontRegistry.js';
 import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolveRollingStackWindow } from '../../../shared/rollingStack.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame, paintFrameBackground } from '../../../shared/captionGraphics.js';
-import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay, setTextElementBoxes, setImageLayerBoxes } from './canvasTransform.js';
-import { isImageLayerActive, drawImageLayer, textLayerStack } from '../../../shared/imageLayer.js';
+import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay, setTextElementBoxes, setGraphicBoxes } from './canvasTransform.js';
+import { isImageLayerActive, drawImageLayer } from '../../../shared/imageLayer.js';
+import { isShapeLayerActive, drawShapeLayer } from '../../../shared/shapeLayer.js';
+import { resolveLayerStack, layerRuns } from '../../../shared/visualLayers.js';
 import { getImagePicture, setImagePictureListener } from './imageLayers.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
 import { getActiveTextElements, textElementToPhrase, resolveTextElementParams, orderForCompositing, resolveInterludeBackground } from '../../../shared/textElement.js';
@@ -220,139 +222,168 @@ function paintImageLayer(ctx, layer, currentTime, prepped) {
   };
 }
 
-/**
- * Image layers placed UNDER the captions: their own canvas, beneath the
- * captions canvas — the exporter's imagesUnder stream, composited onto the
- * video before the caption track. Returns their boxes.
- */
-function syncImagesUnderCanvas(currentTime) {
-  const canvas = document.getElementById('images-under-canvas');
-  if (!canvas) return [];
-  const layers = (appState.imageLayers || []).filter((img) => img.layer === 'under-captions' && isImageLayerActive(img, currentTime));
-  if (!layers.length) {
-    canvas.classList.remove('active');
-    return [];
+/** One text element onto a run's canvas — the shared renderer, as the exporter calls it. Returns its measured box. */
+function paintTextElement(ctx, element, currentTime, baseStyleParams, prepped) {
+  const baseFontSizePx = parseFloat(baseStyleParams.fontSize) || 14;
+  // A cinematic interlude replaces the PICTURE: its background fills this
+  // whole layer (the composition frame — the same box the video is laid out
+  // in), hiding everything stacked beneath it. The video keeps playing under
+  // it, so its audio is untouched.
+  const interludeBackground = resolveInterludeBackground(element);
+  if (interludeBackground) paintFrameBackground(ctx, interludeBackground, prepped.targetW, prepped.targetH);
+
+  // The SAME resolver the exporter uses — style bag over caption params,
+  // then this element's own keyframes at this instant on top.
+  const params = resolveTextElementParams(baseStyleParams, element, currentTime);
+  const cssConfig = getCSSPreviewFromConfig(params);
+  // A face the browser hasn't finished fetching falls back silently —
+  // permanently so on a paused video (see ensureWordStyleFontsReady).
+  if (element.style.fontFamily || element.style.fontWeight || element.style.italic) {
+    const family = element.style.fontFamily || params.fontFamily;
+    const faceKind = element.style.italic ? 'italic' : 'regular';
+    const face = resolveFontFace(family, faceKind);
+    loadLocalFontFace(family, faceKind);
+    ensureCanvasFontReady(face.familyName, params.fontWeight || '400', parseFloat(params.fontSize) || baseFontSizePx, !!element.style.italic)
+      .then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
   }
-  const prepped = prepareGraphicsCanvas(canvas, 'Montserrat', '400', 14);
-  if (!prepped) return [];
-  prepped.ctx.clearRect(0, 0, prepped.targetW, prepped.targetH);
-  const boxes = layers.map((layer) => paintImageLayer(prepped.ctx, layer, currentTime, prepped));
-  canvas.classList.add('active');
-  return boxes;
+  const frame = {
+    canvasWidth: prepped.targetW,
+    canvasHeight: prepped.targetH,
+    cssPixelWidth: prepped.cssPixelWidth,
+    activePhrase: textElementToPhrase(element),
+    currentTime,
+    cssConfig,
+    params
+  };
+  drawCaptionFrame(ctx, { ...frame, createOffscreenCanvas: makeOffscreenCanvas, clearCanvas: false });
+  // Measured with the SAME ctx it was just painted into, so the box matches the pixels.
+  const box = measureSentenceFrame(ctx, frame);
+  return box ? { id: element.id, box } : null;
 }
 
-function syncTextElementsCanvas(currentTime, baseStyleParams) {
-  const canvas = document.getElementById('text-elements-canvas');
-  // Image layers on every canvas, published as ONE list (hit-testing walks
-  // it top first) — under-captions first, then those drawn with the text.
-  const imageBoxes = syncImagesUnderCanvas(currentTime);
-  if (!canvas) { setImageLayerBoxes(imageBoxes); return; }
-
-  // orderForCompositing: manual captions, then at most ONE cinematic
-  // interlude (which covers the frame — see paintFrameBackground below), then
-  // overlays on top. The exporter draws in this same order.
-  const active = orderForCompositing(getActiveTextElements(appState.textElements || [], currentTime));
-  // Image layers above the captions are drawn on THIS canvas, in the shared
-  // stacking order (textLayerStack) — the order the exporter's text layer uses.
-  const images = (appState.imageLayers || []).filter((img) => img.layer !== 'under-captions' && isImageLayerActive(img, currentTime));
-  if (!active.length && !images.length) {
-    canvas.classList.remove('active');
-    // Must still publish the (empty) box list, or the transform layer keeps
-    // hit-testing against last frame's boxes and a click lands on text that
-    // isn't on screen any more.
-    setTextElementBoxes([]);
-    setImageLayerBoxes(imageBoxes);
-    return;
-  }
-
-  const baseFontSizePx = parseFloat(baseStyleParams.fontSize) || 14;
-  const prepped = prepareGraphicsCanvas(
-    canvas,
-    (baseStyleParams.fontFamily || 'Montserrat'),
-    baseStyleParams.fontWeight,
-    baseFontSizePx
-  );
-  if (!prepped) return;
-
-  prepped.ctx.clearRect(0, 0, prepped.targetW, prepped.targetH);
-
-  // Each element's own on-screen box, handed to the transform layer so a
-  // click can resolve to the text under the cursor and the selection handles
-  // can wrap it — see canvasTransform.js's setTextElementBoxes.
-  const boxes = [];
-
-  textLayerStack(active, images).forEach(({ type, item: element }) => {
-    if (type === 'image') {
-      imageBoxes.push(paintImageLayer(prepped.ctx, element, currentTime, prepped));
-      return;
-    }
-    // A cinematic interlude replaces the PICTURE: its background fills this
-    // whole layer (the composition frame — the same box the video is laid
-    // out in), hiding the video and the captions beneath it. The video keeps
-    // playing under it, so its audio is untouched.
-    const interludeBackground = resolveInterludeBackground(element);
-    if (interludeBackground) paintFrameBackground(prepped.ctx, interludeBackground, prepped.targetW, prepped.targetH);
-
-    // The SAME resolver the exporter uses — style bag over caption params,
-    // then this element's own keyframes at this instant on top. Sharing it
-    // is what keeps preview and export from ever disagreeing about where an
-    // animated overlay is.
-    const params = resolveTextElementParams(baseStyleParams, element, currentTime);
-    const cssConfig = getCSSPreviewFromConfig(params);
-    // An element whose font differs from the caption's needs that face loaded
-    // before the canvas paints, or it silently falls back — the same trap
-    // per-word fonts hit (see ensureWordStyleFontsReady).
-    // Any of family/weight/italic changes WHICH font file has to be loaded
-    // before the canvas can paint it — a face the browser hasn't finished
-    // fetching falls back silently, permanently so on a paused video (the
-    // exact trap per-word fonts hit; see ensureWordStyleFontsReady).
-    if (element.style.fontFamily || element.style.fontWeight || element.style.italic) {
-      const family = element.style.fontFamily || params.fontFamily;
-      const faceKind = element.style.italic ? 'italic' : 'regular';
-      const face = resolveFontFace(family, faceKind);
-      loadLocalFontFace(family, faceKind);
-      ensureCanvasFontReady(
-        face.familyName,
-        params.fontWeight || '400',
-        parseFloat(params.fontSize) || baseFontSizePx,
-        !!element.style.italic
-      ).then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
-    }
-    drawCaptionFrame(prepped.ctx, {
-      canvasWidth: prepped.targetW,
-      canvasHeight: prepped.targetH,
-      cssPixelWidth: prepped.cssPixelWidth,
-      activePhrase: textElementToPhrase(element),
-      currentTime,
-      cssConfig,
-      params,
-      createOffscreenCanvas: (w, h) => {
-        const off = document.createElement('canvas');
-        off.width = w;
-        off.height = h;
-        return off;
-      },
-      clearCanvas: false
-    });
-
-    // Measured with the SAME ctx the element was just painted into, so the
-    // fonts are already loaded and measureText resolves identically — the
-    // box therefore matches the pixels rather than approximating them.
-    const box = measureSentenceFrame(prepped.ctx, {
-      canvasWidth: prepped.targetW,
-      canvasHeight: prepped.targetH,
-      cssPixelWidth: prepped.cssPixelWidth,
-      activePhrase: textElementToPhrase(element),
-      currentTime,
-      cssConfig,
-      params
-    });
-    if (box) boxes.push({ id: element.id, box });
+/** One shape layer (shared/shapeLayer.js's drawShapeLayer — the exporter's call). Returns its resting box. */
+function paintShapeLayer(ctx, shape, currentTime, prepped) {
+  const g = drawShapeLayer(ctx, shape, {
+    canvasWidth: prepped.targetW,
+    canvasHeight: prepped.targetH,
+    time: currentTime,
+    createOffscreenCanvas: makeOffscreenCanvas
   });
+  return {
+    id: shape.id,
+    type: 'shape',
+    box: {
+      x: g.centerX - g.width / 2, y: g.centerY - g.height / 2, width: g.width, height: g.height,
+      centerX: g.centerX, centerY: g.centerY, rotationDeg: g.rotationDeg,
+      cssPxScale: prepped.targetW / prepped.cssPixelWidth
+    }
+  };
+}
 
-  setTextElementBoxes(boxes);
-  setImageLayerBoxes(imageBoxes);
-  canvas.classList.add('active');
+const isOnScreen = (entry, t) => (
+  entry.type === 'text' ? getActiveTextElements([entry.item], t).length > 0
+    : entry.type === 'image' ? isImageLayerActive(entry.item, t)
+      : entry.type === 'shape' ? isShapeLayerActive(entry.item, t)
+        : false
+);
+
+/**
+ * The layer stack's runs for the preview: the stack cut by how it
+ * composites (shared/visualLayers.js's layerRuns — the exporter's cut). With
+ * the captions' blend mode at 'normal', a manual-caption run composites
+ * exactly like a plain one, so the two are drawn together; with any other
+ * blend mode it gets a canvas of its own, blended — as the exporter blends it.
+ */
+function previewRuns(stack, captionBlend) {
+  const runs = layerRuns(stack).filter((run) => run.kind !== 'captions');
+  if (captionBlend && captionBlend !== 'normal') return runs;
+  const merged = [];
+  layerRuns(stack).forEach((run) => {
+    if (run.kind === 'captions') { merged.push(run); return; }
+    const last = merged[merged.length - 1];
+    if (last && last.kind !== 'captions') last.entries.push(...run.entries);
+    else merged.push({ ...run, kind: 'plain', entries: run.entries.slice() });
+  });
+  return merged.filter((run) => run.kind !== 'captions');
+}
+
+/**
+ * A canvas per run. The first run beneath the captions draws on
+ * #images-under-canvas and the first above them on #text-elements-canvas;
+ * any further runs get canvases of their own, placed in the DOM directly
+ * above the previous one (same z-index, so DOM order is stacking order).
+ */
+function runCanvas(slot, beneath) {
+  const fixedId = beneath ? 'images-under-canvas' : 'text-elements-canvas';
+  if (slot === 0) return document.getElementById(fixedId);
+  const id = `layer-run-${beneath ? 'b' : 'a'}${slot}`;
+  let canvas = document.getElementById(id);
+  if (!canvas) {
+    const previous = runCanvas(slot - 1, beneath);
+    if (!previous) return null;
+    canvas = document.createElement('canvas');
+    canvas.id = id;
+    canvas.className = beneath ? 'images-under-canvas' : 'text-elements-canvas';
+    previous.after(canvas);
+  }
+  return canvas;
+}
+
+/**
+ * Paints every text element, image layer and shape layer that should be on
+ * screen right now, in the ONE layer stack's order (shared/visualLayers.js),
+ * run by run, onto canvases beneath and above the captions canvas — the same
+ * runs, in the same order, the exporter composites. Publishes each object's
+ * box to the transform layer.
+ */
+function syncTextElementsCanvas(currentTime, baseStyleParams) {
+  const stack = resolveLayerStack({
+    layerOrder: appState.layerOrder,
+    textElements: appState.textElements || [],
+    imageLayers: appState.imageLayers || [],
+    shapeLayers: appState.shapeLayers || []
+  });
+  const captionBlend = getCSSPreviewFromConfig(baseStyleParams).textBlendMode;
+  const runs = previewRuns(stack, captionBlend);
+
+  const textBoxes = [];
+  const graphicBoxes = [];
+  const used = new Set();
+  const slots = { beneath: 0, above: 0 };
+  runs.forEach((run) => {
+    const visible = run.entries.filter((entry) => isOnScreen(entry, currentTime));
+    const beneath = run.beneathCaptions;
+    const canvas = runCanvas(beneath ? slots.beneath++ : slots.above++, beneath);
+    if (!canvas) return;
+    used.add(canvas);
+    if (!visible.length) { canvas.classList.remove('active'); return; }
+    const prepped = prepareGraphicsCanvas(canvas, (baseStyleParams.fontFamily || 'Montserrat'), baseStyleParams.fontWeight, parseFloat(baseStyleParams.fontSize) || 14);
+    if (!prepped) return;
+    prepped.ctx.clearRect(0, 0, prepped.targetW, prepped.targetH);
+    canvas.style.mixBlendMode = run.kind === 'caption-blend' && captionBlend && captionBlend !== 'normal' ? captionBlend : '';
+    visible.forEach(({ type, item }) => {
+      if (type === 'text') {
+        const b = paintTextElement(prepped.ctx, item, currentTime, baseStyleParams, prepped);
+        if (b) textBoxes.push(b);
+      } else if (type === 'image') {
+        graphicBoxes.push({ ...paintImageLayer(prepped.ctx, item, currentTime, prepped), type: 'image' });
+      } else if (type === 'shape') {
+        graphicBoxes.push(paintShapeLayer(prepped.ctx, item, currentTime, prepped));
+      }
+    });
+    canvas.classList.add('active');
+  });
+  // Canvases no run used this frame (the stack got shorter) are hidden.
+  ['images-under-canvas', 'text-elements-canvas'].forEach((id) => {
+    const c = document.getElementById(id);
+    if (c && !used.has(c)) c.classList.remove('active');
+  });
+  document.querySelectorAll('canvas[id^="layer-run-"]').forEach((c) => { if (!used.has(c)) c.classList.remove('active'); });
+
+  // Must publish every frame — even empty — or the transform layer keeps
+  // hit-testing against boxes that are no longer on screen.
+  setTextElementBoxes(textBoxes);
+  setGraphicBoxes(graphicBoxes);
 }
 
 function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, params) {

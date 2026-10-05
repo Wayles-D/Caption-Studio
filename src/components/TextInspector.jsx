@@ -27,6 +27,7 @@ import { ColorPickerField } from './ColorPickerField.jsx';
 import { getSoundDefinition } from '../../shared/soundRegistry.js';
 import { INTERLUDE_DEFAULT_STYLE } from '../../shared/textElement.js';
 import { WordInspector } from './WordInspector.jsx';
+import { LayerOrderControls } from './LayerControls.jsx';
 import { getSelectedWordStyleTarget, onSelectionChange, clearTextWordSelection } from '../js/components/canvasTransform.js';
 
 // What "clear this override" means for the element being edited. An overlay
@@ -951,6 +952,9 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
               Delete
             </button>
           </div>
+
+          {/* Its place in the one layer stack, alongside pictures and shapes. */}
+          <LayerOrderControls id={selected.id} idPrefix="textel" />
 
           {selected.kind === 'interlude' && (
             <>

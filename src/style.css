@@ -655,6 +655,20 @@ body.light-theme {
   color: #F59E0B;
 }
 
+.word-chip-sfx-toggle {
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #9CA3AF);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.word-chip-sfx-toggle.active {
+  color: #22D3EE;
+}
+
 /* ==========================================================================
    3. Timeline Panel — the primary keyframe editing surface (see
    src/js/components/timelinePanel.js). A real editor timeline: target
@@ -1891,3 +1905,25 @@ body.light-theme {
   border-right: 1px solid var(--border-color);
   border-radius: 3px 0 0 3px;
 }
+
+/* A SHAPE layer's clip (timelinePanel.js's buildShapeClip): a small swatch
+   of its fill, in its kind's outline, at its head. */
+.timeline-text-clip.is-shape {
+  min-width: 6px;
+  padding: 0 6px;
+  gap: 6px;
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-card));
+}
+
+.timeline-shape-clip-swatch {
+  flex: none;
+  width: 14px;
+  height: 10px;
+  background: var(--shape-swatch, #FFFFFF);
+  border: 1px solid var(--border-color);
+}
+.timeline-shape-clip-swatch.kind-rounded { border-radius: 3px; }
+.timeline-shape-clip-swatch.kind-ellipse { border-radius: 50%; }
+.timeline-shape-clip-swatch.kind-pill { border-radius: 5px; }
+.timeline-shape-clip-swatch.kind-line { height: 2px; }
+.timeline-shape-clip-swatch.kind-arrow { clip-path: polygon(0 35%, 60% 35%, 60% 0, 100% 50%, 60% 100%, 60% 65%, 0 65%); }
