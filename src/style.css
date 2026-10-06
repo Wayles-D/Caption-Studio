@@ -2081,3 +2081,57 @@ body.light-theme {
   color: var(--accent-color);
   background: color-mix(in srgb, var(--accent-color) 14%, transparent);
 }
+
+/* THE DETECTION OVERLAY (objectOverlay.js) — editor-only, over the preview
+   while the Objects tool is open. Never part of the render or the export. */
+.object-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  cursor: crosshair;
+}
+
+.object-overlay[hidden] {
+  display: none;
+}
+
+.object-overlay-boxes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.object-box {
+  fill: rgba(34, 211, 238, 0.06);
+  stroke: #22D3EE;
+  stroke-width: 1.5px;
+}
+
+.object-box.is-selected {
+  fill: rgba(16, 233, 160, 0.16);
+  stroke: var(--accent-color);
+  stroke-width: 2.5px;
+}
+
+.object-overlay-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.object-label {
+  position: absolute;
+  transform: translateY(-100%);
+  padding: 1px 5px;
+  border-radius: 3px 3px 3px 0;
+  background: #22D3EE;
+  color: #071318;
+  font: 700 10px/1.4 system-ui, sans-serif;
+  white-space: nowrap;
+}
+
+.object-label.is-selected {
+  background: var(--accent-color);
+}

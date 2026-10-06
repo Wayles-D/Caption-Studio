@@ -20,6 +20,7 @@ import { useImageLayerStore, IMAGE_LAYER_DEFAULTS, IMAGE_LAYER_DOCUMENT_KEYS } f
 import { useShapeLayerStore, SHAPE_LAYER_DEFAULTS, SHAPE_LAYER_DOCUMENT_KEYS } from '../store/shapeLayerStore.js';
 import { useCompositionStore, COMPOSITION_STORE_DEFAULTS, COMPOSITION_DOCUMENT_KEYS } from '../store/compositionStore.js';
 import { useRhythmStore, RHYTHM_DEFAULTS, RHYTHM_DOCUMENT_KEYS, RHYTHM_PROJECT_KEYS } from '../store/rhythmStore.js';
+import { useObjectStore, OBJECT_DEFAULTS, OBJECT_DOCUMENT_KEYS, OBJECT_PROJECT_KEYS } from '../store/objectStore.js';
 
 export const MOCK_SUBTITLES = [
   { start: 0.0, end: 2.2, text: "WELCOME TO BHYND." },
@@ -49,6 +50,7 @@ const IMAGE_LAYER_KEYS = new Set(Object.keys(IMAGE_LAYER_DEFAULTS));
 const SHAPE_LAYER_KEYS = new Set(Object.keys(SHAPE_LAYER_DEFAULTS));
 const COMPOSITION_KEYS = new Set(Object.keys(COMPOSITION_STORE_DEFAULTS));
 const RHYTHM_KEYS = new Set(Object.keys(RHYTHM_DEFAULTS));
+const OBJECT_KEYS = new Set(Object.keys(OBJECT_DEFAULTS));
 
 /**
  * What undo/redo snapshots: every caption/transform style field, PLUS the
@@ -81,7 +83,9 @@ const UNDO_TRACKED_KEYS = [
   // The canvas (shape, background) and the video's styling inside it.
   ...COMPOSITION_DOCUMENT_KEYS,
   // Which audio the rhythm is read from (the analysis itself is not undoable — see below).
-  ...RHYTHM_DOCUMENT_KEYS
+  ...RHYTHM_DOCUMENT_KEYS,
+  // The object the user picked as their target (the detections themselves are not undoable).
+  ...OBJECT_DOCUMENT_KEYS
 ];
 
 /**
@@ -93,7 +97,7 @@ const UNDO_TRACKED_KEYS = [
  */
 // Saved with the project but not undoable: beat maps are analysis results
 // (src/store/rhythmStore.js), kept so reopening a project needn't re-analyse.
-const PROJECT_SESSION_KEYS = ['words', 'phrases', 'baseName', 'renderedVideoPath', 'videoDuration', ...RHYTHM_PROJECT_KEYS];
+const PROJECT_SESSION_KEYS = ['words', 'phrases', 'baseName', 'renderedVideoPath', 'videoDuration', ...RHYTHM_PROJECT_KEYS, ...OBJECT_PROJECT_KEYS];
 
 /** The current project as a plain, cloneable object. */
 export function getProjectSnapshot() {
@@ -130,6 +134,7 @@ function storeFor(key) {
   if (SHAPE_LAYER_KEYS.has(key)) return useShapeLayerStore;
   if (COMPOSITION_KEYS.has(key)) return useCompositionStore;
   if (RHYTHM_KEYS.has(key)) return useRhythmStore;
+  if (OBJECT_KEYS.has(key)) return useObjectStore;
   return useEditorStore;
 }
 
@@ -158,7 +163,8 @@ export const appState = new Proxy({}, {
       || prop in useImageLayerStore.getState()
       || prop in useShapeLayerStore.getState()
       || prop in useCompositionStore.getState()
-      || prop in useRhythmStore.getState();
+      || prop in useRhythmStore.getState()
+      || prop in useObjectStore.getState();
   }
 });
 

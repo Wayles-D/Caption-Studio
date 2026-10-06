@@ -37,6 +37,7 @@ import { WordToolPanel } from './components/WordInspector.jsx';
 import { ImageInspector } from './components/ImageInspector.jsx';
 import { ShapeInspector } from './components/ShapeInspector.jsx';
 import { CanvasInspector } from './components/CanvasInspector.jsx';
+import { ObjectsInspector } from './components/ObjectsInspector.jsx';
 import { LayersPanel } from './components/LayerControls.jsx';
 import * as shapeLayersApi from './js/components/shapeLayers.js';
 import * as layerStackApi from './js/components/layerStack.js';
@@ -44,6 +45,7 @@ import * as compositionApi from './js/components/composition.js';
 import * as compositionViewApi from './js/components/compositionView.js';
 import * as videoTransformApi from './js/components/videoTransform.js';
 import * as rhythmApi from './js/components/rhythm.js';
+import * as objectsApi from './js/components/objectDetection.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
@@ -126,6 +128,12 @@ const MOBILE_TOOLS = [
   {
     // The composition (shared/composition.js): the canvas's shape and
     // background, and the video placed and styled inside it.
+    key: 'objects', label: 'Objects', group: 'objects',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" /><circle cx="12" cy="10" r="2.5" /><path d="M8 17c.6-2.2 2.1-3.3 4-3.3s3.4 1.1 4 3.3" /></svg>
+  },
+  {
+    // The composition (shared/composition.js): the canvas's shape and
+    // background, and the video placed and styled inside it.
     key: 'canvas', label: 'Canvas', group: 'canvas',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="3" width="18" height="18" rx="2" /><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
   },
@@ -161,7 +169,7 @@ const MOBILE_TOOLS = [
 // is what a selected cinematic interlude or overlay is edited in, and as a
 // bottom sheet it covered the very timeline clip being edited.
 // 'image-layer' (the Image panel) too, for the same reason.
-const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas']);
+const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas', 'objects']);
 
 // The desktop side panel's default/home content — always visible (an
 // anchored sidebar, like the app's original layout), showing Video
@@ -443,7 +451,7 @@ export function App() {
   // either used to close the panel mid-edit. Read lazily: both mount later.
   const soundLibraryElRef = useMemo(() => ({ get current() { return document.getElementById('sound-library-panel'); } }), []);
   const previewElRef = useMemo(() => ({ get current() { return document.getElementById('state-video'); } }), []);
-  const sidePanelInsideRefs = useMemo(() => (['text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas'].includes(desktopSidePanel)
+  const sidePanelInsideRefs = useMemo(() => (['text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas', 'objects'].includes(desktopSidePanel)
     ? [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, soundLibraryElRef, previewElRef]
     : [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef]), [desktopSidePanel, soundLibraryElRef, previewElRef]);
   useClickOutside(
@@ -503,6 +511,7 @@ export function App() {
       // composition object the panel and the on-video gestures move.
       window.__composition = { ...compositionApi, ...compositionViewApi, ...videoTransformApi };
       window.__rhythm = rhythmApi;
+      window.__objects = objectsApi;
       window.__captionEvents = captionEventsApi;
     }
   }, []);
@@ -957,7 +966,7 @@ export function App() {
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
             <span className="text-xs font-bold uppercase tracking-wide text-[var(--text-secondary)]">
-              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : desktopSidePanel === 'image-layer' ? 'Image' : desktopSidePanel === 'shape-layer' ? 'Shape' : desktopSidePanel === 'layers' ? 'Layers' : desktopSidePanel === 'canvas' ? 'Canvas' : 'Video Inspector'}
+              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : desktopSidePanel === 'image-layer' ? 'Image' : desktopSidePanel === 'shape-layer' ? 'Shape' : desktopSidePanel === 'layers' ? 'Layers' : desktopSidePanel === 'canvas' ? 'Canvas' : desktopSidePanel === 'objects' ? 'Objects' : 'Video Inspector'}
             </span>
             {desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT && (
               <button
@@ -1003,6 +1012,11 @@ export function App() {
           {desktopSidePanel === 'canvas' && (
             <div className="overflow-y-auto flex-1 p-4">
               <CanvasInspector />
+            </div>
+          )}
+          {desktopSidePanel === 'objects' && (
+            <div className="overflow-y-auto flex-1 p-4">
+              <ObjectsInspector />
             </div>
           )}
           {/* Not conditionally rendered — see relocatePrecisionFields() in
@@ -1089,6 +1103,10 @@ export function App() {
               ) : tool.group === 'canvas' ? (
                 <div className="p-4">
                   <CanvasInspector />
+                </div>
+              ) : tool.group === 'objects' ? (
+                <div className="p-4">
+                  <ObjectsInspector />
                 </div>
               ) : tool.group === 'word' ? (
                 <div className="p-4">
