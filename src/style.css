@@ -2037,3 +2037,47 @@ body.light-theme {
   background: color-mix(in srgb, var(--accent-color) 70%, transparent) !important;
   min-width: 3px;
 }
+
+/* BEATS along the ruler's foot (timelinePanel.js's refreshBeatMarkers):
+   informational, so quiet — a short faint tick per beat, a taller accent one
+   per downbeat. Never interactive; the ruler underneath still scrubs. */
+.timeline-beat-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 7px;
+  pointer-events: none;
+}
+
+.timeline-beat {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 4px;
+  margin-left: -0.5px;
+  background: var(--text-secondary);
+}
+
+.timeline-beat.is-downbeat {
+  height: 7px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent-color);
+}
+
+.timeline-rhythm-controls[hidden] {
+  display: none;
+}
+
+.timeline-rhythm-controls .timeline-zoom-btn {
+  width: auto;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.timeline-snap-btn.active {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+}

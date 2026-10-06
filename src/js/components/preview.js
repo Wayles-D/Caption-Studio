@@ -15,6 +15,7 @@ import { resolvePhraseParams } from '../../../shared/captionTransform.js';
 import { getActiveTextElements, textElementToPhrase, resolveTextElementParams, orderForCompositing, resolveInterludeBackground } from '../../../shared/textElement.js';
 import { initVideoCanvasControls } from './videoCanvasControls.js';
 import { initCompositionView } from './compositionView.js';
+import { initRhythm } from './rhythm.js';
 import { initAudioEngine } from './audioEngine.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 
@@ -598,6 +599,7 @@ export function initPreviewWorkspace() {
   initCanvasTransform();
   initVideoCanvasControls();
   initCompositionView();
+  initRhythm();
   // Sound effects + audio tracks (see src/js/components/audioEngine.js). Like
   // the three above it binds itself to the same #preview-video element this
   // function already treats as the single source of playback time, so the

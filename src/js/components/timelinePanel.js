@@ -35,6 +35,7 @@ import * as imageLayers from './imageLayers.js';
 import * as shapeLayers from './shapeLayers.js';
 import { SHAPE_KINDS, SHAPE_LABELS } from '../../../shared/shapeLayer.js';
 import * as captionEvents from './captionEvents.js';
+import * as rhythm from './rhythm.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 
 const LANES = [
@@ -557,6 +558,31 @@ function buildDom(container, options) {
   zoomControls.appendChild(zoomOutBtn);
   zoomControls.appendChild(zoomLevel);
   zoomControls.appendChild(zoomInBtn);
+
+  // RHYTHM (src/js/components/rhythm.js): jump the playhead to the previous /
+  // next beat, and snap dragged clips to beats. Shown only once the audio
+  // has a usable rhythm — see refreshRhythmControls.
+  const rhythmControls = document.createElement('div');
+  rhythmControls.className = 'timeline-zoom-controls timeline-rhythm-controls';
+  rhythmControls.id = 'timeline-rhythm-controls';
+  rhythmControls.hidden = true;
+  const prevBeatBtn = makeZoomBtn('timeline-prev-beat', '‹♩', 'Playhead to the previous beat');
+  const nextBeatBtn = makeZoomBtn('timeline-next-beat', '♩›', 'Playhead to the next beat');
+  const snapBtn = makeZoomBtn('timeline-snap-beats', 'Snap', 'Snap clips to beats while dragging');
+  snapBtn.classList.add('timeline-snap-btn');
+  const jump = (dir) => {
+    const video = getVideo();
+    if (!video) return;
+    const beat = dir < 0 ? rhythm.previousBeatBefore(video.currentTime) : rhythm.nextBeatAfter(video.currentTime);
+    if (beat) video.currentTime = beat.time;
+  };
+  prevBeatBtn.addEventListener('click', () => jump(-1));
+  nextBeatBtn.addEventListener('click', () => jump(1));
+  snapBtn.addEventListener('click', () => rhythm.setSnapToBeats(!appState.snapToBeats));
+  rhythmControls.appendChild(prevBeatBtn);
+  rhythmControls.appendChild(nextBeatBtn);
+  rhythmControls.appendChild(snapBtn);
+  controlsRow.appendChild(rhythmControls);
   controlsRow.appendChild(zoomControls);
 
   const advancedBtn = document.createElement('button');
@@ -595,6 +621,11 @@ function buildDom(container, options) {
   const ruler = document.createElement('div');
   ruler.className = 'timeline-ruler';
   ruler.id = 'timeline-ruler';
+  // The beats, as small ticks along the ruler's foot (see refreshBeatMarkers).
+  const beatLayer = document.createElement('div');
+  beatLayer.className = 'timeline-beat-layer';
+  beatLayer.id = 'timeline-beat-layer';
+  ruler.appendChild(beatLayer);
   rulerRow.appendChild(rulerGutter);
   rulerRow.appendChild(ruler);
   scroll.appendChild(rulerRow);
@@ -790,7 +821,7 @@ function buildDom(container, options) {
 
   return {
     header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip,
-    addBtn, advancedBtn, timeReadout, ruler, scroll, playhead, keyframeTrack, filmstripTrack,
+    addBtn, advancedBtn, timeReadout, ruler, beatLayer, rhythmControls, snapBtn, scroll, playhead, keyframeTrack, filmstripTrack,
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
     captionsTrack: captionsLane.track, interludeTrack: interludeLane.track, interludeRow: interludeLane.row, addInterludeBtn: interludeLane.addBtn,
     imagesTrack: imagesLane.track, imagesRow: imagesLane.row, addImagesLaneBtn: imagesLane.addBtn,
@@ -945,6 +976,42 @@ function refreshRulerTicks(duration) {
     tick.textContent = formatTime(t);
     els.ruler.appendChild(tick);
   }
+}
+
+// --- Beat markers -------------------------------------------------------------
+//
+// The rhythm (src/js/components/rhythm.js) as ticks along the ruler's foot:
+// a short faint tick per beat, a taller brighter one per downbeat — enough to
+// see the pulse without competing with the clips. Positioned in % of the
+// clip, like everything else on the timeline, so zooming needs no redraw;
+// rebuilt only when the beats themselves change.
+let lastBeatsRef = null;
+let lastBeatsDuration = -1;
+
+function refreshBeatMarkers(duration) {
+  const beats = rhythm.getTimelineBeats();
+  if (beats === lastBeatsRef && duration === lastBeatsDuration) return;
+  lastBeatsRef = beats;
+  lastBeatsDuration = duration;
+  els.beatLayer.replaceChildren();
+  if (!(duration > 0)) return;
+  const frag = document.createDocumentFragment();
+  beats.forEach((b) => {
+    const m = document.createElement('div');
+    m.className = b.type === 'downbeat' ? 'timeline-beat is-downbeat' : 'timeline-beat';
+    m.style.left = `${(b.time / duration) * 100}%`;
+    // Stronger beats read a little brighter.
+    m.style.opacity = String(0.35 + 0.65 * (b.strength ?? 1));
+    frag.appendChild(m);
+  });
+  els.beatLayer.appendChild(frag);
+}
+
+function refreshRhythmControls() {
+  const usable = rhythm.getTimelineBeats().length > 0;
+  if (els.rhythmControls.hidden === usable) els.rhythmControls.hidden = !usable;
+  els.snapBtn.classList.toggle('active', !!appState.snapToBeats);
+  els.snapBtn.setAttribute('aria-pressed', String(!!appState.snapToBeats));
 }
 
 function refreshPlayhead(currentTime, duration) {
@@ -1534,6 +1601,17 @@ function clipShownTime(kind, clip, start) {
   return Math.min(start + entrance.duration, start + (end - start) / 2);
 }
 
+/** The clip kinds a beat snap applies to — the visual objects. */
+const SNAP_KINDS = new Set(['text', 'image', 'shape']);
+/** How close, on screen, a beat must be to catch an edge. */
+const SNAP_PX = 8;
+
+function clipLength(kind, id) {
+  const list = kind === 'text' ? appState.textElements : kind === 'image' ? appState.imageLayers : kind === 'shape' ? appState.shapeLayers : null;
+  const item = (list || []).find((x) => x.id === id);
+  return item ? item.end - item.start : null;
+}
+
 /** Translates the pointer's X into the timeline edit this drag represents. */
 function applyClipDrag(clientX, el, options) {
   const track = el.closest('.timeline-lane-track');
@@ -1541,10 +1619,26 @@ function applyClipDrag(clientX, el, options) {
   const rect = track.getBoundingClientRect();
   const duration = getVideo()?.duration || 0;
   if (!rect.width || duration <= 0) return;
-  const pointerTime = xToTime(Math.max(0, Math.min(rect.width, clientX - rect.left)), rect.width, duration);
+  const rawPointerTime = xToTime(Math.max(0, Math.min(rect.width, clientX - rect.left)), rect.width, duration);
+
+  // BEAT SNAP (src/js/components/rhythm.js) — only when the user has turned
+  // it on, only for visual objects (images, shapes, text and cinematic
+  // cards; never sounds, audio or the transcript's captions), and only when
+  // a beat is within SNAP_PX on screen at the current zoom.
+  const snaps = SNAP_KINDS.has(dragClip.kind);
+  const threshold = (SNAP_PX / rect.width) * duration;
+  const pointerTime = snaps && dragClip.mode !== 'move' ? rhythm.maybeSnapToBeat(rawPointerTime, threshold) : rawPointerTime;
 
   if (dragClip.mode === 'move') {
-    const nextStart = pointerTime - dragClip.grabOffsetSeconds;
+    let nextStart = rawPointerTime - dragClip.grabOffsetSeconds;
+    if (snaps && appState.snapToBeats) {
+      // Whichever edge is nearer a beat lands on it.
+      const length = clipLength(dragClip.kind, dragClip.id);
+      const byStart = rhythm.maybeSnapToBeat(nextStart, threshold) - nextStart;
+      const byEnd = length != null ? rhythm.maybeSnapToBeat(nextStart + length, threshold) - (nextStart + length) : 0;
+      const moves = [byStart, byEnd].filter((d) => d !== 0);
+      if (moves.length) nextStart += moves.reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a));
+    }
     if (dragClip.kind === 'sound') audioTimeline.moveSoundEvent(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'text') textElements.moveTextElement(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'image') imageLayers.moveImageLayer(dragClip.id, nextStart, options);
@@ -2348,6 +2442,8 @@ function tick() {
   const currentTime = video?.currentTime || 0;
 
   refreshRulerTicks(duration);
+  refreshBeatMarkers(duration);
+  refreshRhythmControls();
   refreshPlayhead(currentTime, duration);
   // Same cadence as the ruler/playhead, and equally cheap: this only rebuilds
   // when the video or the ideal tile count actually changed.

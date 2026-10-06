@@ -260,7 +260,8 @@ export function getSelectedImageLayer() {
  * failure is reported as an app toast ('bhynd:toast', shown by App.jsx), not
  * only to the console — an upload that silently does nothing looks broken.
  */
-export function promptForImageFile() {
+/** Opens the file picker and adds the chosen picture — at the playhead, or at `start` when given (e.g. the next beat). */
+export function promptForImageFile({ start } = {}) {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = IMAGE_ACCEPT;
@@ -272,7 +273,7 @@ export function promptForImageFile() {
     input.remove();
     if (!file) return;
     try {
-      await importImageFile(file);
+      await importImageFile(file, start != null ? { start } : undefined);
     } catch (err) {
       console.error('[ImageImport]', err);
       window.dispatchEvent(new CustomEvent('bhynd:toast', { detail: `Image not added — ${err.message}` }));

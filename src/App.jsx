@@ -43,6 +43,7 @@ import * as layerStackApi from './js/components/layerStack.js';
 import * as compositionApi from './js/components/composition.js';
 import * as compositionViewApi from './js/components/compositionView.js';
 import * as videoTransformApi from './js/components/videoTransform.js';
+import * as rhythmApi from './js/components/rhythm.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
@@ -501,6 +502,7 @@ export function App() {
       // The video's own placement (videoTransform.js) rides along: it is the
       // composition object the panel and the on-video gestures move.
       window.__composition = { ...compositionApi, ...compositionViewApi, ...videoTransformApi };
+      window.__rhythm = rhythmApi;
       window.__captionEvents = captionEventsApi;
     }
   }, []);
