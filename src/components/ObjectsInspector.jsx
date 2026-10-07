@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { appState, subscribe } from '../js/state.js';
 import * as objects from '../js/components/objectDetection.js';
+import * as tracking from '../js/components/objectTracking.js';
 import { DETECTION_MODELS, DEFAULT_MODEL_ID } from '../../shared/objects/detections.js';
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
@@ -20,6 +21,43 @@ const BTN = `h-9 flex-1 bg-transparent border border-[var(--border-color)] text-
   disabled:opacity-40 disabled:cursor-default`;
 const ROW = `w-full text-left px-3 py-2 rounded-[var(--radius-sm)] border cursor-pointer transition-colors duration-150
   bg-[var(--bg-input)] flex items-center justify-between gap-2 text-[12px]`;
+
+/** Tracking the selected object: start it, watch it, read what it found. */
+function TrackSection() {
+  const status = appState.trackingStatus || {};
+  const running = tracking.isTracking();
+  const track = tracking.getSelectedTrack();
+  const info = tracking.describeTrack(track);
+  const failed = !running && status.state === 'failed' && status.key === tracking.getSelectedTrackKey();
+  return (
+    <div className="flex flex-col gap-2" id="objects-track" data-state={running ? 'tracking' : track ? track.status : failed ? 'failed' : 'none'}>
+      {running && (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[12px] font-semibold text-[var(--text-primary)]" id="objects-track-status">
+            Tracking…{status.total ? ` ${status.done} of about ${status.total} frames` : ''}
+          </span>
+          <button type="button" id="objects-track-stop" className={`${BTN} flex-none px-3 h-7`} onClick={() => tracking.cancelTracking()}>Stop</button>
+        </div>
+      )}
+      {!running && info && (
+        <div className="flex flex-col gap-1" id="objects-track-status">
+          <span className="text-[12px] font-semibold text-[var(--text-primary)]">{info.title} · {Math.round(info.confidence * 100)}%</span>
+          <span className={HINT}>{info.detail}</span>
+          {info.note && <span className={HINT}>{info.note}</span>}
+        </div>
+      )}
+      {!running && failed && (
+        <span className="text-[12px] text-[var(--text-primary)]" id="objects-track-status">Tracking failed — {status.message}. Editing works as normal.</span>
+      )}
+      {!running && !track && !failed && <p className={HINT}>Not tracked yet — follow it through the video to see where it goes.</p>}
+      {!running && (
+        <button type="button" id="objects-track-start" className={BTN} onClick={() => tracking.trackSelectedObject({ force: !!track })}>
+          {track ? 'Re-track' : 'Track object'}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export function ObjectsInspector() {
   const [, force] = useState(0);
@@ -128,7 +166,7 @@ export function ObjectsInspector() {
               <span className="text-[13px] font-bold text-[var(--accent-color)]" id="objects-selected-label">{selected.label}</span>
               <span className="text-[11px] text-[var(--text-muted)]">{Math.round(selected.confidence * 100)}% · at {selected.timestamp.toFixed(2)}s</span>
             </div>
-            <p className={HINT}>This is the object you’ve picked. It isn’t followed through the video yet — that comes with tracking.</p>
+            <TrackSection />
             <div className="flex gap-2">
               <button type="button" className={BTN} onClick={() => jumpTo(selected.timestamp)}>Show</button>
               <button type="button" id="objects-deselect" className={BTN} onClick={() => objects.clearSelectedObject()}>Deselect</button>

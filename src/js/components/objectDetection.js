@@ -24,6 +24,8 @@ import {
   videoSourceKey, detectionCacheKey, makeFrameDetections, normalizeDetectionSet,
   isDetectionSetValidFor, frameAt, visibleDetections, withFrame, sampleTimes
 } from '../../../shared/objects/detections.js';
+import { appearanceOf } from '../../../shared/objects/appearance.js';
+import { zoomRect, fromRegion, thumbnail } from '../../../shared/objects/frames.js';
 
 const MODEL_ID = DEFAULT_MODEL_ID;
 /** Frames are analysed at most this long on their long side — plenty for a 416px model. */
@@ -67,22 +69,30 @@ export function getDetectionsAt(t) {
 
 // --- Frames ------------------------------------------------------------------
 
-let grabVideo = null;
-let grabVideoSrc = null;
+// LANES: each its own private video and its own detector worker, so the
+// tracker's two directions (forward, backward) run side by side. Lane 0 is
+// also everything else's (scans, the paused frame).
+const lanes = [];
 
-function frameVideo(url) {
-  if (!grabVideo) {
-    grabVideo = document.createElement('video');
-    grabVideo.muted = true;
-    grabVideo.playsInline = true;
-    grabVideo.preload = 'auto';
-    grabVideo.crossOrigin = 'anonymous';
+function getLane(i = 0) {
+  if (!lanes[i]) lanes[i] = { video: null, src: null, queue: Promise.resolve(), worker: null };
+  return lanes[i];
+}
+
+function frameVideo(url, lane) {
+  const l = getLane(lane);
+  if (!l.video) {
+    l.video = document.createElement('video');
+    l.video.muted = true;
+    l.video.playsInline = true;
+    l.video.preload = 'auto';
+    l.video.crossOrigin = 'anonymous';
   }
-  if (grabVideoSrc !== url) {
-    grabVideo.src = url;
-    grabVideoSrc = url;
+  if (l.src !== url) {
+    l.video.src = url;
+    l.src = url;
   }
-  return grabVideo;
+  return l.video;
 }
 
 function once(target, event, timeoutMs) {
@@ -93,9 +103,22 @@ function once(target, event, timeoutMs) {
   });
 }
 
-/** The frame at `time`, as RGBA pixels at up to MAX_FRAME_SIDE, from the private video. */
-async function grabFrame(url, time) {
-  const v = frameVideo(url);
+// One user of a lane's video at a time: a scan and a track (or a track and
+// a paused-frame detection) must never seek it under each other.
+function grabFrame(url, time, { lane = 0, region = null } = {}) {
+  const l = getLane(lane);
+  const run = l.queue.then(() => grabFrameNow(url, time, lane, region));
+  l.queue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * The frame at `time`, as RGBA pixels at up to MAX_FRAME_SIDE, from a
+ * private video — and, with `region`, that region cropped from the video at
+ * its FULL resolution, sized for the detector (shared/objects/frames.js).
+ */
+async function grabFrameNow(url, time, lane, region) {
+  const v = frameVideo(url, lane);
   if (!(v.readyState >= 1)) await once(v, 'loadedmetadata', 15000);
   const target = Math.min(Math.max(0, time), Math.max(0, v.duration - 0.01));
   if (Math.abs(v.currentTime - target) > 1e-4 || v.readyState < 2) {
@@ -110,24 +133,30 @@ async function grabFrame(url, time) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(v, 0, 0, w, h);
   const img = ctx.getImageData(0, 0, w, h);
-  return { data: img.data, width: w, height: h };
+  const frame = { data: img.data, width: w, height: h };
+  if (!region) return frame;
+  const r = zoomRect(region, v.videoWidth, v.videoHeight);
+  const zc = new OffscreenCanvas(r.width, r.height).getContext('2d', { willReadFrequently: true });
+  zc.drawImage(v, r.sx, r.sy, r.sw, r.sh, 0, 0, r.width, r.height);
+  const zoom = zc.getImageData(0, 0, r.width, r.height);
+  return { ...frame, zoom: { data: zoom.data, width: r.width, height: r.height } };
 }
 
 // --- The detector --------------------------------------------------------------
 
-let worker = null;
 let seq = 0;
 
-function getWorker() {
-  if (!worker) worker = new Worker(new URL('../objects/detectorWorker.js', import.meta.url), { type: 'module' });
-  return worker;
+function getWorker(lane = 0) {
+  const l = getLane(lane);
+  if (!l.worker) l.worker = new Worker(new URL('../objects/detectorWorker.js', import.meta.url), { type: 'module' });
+  return l.worker;
 }
 
-function detect(frame) {
+function detect(frame, lane = 0) {
   const id = ++seq;
   const model = DETECTION_MODELS[MODEL_ID];
   return new Promise((resolve, reject) => {
-    const w = getWorker();
+    const w = getWorker(lane);
     const onMessage = (e) => {
       if (e.data?.id !== id) return;
       w.removeEventListener('message', onMessage);
@@ -227,6 +256,45 @@ export async function scanVideo(options = {}) {
     }
   })();
   return track(busy);
+}
+
+// What the tracker has looked at this session: kept in memory (a re-track
+// reuses it), never saved — a long track would otherwise add hundreds of
+// frames of boxes to the project.
+const observations = new Map();
+const MAX_OBSERVATIONS = 400;
+
+/**
+ * A frame's detections WITH their appearance fingerprints, and its
+ * thumbnail — what the tracker (src/js/components/objectTracking.js)
+ * consumes. With `region` (0-1 of the frame) the detector looks at that
+ * region alone, zoomed (shared/objects/frames.js); `direction` picks the
+ * lane, so forward and backward never wait for each other.
+ */
+export async function observeFrame(time, { region = null, direction = 0 } = {}) {
+  const source = getDetectionSource();
+  const cacheKey = getCacheKey();
+  if (!source || !cacheKey) throw new Error('no video to analyse');
+  const key = `${cacheKey}|${time.toFixed(3)}|${region ? [region.x, region.y, region.width].map((n) => n.toFixed(3)).join(',') : 'all'}`;
+  if (observations.has(key)) return observations.get(key);
+  // A second lane only where there are cores for it; otherwise the two
+  // directions take turns on one.
+  const lane = direction < 0 && (navigator.hardwareConcurrency || 2) >= 4 ? 1 : 0;
+  const pixels = await grabFrame(source.url, time, { lane, region });
+  let detections;
+  const scanned = !region && frameAt(getDetectionSet(), time, frameTolerance());
+  if (scanned) detections = scanned.detections;
+  else {
+    // The detector transfers (consumes) its pixels — give it a copy.
+    const input = region ? pixels.zoom : { data: new Uint8ClampedArray(pixels.data), width: pixels.width, height: pixels.height };
+    const raw = await detect(input, lane);
+    if (getCacheKey() !== cacheKey) throw new Error('the video changed');
+    detections = makeFrameDetections(time, fromRegion(raw, region));
+  }
+  const obs = { time, thumb: thumbnail(pixels), candidates: detections.map((d) => ({ ...d, appearance: appearanceOf(pixels, d.box) })) };
+  observations.set(key, obs);
+  if (observations.size > MAX_OBSERVATIONS) observations.delete(observations.keys().next().value);
+  return obs;
 }
 
 export function isDetecting() {

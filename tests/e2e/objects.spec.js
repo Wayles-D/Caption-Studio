@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { videoToComposition, compositionToScreen } from '../../shared/objects/coordinates.js';
 import { sampleTimes } from '../../shared/objects/detections.js';
+import { serveVideo } from './serveVideo.js';
 
 // OBJECT DETECTION & SELECTION in the real editor (src/js/components/
 // objectDetection.js, objectOverlay.js), on real footage — a CC BY 4.0
@@ -13,9 +14,16 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const CROWD = path.join(here, '..', 'fixtures', 'objects', 'crowd-3s.mp4');
 const CROWD_ROTATED = path.join(here, '..', 'fixtures', 'objects', 'crowd-3s-rotated.mp4');
 
+// Every test is a fresh browser: it downloads the detector's runtime (14MB)
+// and model (20MB) and compiles them before the first box — and the
+// detector runs flat out. One at a time (this file runs beside the rest of
+// the suite, and beside tracking.spec.js), with room for a slow start.
+test.describe.configure({ mode: 'default', timeout: 120000 });
+
 async function openWith(page, clip, { fresh = true } = {}) {
   await page.setViewportSize({ width: 1400, height: 900 });
-  if (clip) await page.route('**/demo-video.mp4', (r) => r.fulfill({ path: clip, contentType: 'video/mp4' }));
+  // Served with byte ranges, or the browser can't seek it (see serveVideo.js).
+  if (clip) await serveVideo(page, clip);
   await page.goto('/?splash=0');
   if (fresh) {
     await page.evaluate(() => new Promise((r) => { const q = indexedDB.deleteDatabase('bhynd'); q.onsuccess = q.onerror = q.onblocked = () => r(); }));

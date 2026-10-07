@@ -2135,3 +2135,32 @@ body.light-theme {
 .object-label.is-selected {
   background: var(--accent-color);
 }
+
+/* THE TRACKED OBJECT (objectOverlay.js's drawTrack) — where the selected
+   object is at the playhead, and the path it takes. Editor-only. */
+.object-trajectory {
+  fill: none;
+  stroke: rgba(16, 233, 160, 0.45);
+  stroke-width: 1.5px;
+  stroke-dasharray: 3 3;
+}
+
+.object-track-box {
+  fill: rgba(16, 233, 160, 0.10);
+  stroke: var(--accent-color);
+  stroke-width: 2.5px;
+}
+
+.object-track-box.is-uncertain {
+  stroke: #F59E0B;
+  stroke-dasharray: 6 4;
+  fill: rgba(245, 158, 11, 0.08);
+}
+
+.object-track-label {
+  background: var(--accent-color);
+}
+
+.object-track-label.is-uncertain {
+  background: #F59E0B;
+}

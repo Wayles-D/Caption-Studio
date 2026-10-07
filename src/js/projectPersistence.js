@@ -107,9 +107,12 @@ export function getSavedImageFile(assetId) {
 }
 
 let saveTimer = null;
+// Set by discardSavedProject: the project is being thrown away, and nothing
+// (a pending save, the page-hide flush) may write it back.
+let discarded = false;
 function saveNow() {
   saveTimer = null;
-  if (!appState.isLoaded || !appState.baseName) return Promise.resolve(null);
+  if (discarded || !appState.isLoaded || !appState.baseName) return Promise.resolve(null);
   let doc;
   try {
     // Structured-clone-safe: a JSON round trip drops anything that isn't
@@ -125,6 +128,19 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(saveNow, SAVE_DELAY_MS);
 }
+/**
+ * NEW PROJECT: forgets the saved project — its document and every file
+ * (video, audio, images) — so the next load starts empty. Saving stops for
+ * the rest of this page's life; the caller reloads the page.
+ */
+export async function discardSavedProject() {
+  discarded = true;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
+  await run(DOC_STORE, 'readwrite', (store) => store.delete(DOC_KEY));
+  await run(FILE_STORE, 'readwrite', (store) => store.clear());
+}
+
 /** Writes any pending save immediately (tests, and the page going away). */
 export function flushProjectSave() {
   if (saveTimer) clearTimeout(saveTimer);

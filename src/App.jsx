@@ -46,6 +46,7 @@ import * as compositionViewApi from './js/components/compositionView.js';
 import * as videoTransformApi from './js/components/videoTransform.js';
 import * as rhythmApi from './js/components/rhythm.js';
 import * as objectsApi from './js/components/objectDetection.js';
+import * as trackingApi from './js/components/objectTracking.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
@@ -512,6 +513,7 @@ export function App() {
       window.__composition = { ...compositionApi, ...compositionViewApi, ...videoTransformApi };
       window.__rhythm = rhythmApi;
       window.__objects = objectsApi;
+      window.__tracking = trackingApi;
       window.__captionEvents = captionEventsApi;
     }
   }, []);
