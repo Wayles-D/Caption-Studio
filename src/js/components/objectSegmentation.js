@@ -27,6 +27,7 @@ import {
 import { getTrackAtTime } from '../../../shared/objects/tracking.js';
 import { getSelectedTrack, getSelectedTrackKey } from './objectTracking.js';
 import { getDetectionSource, getCacheKey, grabSegmentationInput, observeFrame } from './objectDetection.js';
+import { MANUAL_CLASS } from '../../../shared/objects/templateMatch.js';
 import { putAnalysisFile, getAnalysisFile, deleteAnalysisFile } from '../projectPersistence.js';
 
 let config = { ...DEFAULT_SEGMENTATION_CONFIG };
@@ -239,7 +240,8 @@ export async function segmentSelectedObject({ force = false } = {}) {
         boxAt: (t) => getTrackAtTime(track, t),
         grab: (t, crop) => grabSegmentationInput(t, crop),
         // Who else of its class is there — "not this" points (segmentation.js's negativePoints).
-        others: async (t) => (await observeFrame(t)).candidates.filter((c) => c.class === track.class).map((c) => c.box),
+        // A drawn object has no class anyone else can share: none.
+        others: async (t) => (track.class === MANUAL_CLASS ? [] : (await observeFrame(t)).candidates.filter((c) => c.class === track.class).map((c) => c.box)),
         segment: runModel,
         onProgress: (done, total) => {
           const per = done ? (performance.now() - t0) / 1000 / done : secondsPerKeyframe();
@@ -272,7 +274,8 @@ export async function segmentSelectedObject({ force = false } = {}) {
       return null;
     }
   })();
-  job.finally(() => { job = null; live = null; releaseWorker(); });
+  // The panel reads isSegmenting(): tell it once the job is really over.
+  job.finally(() => { job = null; live = null; releaseWorker(); setStatus({}); });
   return job;
 }
 

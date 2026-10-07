@@ -16,7 +16,8 @@
  * ffmpeg exports, so a box means the same thing everywhere.
  *
  * SELECTION IS NOT TRACKING: a selected object is one detection, in one
- * frame. Nothing here follows it through time.
+ * frame — or a box the user DREW round anything the detector missed
+ * (selectManualObject). Nothing here follows it through time.
  */
 import { appState, subscribe, updateState } from '../state.js';
 import {
@@ -26,6 +27,7 @@ import {
 } from '../../../shared/objects/detections.js';
 import { appearanceOf } from '../../../shared/objects/appearance.js';
 import { zoomRect, fromRegion, thumbnail } from '../../../shared/objects/frames.js';
+import { manualObjectId, normalizeManualBox, MANUAL_CLASS, MANUAL_LABEL, MATCHER } from '../../../shared/objects/templateMatch.js';
 
 const MODEL_ID = DEFAULT_MODEL_ID;
 /** Frames are analysed at most this long on their long side — plenty for a 416px model. */
@@ -149,6 +151,35 @@ export function grabSegmentationInput(time, crop) {
     const data = new Float32Array(crop.inputWidth * crop.inputHeight * 3);
     for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { data[j] = rgba[i]; data[j + 1] = rgba[i + 1]; data[j + 2] = rgba[i + 2]; }
     return { data };
+  });
+  l.queue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * A MANUAL object's look at a frame (shared/objects/templateMatch.js):
+ * `region` (0-1) of the frame at `time`, drawn from the private video at its
+ * full resolution into outWidth×outHeight RGBA, and the frame's greyscale
+ * thumbnail (camera motion, cuts). The direction picks the lane, as
+ * observeFrame's does.
+ */
+export function grabRegion(time, region, outWidth, outHeight, { direction = 0 } = {}) {
+  const source = getDetectionSource();
+  if (!source) return Promise.reject(new Error('no video to analyse'));
+  const lane = direction < 0 && (navigator.hardwareConcurrency || 2) >= 4 ? 1 : 0;
+  const l = getLane(lane);
+  const run = l.queue.then(async () => {
+    const v = await seekPrivate(source.url, time, lane);
+    const c = new OffscreenCanvas(outWidth, outHeight).getContext('2d', { willReadFrequently: true });
+    c.imageSmoothingQuality = 'high';
+    c.drawImage(v, region.x * v.videoWidth, region.y * v.videoHeight, region.width * v.videoWidth, region.height * v.videoHeight, 0, 0, outWidth, outHeight);
+    const image = c.getImageData(0, 0, outWidth, outHeight);
+    const tw = Math.min(MAX_FRAME_SIDE, v.videoWidth);
+    const th = Math.max(1, Math.round((v.videoHeight * tw) / v.videoWidth));
+    const whole = new OffscreenCanvas(tw, th).getContext('2d', { willReadFrequently: true });
+    whole.drawImage(v, 0, 0, tw, th);
+    const frame = whole.getImageData(0, 0, tw, th);
+    return { image: { data: image.data, width: outWidth, height: outHeight }, thumb: thumbnail({ data: frame.data, width: tw, height: th }) };
   });
   l.queue = run.catch(() => {});
   return run;
@@ -360,6 +391,32 @@ export function selectObject(detection) {
   }, { recordHistory: true });
 }
 
+/**
+ * Selects ANYTHING: a box the user drew on the frame at `time` (0-1 of the
+ * video), whether or not the detector found something there. It is then
+ * tracked by its own pixels (objectTracking.js → templateMatch.js) — and
+ * segmented and given effects like any detected object.
+ * @returns {object|null} the selection, or null when there is no video or the box is too small
+ */
+export function selectManualObject(box, time) {
+  const source = getDetectionSource();
+  if (!source) return null;
+  const b = normalizeManualBox(box, source.width, source.height);
+  if (!b) return null;
+  const selection = {
+    detectionId: manualObjectId(time, b),
+    class: MANUAL_CLASS,
+    label: MANUAL_LABEL,
+    confidence: 1,
+    timestamp: time,
+    box: b,
+    manual: true,
+    source: { key: getCacheKey(), model: `${MATCHER.id}@${MATCHER.version}` }
+  };
+  updateState({ selectedObject: selection }, { recordHistory: true });
+  return selection;
+}
+
 export function clearSelectedObject() {
   if (appState.selectedObject) updateState({ selectedObject: null }, { recordHistory: true });
 }
@@ -399,7 +456,12 @@ export function initObjectDetection() {
   const maybeDetect = () => {
     if (!appState.objectsMode || v()?.paused === false) return;
     const t = v()?.currentTime ?? 0;
-    if (!frameAt(getDetectionSet(), t, frameTolerance())) detectCurrentFrame();
+    if (frameAt(getDetectionSet(), t, frameTolerance())) return;
+    // Still busy with another frame (the one the tool opened on, say): look
+    // again when it is done — otherwise the frame paused on now is never
+    // analysed.
+    if (busy) { busy.finally(() => setTimeout(maybeDetect, 0)); return; }
+    detectCurrentFrame();
   };
   document.addEventListener('seeked', (e) => { if (e.target?.id === 'preview-video') maybeDetect(); }, true);
   document.addEventListener('pause', (e) => { if (e.target?.id === 'preview-video') maybeDetect(); }, true);

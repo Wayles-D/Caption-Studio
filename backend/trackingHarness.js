@@ -91,3 +91,42 @@ export async function observe(file, time, info, { region = null } = {}) {
   const detections = makeFrameDetections(time, raw);
   return { time, frame, thumb: thumbnail(frame), candidates: detections.map((d) => ({ ...d, appearance: appearanceOf(frame, d.box) })) };
 }
+
+/**
+ * MANUAL objects' grab (shared/objects/templateMatch.js): `region` (0-1) of
+ * the frame at `time`, resampled to w×h RGBA from a full-resolution decode
+ * — as the editor draws it from the video — and the frame's thumbnail.
+ */
+export async function grabRegion(file, time, info, region, w, h) {
+  const frame = await frameAtAsync(file, time, info, Math.max(info.width, info.height));
+  const out = new Uint8ClampedArray(w * h * 4);
+  const sx = region.x * frame.width;
+  const sy = region.y * frame.height;
+  const fx = (region.width * frame.width) / w;
+  const fy = (region.height * frame.height) / h;
+  for (let y = 0; y < h; y++) {
+    // Area-averaged when shrinking, nearest-bilinear when not: like a canvas drawImage.
+    const y0 = sy + y * fy;
+    const y1 = y0 + fy;
+    for (let x = 0; x < w; x++) {
+      const x0 = sx + x * fx;
+      const x1 = x0 + fx;
+      let r = 0; let g = 0; let b = 0; let n = 0;
+      const stepY = Math.max(1, (y1 - y0) / 3);
+      const stepX = Math.max(1, (x1 - x0) / 3);
+      for (let py = y0 + Math.min(0.5, (y1 - y0) / 2); py < y1; py += stepY) {
+        for (let px = x0 + Math.min(0.5, (x1 - x0) / 2); px < x1; px += stepX) {
+          const ix = Math.min(frame.width - 1, Math.max(0, Math.floor(px)));
+          const iy = Math.min(frame.height - 1, Math.max(0, Math.floor(py)));
+          const i = (iy * frame.width + ix) * 4;
+          r += frame.data[i]; g += frame.data[i + 1]; b += frame.data[i + 2]; n++;
+        }
+      }
+      const o = (y * w + x) * 4;
+      out[o] = r / n; out[o + 1] = g / n; out[o + 2] = b / n; out[o + 3] = 255;
+    }
+  }
+  const small = Math.min(1, 960 / Math.max(frame.width, frame.height));
+  const thumbSource = small < 1 ? await frameAtAsync(file, time, info, 960) : frame;
+  return { image: { data: out, width: w, height: h }, thumb: thumbnail(thumbSource) };
+}

@@ -291,7 +291,7 @@ export function ObjectsInspector() {
     <div className="flex flex-col gap-4" id="objects-editor">
       <div className={CARD}>
         <span className={SECTION_TITLE}>Objects</span>
-        <p className={HINT}>Find the people and things in your video, then pick the one you mean. Boxes show on the paused frame.</p>
+        <p className={HINT}>Find the people and things in your video, then pick the one you mean. Boxes show on the paused frame. Something not found? Drag a box round it on the frame.</p>
         <div id="objects-status" data-state={status.state || 'idle'} className="flex flex-col gap-1">
           {!source && <span className="text-[12px] text-[var(--text-secondary)]">Add a video first.</span>}
           {source && detecting && (
@@ -357,7 +357,7 @@ export function ObjectsInspector() {
           <>
             <div className="flex items-center justify-between">
               <span className="text-[13px] font-bold text-[var(--accent-color)]" id="objects-selected-label">{selected.label}</span>
-              <span className="text-[11px] text-[var(--text-muted)]">{Math.round(selected.confidence * 100)}% · at {selected.timestamp.toFixed(2)}s</span>
+              <span className="text-[11px] text-[var(--text-muted)]" id="objects-selected-meta">{selected.manual ? 'Drawn' : `${Math.round(selected.confidence * 100)}%`} · at {selected.timestamp.toFixed(2)}s</span>
             </div>
             <TrackSection />
             <SegmentSection />
@@ -367,7 +367,7 @@ export function ObjectsInspector() {
             </div>
           </>
         ) : (
-          <p className={HINT}>None — click a box on the video, or an object above.</p>
+          <p className={HINT}>None — click a box on the video or an object above, or drag a box round anything on the frame.</p>
         )}
       </div>
 

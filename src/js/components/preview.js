@@ -20,6 +20,7 @@ import { initObjectDetection } from './objectDetection.js';
 import { initObjectOverlay } from './objectOverlay.js';
 import { syncObjectEffectsCanvas } from './objectEffects.js';
 import { initAudioEngine } from './audioEngine.js';
+import { initKeyboardShortcuts } from './keyboardShortcuts.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
@@ -605,6 +606,7 @@ export function initPreviewWorkspace() {
   initRhythm();
   initObjectDetection();
   initObjectOverlay();
+  initKeyboardShortcuts();
   // Sound effects + audio tracks (see src/js/components/audioEngine.js). Like
   // the three above it binds itself to the same #preview-video element this
   // function already treats as the single source of playback time, so the

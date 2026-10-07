@@ -48,3 +48,13 @@ Built by `make-crossing.mjs`, which also exports the ground truth
   frames of the same clip (CC BY-SA 4.0, above): the cut-outs were made with
   MobileSAM and cleaned by hand (stray scene fragments removed); the
   background cropped. `segment.mp4` is a derivative and shares the license.
+
+## Manual-selection fixture (V2.0.1)
+
+- `custom.mp4` — 640×360, 15 fps, 4s: a patterned square BADGE (drawn by
+  `make-crossing.mjs`; no class the detector knows — a round one was taken
+  for a sports ball) drifts, grows ~40% and passes in front of a walking
+  person, on the street while the camera pans; a still DECOY badge in other
+  colours at the top right. `truth('badge' | 'decoy' | 'olive', t, 'custom')`.
+  Used by backend/test_manual_objects.js and tests/e2e/manual-objects.spec.js.
+  A derivative of the street and person above (CC BY-SA 4.0).

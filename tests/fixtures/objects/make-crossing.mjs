@@ -28,6 +28,11 @@
  *   `visibleMask(name, t, 'segment')` renders exactly the pixels of that
  *   person that are visible at t — what a perfect segmentation would give.
  *
+ * custom.mp4 (4s) — MANUAL SELECTION: a patterned square BADGE (no object class the
+ *   detector knows) drifts right and down and grows ~40%, on a real street
+ *   while the camera pans; a DECOY badge in other colours stands still at the
+ *   top right; OLIVE walks left to right below it. `truth('badge', t, 'custom')`.
+ *
  * Exported `truth(name, t, scene)` gives each person's box (0-1 of the frame)
  * at any time — the same function the frames were drawn with.
  *
@@ -84,11 +89,31 @@ export const SCENES = {
     background: 'street-bg.jpg',
     people: { olive: { look: 'olive', from: 30, speed: 150 }, shirt: { look: 'shirt', from: 520, speed: -110 } },
     occluders: [{ x: 470, width: 30, before: 'olive' }]
+  },
+  custom: {
+    seconds: 4,
+    height: 200,
+    top: 150,
+    background: 'street-bg.jpg',
+    // The camera pans: the street slides left 25px a second.
+    pan: 25,
+    people: { olive: { look: 'olive', from: 20, speed: 120 } },
+    badges: {
+      badge: { x: 70, y: 50, vx: 95, vy: 22, size: 60, grow: 0.1, colors: ['#e8452c', '#f5c518', '#1d5fd1'] },
+      decoy: { x: 520, y: 30, vx: 0, vy: 0, size: 60, grow: 0, colors: ['#2bb673', '#f2f2f2', '#7a2bd1'] }
+    }
   }
 };
 
 export function truth(name, t, scene = 'crossing') {
   const spec = SCENES[scene];
+  const badge = spec.badges?.[name];
+  if (badge) {
+    const size = badge.size * (1 + badge.grow * t);
+    const cx = badge.x + badge.size / 2 + badge.vx * t;
+    const cy = badge.y + badge.size / 2 + badge.vy * t;
+    return { x: (cx - size / 2) / W, y: (cy - size / 2) / H, width: size / W, height: size / H };
+  }
   const p = spec.people[name];
   const s = PEOPLE[p.look];
   const height = spec.height || 190;
@@ -124,7 +149,9 @@ function drawPerson(ctx, img, b, mirror) {
 /** One frame of a scene: the background, then each person — each followed by whatever stands in front of them. */
 async function drawScene(ctx, scene, t) {
   const spec = SCENES[scene];
-  if (spec.background) {
+  if (spec.background && spec.pan) {
+    ctx.drawImage(await image(spec.background), -spec.pan * t, -40, W * 1.25, H * 1.25);
+  } else if (spec.background) {
     ctx.drawImage(await image(spec.background), 0, 0, W, H);
   } else {
     const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -140,6 +167,33 @@ async function drawScene(ctx, scene, t) {
       ctx.fillRect(o.x, 0, o.width, H);
     });
   }
+  for (const [name, b] of Object.entries(spec.badges || {})) drawBadge(ctx, truth(name, t, scene), b.colors);
+}
+
+/**
+ * A square plaque: a frame, stripes, a star — a pattern, and nothing the
+ * detector has a class for. (A ROUND badge was taken for a sports ball.)
+ */
+function drawBadge(ctx, box, [a, b, c]) {
+  const x = box.x * W;
+  const y = box.y * H;
+  const s = box.width * W;
+  ctx.save();
+  ctx.fillStyle = a;
+  ctx.fillRect(x, y, s, s);
+  ctx.fillStyle = b;
+  ctx.fillRect(x + s * 0.1, y + s * 0.1, s * 0.8, s * 0.8);
+  ctx.fillStyle = a;
+  for (let i = 0; i < 3; i++) ctx.fillRect(x + s * 0.1, y + s * (0.18 + i * 0.12), s * 0.8, s * 0.05);
+  ctx.fillStyle = c;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 ? s * 0.11 : s * 0.25;
+    const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+    ctx[i ? 'lineTo' : 'moveTo'](x + s * 0.5 + rr * Math.cos(ang), y + s * 0.66 + rr * Math.sin(ang));
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
 }
 
 /**

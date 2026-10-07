@@ -8,6 +8,11 @@
  *                               getTrackAtTime) — null where the track has no
  *                               claim (before it starts, after it is lost)
  *
+ * A DRAWN object (objectDetection.js's selectManualObject — anything the
+ * detector missed) is followed by its own pixels instead: templateMatch.js
+ * finds it in each frame and hands the matches to the same tracker, under
+ * the same rules.
+ *
  * Detection ends where this begins: the tracker (shared/objects/tracking.js)
  * gets each frame's detections from objectDetection.js's observeFrame — the
  * same detector (zoomed in where the object is small; the two directions on
@@ -21,7 +26,8 @@
  */
 import { appState, updateState } from '../state.js';
 import { trackObject, trackCacheKey, isTrackValidFor, normalizeTrack, getTrackAtTime, DEFAULT_TRACK_CONFIG } from '../../../shared/objects/tracking.js';
-import { getSelectedObject, getDetectionSet, getDetectionSource, getCacheKey, observeFrame } from './objectDetection.js';
+import { createTemplateObserver, isManualObject, MANUAL_CLASS } from '../../../shared/objects/templateMatch.js';
+import { getSelectedObject, getDetectionSet, getDetectionSource, getCacheKey, observeFrame, grabRegion } from './objectDetection.js';
 
 /** The selected object's track key (whether or not a track exists yet). */
 export function getSelectedTrackKey() {
@@ -74,20 +80,40 @@ export async function trackSelectedObject({ force = false } = {}) {
   job = (async () => {
     setStatus({ state: 'tracking', done: 0, total: 0, message: null, key });
     try {
-      // The starting detection, and its fingerprint in its own frame.
-      const start = await observeFrame(sel.timestamp);
-      const detection = start.candidates.find((c) => c.id === sel.detectionId)
-        || getDetectionSet()?.frames.flatMap((f) => f.detections).find((d) => d.id === sel.detectionId);
-      if (!detection) throw new Error('the selected object is no longer among the detections');
+      const frameSize = { width: source.width, height: source.height };
+      let start;
+      let detection;
+      let observe;
+      if (isManualObject(sel)) {
+        // Drawn by the user: followed by its own pixels.
+        detection = { id: sel.detectionId, class: MANUAL_CLASS, label: sel.label, confidence: 1, box: { ...sel.box }, time: sel.timestamp };
+        const observer = createTemplateObserver({
+          time: sel.timestamp,
+          box: sel.box,
+          frameSize,
+          grab: (t, region, w, h, direction) => grabRegion(t, region, w, h, { direction })
+        });
+        const primed = await observer.prime();
+        start = { thumb: primed.thumb };
+        detection.appearance = primed.appearance;
+        observe = (t, look) => observer.observe(t, look);
+      } else {
+        // The starting detection, and its fingerprint in its own frame.
+        start = await observeFrame(sel.timestamp);
+        detection = start.candidates.find((c) => c.id === sel.detectionId)
+          || getDetectionSet()?.frames.flatMap((f) => f.detections).find((d) => d.id === sel.detectionId);
+        if (!detection) throw new Error('the selected object is no longer among the detections');
+        observe = (t, look) => observeFrame(t, look);
+      }
       const raw = await trackObject({
         detection,
         appearance: detection.appearance,
         startThumb: start.thumb,
         // The video's own pixels: the tracker zooms in on small objects.
-        frameSize: { width: source.width, height: source.height },
+        frameSize,
         duration: source.duration,
         config: DEFAULT_TRACK_CONFIG,
-        observe: (t, look) => observeFrame(t, look),
+        observe,
         onProgress: (done, total) => setStatus({ done, total }),
         isCancelled: () => cancelled || getCacheKey() !== detectionCacheKey
       });
@@ -106,7 +132,8 @@ export async function trackSelectedObject({ force = false } = {}) {
       return null;
     }
   })();
-  job.finally(() => { job = null; });
+  // The panel reads isTracking(): tell it once the job is really over.
+  job.finally(() => { job = null; setStatus({}); });
   return job;
 }
 

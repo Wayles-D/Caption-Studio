@@ -38,6 +38,7 @@ import { SHAPE_KINDS, SHAPE_LABELS } from '../../../shared/shapeLayer.js';
 import * as captionEvents from './captionEvents.js';
 import * as rhythm from './rhythm.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
+import { toggleShortcutsDialog } from './keyboardShortcuts.js';
 
 const LANES = [
   { key: 'position', label: 'Position', properties: [
@@ -418,10 +419,21 @@ function buildDom(container, options) {
   redoBtn.type = 'button';
   redoBtn.className = 'timeline-history-btn';
   redoBtn.id = 'timeline-redo-btn';
-  redoBtn.title = 'Redo (Ctrl+Y)';
+  redoBtn.title = 'Redo (Ctrl+Y or Ctrl+Shift+Z)';
   redoBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6" /><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7" /></svg>';
   redoBtn.addEventListener('click', () => redo());
   playbackRow.appendChild(redoBtn);
+
+  // Every key the editor answers to (keyboardShortcuts.js) — also on ?.
+  const keysBtn = document.createElement('button');
+  keysBtn.type = 'button';
+  keysBtn.className = 'timeline-history-btn';
+  keysBtn.id = 'timeline-shortcuts-btn';
+  keysBtn.title = 'Keyboard shortcuts (?)';
+  keysBtn.setAttribute('aria-label', 'Keyboard shortcuts');
+  keysBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></svg>';
+  keysBtn.addEventListener('click', () => toggleShortcutsDialog());
+  playbackRow.appendChild(keysBtn);
 
   header.appendChild(playbackRow);
 
