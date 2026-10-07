@@ -129,6 +129,7 @@ export function selectShapeLayer(id) {
   }
   updateState({
     selectedShapeLayerId: id,
+    selectedObjectEffectId: null,
     selectedImageLayerId: null,
     selectedTextElementId: null,
     selectedCaptionEventId: null,

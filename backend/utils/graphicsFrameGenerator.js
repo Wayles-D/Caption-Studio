@@ -42,6 +42,11 @@ import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 import { normalizeImageLayerList, getImageLayerBoundaryTimes, imageLayerMotionSpans, drawImageLayer } from '../../shared/imageLayer.js';
 import { normalizeShapeLayerList, getShapeLayerBoundaryTimes, shapeLayerMotionSpans, drawShapeLayer } from '../../shared/shapeLayer.js';
 import { resolveLayerStack, layerRuns } from '../../shared/visualLayers.js';
+import {
+  normalizeObjectEffectList, resolveObjectEffects, drawObjectEffects, drawObjectEffectMasks, blurSigmas, objectEffectBoundaryTimes
+} from '../../shared/objects/effects.js';
+import { normalizeTrack } from '../../shared/objects/tracking.js';
+import { resolveVideoTransformAtTime } from '../../shared/videoTransform.js';
 
 /**
  * Whether a job with this style should render via the graphics pipeline
@@ -649,25 +654,118 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
 }
 
 /**
+ * OBJECT-AWARE EFFECTS (shared/objects/effects.js) as PNG streams: one
+ * OVERLAY stream (spotlights, glows, outlines — composited directly on the
+ * video, beneath every other layer, where the preview's effects canvas
+ * sits), and one blur MASK stream per blur strength (the compositor lays a
+ * Gaussian-blurred copy of the video over the video through it).
+ *
+ * A tracked object moves continuously, so wherever an effect is on, every
+ * sampled frame gets its own PNG (the same frame grid, and the same cap, as
+ * any moving layer — animationSampleTimes), each drawn at the instant it
+ * shows by the SAME resolve + draw calls the preview makes.
+ *
+ * The tracks come with the effects (params.objectEffectTracks: only those
+ * the effects reference). Nothing is tracked or detected here.
+ *
+ * @param {{boxWidth:number, boxHeight:number}} videoBox the video's resting box on the canvas (videoDecoration.js)
+ * @returns {{overlay: object[], masks: {sigma:number, segments:object[]}[]}} empty lists for a project without effects
+ */
+function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox) {
+  const none = { overlay: [], masks: [] };
+  const effects = normalizeObjectEffectList(params.objectEffects).filter((e) => e.enabled !== false && e.start < videoDuration);
+  if (!effects.length) return none;
+  let rawTracks = params.objectEffectTracks;
+  if (typeof rawTracks === 'string') {
+    try { rawTracks = JSON.parse(rawTracks); } catch { rawTracks = null; }
+  }
+  const tracks = new Map();
+  Object.entries(rawTracks && typeof rawTracks === 'object' ? rawTracks : {}).forEach(([key, raw]) => {
+    const track = normalizeTrack(raw);
+    if (track) tracks.set(key, track);
+  });
+  const usable = effects.filter((e) => tracks.has(e.trackKey));
+  if (!usable.length) return none;
+
+  const placementAt = (t) => ({
+    canvasWidth,
+    canvasHeight,
+    boxWidth: videoBox?.boxWidth || canvasWidth,
+    boxHeight: videoBox?.boxHeight || canvasHeight,
+    transform: resolveVideoTransformAtTime(params.videoTransform, t)
+  });
+
+  const cuts = new Set([0, videoDuration]);
+  const addCut = (t) => { if (t > 0 && t < videoDuration) cuts.add(t); };
+  objectEffectBoundaryTimes(usable).forEach(addCut);
+  usable.forEach((e) => {
+    addCut(e.start);
+    animationSampleTimes(e.start, Math.min(e.end, videoDuration)).forEach(addCut);
+  });
+  const boundaries = Array.from(cuts).sort((a, b) => a - b);
+
+  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const ctx = canvas.getContext('2d');
+  const sigmas = blurSigmas(usable, canvasWidth, canvasHeight);
+  const overlay = [];
+  const masks = sigmas.map((sigma) => ({ sigma, segments: [] }));
+  const offscreen = (w, h) => createCanvas(w, h);
+
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const start = boundaries[i];
+    const end = boundaries[i + 1];
+    if (end - start < 0.001) continue;
+    const resolved = resolveObjectEffects(usable, tracks, start, placementAt, canvasWidth, canvasHeight);
+    const drawn = resolved.filter((r) => r.effect.type !== 'blur');
+    if (drawn.length) {
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      drawObjectEffects(ctx, drawn, { canvasWidth, canvasHeight, createOffscreenCanvas: offscreen });
+      const file = path.join(outDir, `ofx-${Math.round(start * 1000)}.png`);
+      fs.writeFileSync(file, canvas.toBuffer('image/png'));
+      overlay.push({ start, end, file });
+    } else {
+      overlay.push({ start, end, file: blankFile });
+    }
+    masks.forEach((m, mi) => {
+      if (!resolved.some((r) => r.effect.type === 'blur')) { m.segments.push({ start, end, file: blankFile }); return; }
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      drawObjectEffectMasks(ctx, resolved, { canvasWidth, canvasHeight, sigma: m.sigma });
+      const file = path.join(outDir, `ofxmask${mi}-${Math.round(start * 1000)}.png`);
+      fs.writeFileSync(file, canvas.toBuffer('image/png'));
+      m.segments.push({ start, end, file });
+    });
+  }
+  // A stream that never draws anything is no stream at all.
+  return {
+    overlay: overlay.some((s) => s.file !== blankFile) ? overlay : [],
+    masks: masks.filter((m) => m.segments.some((s) => s.file !== blankFile))
+  };
+}
+
+/**
  * @param {object} [options]
  * @param {string|number} [options.frameRate] - The output's frame rate (the sampling grid).
  * @param {Map} [options.imageSources] - Decoded pictures for params.imageLayers
  *   (backend/utils/imageAssets.js's loadImageSources). Image layers are drawn
  *   only when it is given.
  */
-export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, { frameRate = null, imageSources = null } = {}) {
+// options.videoBox: the video's resting box on the canvas ({boxWidth,
+// boxHeight}, videoDecoration.js's prepareVideoComposition) — where
+// object-aware effects place their tracked regions. Omitted: the video fills
+// the canvas.
+export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, { frameRate = null, imageSources = null, videoBox = null } = {}) {
   // Everything below is synchronous, so the sampling grid set here is the
   // one every animation in this build is sampled on (see animationSampleTimes).
   const previousFps = sampleFps;
   sampleFps = parseFrameRate(frameRate);
   try {
-    return buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources);
+    return buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources, videoBox);
   } finally {
     sampleFps = previousFps;
   }
 }
 
-function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources) {
+function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources, videoBox) {
   const blankFile = generateBlankFrame(canvasWidth, canvasHeight, outDir);
   const pushGap = (segments, start, end) => {
     if (end - start >= 0.001) segments.push({ start, end, file: blankFile });
@@ -735,9 +833,20 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
   // kept so callers and tests that speak in them still work.
   const firstRun = (pred) => runs.find(pred)?.segments || [];
 
+  // Object-aware effects: their own streams, under everything (see
+  // buildObjectEffectSegments). Empty for a project without them.
+  let objectEffects = { overlay: [], masks: [] };
+  try {
+    objectEffects = buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox);
+  } catch (err) {
+    // An effect that cannot be drawn costs the effects, never the export.
+    console.error(`[GraphicsExport] Object effects skipped: ${err.message}`, err.stack);
+  }
+
   return {
     captions: segments,
     runs,
+    objectEffects,
     imagesUnder: firstRun((r) => r.beneathCaptions),
     manualCaptions: firstRun((r) => !r.beneathCaptions && r.kind === 'caption-blend'),
     text: firstRun((r) => !r.beneathCaptions && r.kind === 'plain')

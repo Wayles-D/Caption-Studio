@@ -14,6 +14,10 @@
  *                      track cache key. Saved, not undoable — like the
  *                      detections they are built from, an analysis result.
  *   trackingStatus     what the tracker is doing now (session only).
+ *   objectEffects      object-aware effects (shared/objects/effects.js): each
+ *                      FOLLOWS a track by its key. Editing work, so undoable
+ *                      and saved — like shapes.
+ *   selectedObjectEffectId  the effect being edited (session only).
  */
 import { create } from 'zustand';
 
@@ -24,10 +28,12 @@ export const OBJECT_DEFAULTS = {
   objectsMode: false,
   objectMinConfidence: 0.45,
   objectTracks: {},
-  trackingStatus: { state: 'idle', done: 0, total: 0, message: null }
+  trackingStatus: { state: 'idle', done: 0, total: 0, message: null },
+  objectEffects: [],
+  selectedObjectEffectId: null
 };
 
-export const OBJECT_DOCUMENT_KEYS = ['selectedObject'];
+export const OBJECT_DOCUMENT_KEYS = ['selectedObject', 'objectEffects'];
 export const OBJECT_PROJECT_KEYS = ['objectDetections', 'objectTracks'];
 
 export const useObjectStore = create(() => ({ ...OBJECT_DEFAULTS }));

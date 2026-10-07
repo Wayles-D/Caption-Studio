@@ -47,6 +47,7 @@ import * as videoTransformApi from './js/components/videoTransform.js';
 import * as rhythmApi from './js/components/rhythm.js';
 import * as objectsApi from './js/components/objectDetection.js';
 import * as trackingApi from './js/components/objectTracking.js';
+import * as objectEffectsApi from './js/components/objectEffects.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
@@ -514,6 +515,7 @@ export function App() {
       window.__rhythm = rhythmApi;
       window.__objects = objectsApi;
       window.__tracking = trackingApi;
+      window.__objectEffects = objectEffectsApi;
       window.__captionEvents = captionEventsApi;
     }
   }, []);
@@ -559,6 +561,18 @@ export function App() {
       if (id === lastId) return;
       lastId = id;
       if (id && isDesktopRef.current && desktopSidePanelRef.current !== 'layers') setDesktopSidePanel('shape-layer');
+    });
+  }, []);
+
+  // ...and selecting an OBJECT EFFECT (a clip on the Effects lane) brings up
+  // the Objects panel, where effects are edited.
+  useEffect(() => {
+    let lastId = appState.selectedObjectEffectId;
+    return subscribe('selectedObjectEffectId', () => {
+      const id = appState.selectedObjectEffectId;
+      if (id === lastId) return;
+      lastId = id;
+      if (id && isDesktopRef.current && desktopSidePanelRef.current !== 'layers') setDesktopSidePanel('objects');
     });
   }, []);
 

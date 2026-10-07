@@ -18,6 +18,7 @@ import { initCompositionView } from './compositionView.js';
 import { initRhythm } from './rhythm.js';
 import { initObjectDetection } from './objectDetection.js';
 import { initObjectOverlay } from './objectOverlay.js';
+import { syncObjectEffectsCanvas } from './objectEffects.js';
 import { initAudioEngine } from './audioEngine.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 
@@ -753,6 +754,9 @@ export function syncVideoSubtitles() {
   // — text elements are independent of whether a transcript caption happens
   // to be on screen, so their own pass must not be downstream of any of that.
   syncTextElementsCanvas(currentTime, baseStyleParams);
+  // Object-aware effects (objectEffects.js): their own canvas, on the video,
+  // beneath every layer — independent of captions like the pass above.
+  syncObjectEffectsCanvas(currentTime);
 
   const activeHighlight = baseCssConfig.highlightColor || '#FEF08A';
   const inactiveColor = baseCssConfig.inactiveColor || '#FFFFFF';

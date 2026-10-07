@@ -457,7 +457,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     //    (see graphicsFrameGenerator.js's buildTextElementSegments).
     // textBlendMode is read off the options object directly: its own
     // destructuring happens further down, after the video-transform chain.
-    const { textElementSegments, manualCaptionSegments, imageUnderSegments, layerRuns, textBlendMode: captionBlendMode } = videoTransformOpts;
+    const { textElementSegments, manualCaptionSegments, imageUnderSegments, layerRuns, textBlendMode: captionBlendMode, objectEffects } = videoTransformOpts;
     const extraLayers = [];
     const pushLayer = (segs, blendMode, prefix, label, beneathCaptions = false) => {
       if (!segs || !segs.length) return;
@@ -465,6 +465,11 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       if (!timeline) return;
       extraLayers.push({ timeline, blendMode, prefix, label, beneathCaptions });
     };
+    // OBJECT-AWARE EFFECTS (graphicsFrameGenerator.js's
+    // buildObjectEffectSegments). Spotlights, glows and outlines are one plain
+    // layer, the FIRST pass — directly on the video, beneath every other
+    // layer, where the preview's effects canvas sits.
+    pushLayer(objectEffects?.overlay, 'normal', 'ofx', 'fxlayer', true);
     if (Array.isArray(layerRuns)) {
       // THE LAYER STACK's runs (shared/visualLayers.js), bottom to top: each
       // its own stream, composited in order — those beneath the captions
@@ -494,6 +499,17 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       layer.concatListPath = writeConcatManifest(layer.timeline.entries);
       inputArgs.push('-f', 'concat', '-safe', '0', '-i', layer.concatListPath);
     });
+    // ...and the effects' blur MASKS: one stream per blur strength, read the
+    // same way, used by the blur stages below rather than overlaid.
+    const blurMasks = [];
+    (objectEffects?.masks || []).forEach((mask) => {
+      const timeline = mask.segments?.length ? buildLayerTimeline(mask.segments) : null;
+      if (!timeline || !(mask.sigma > 0)) return;
+      const inputIndex = 2 + extraLayers.length + blurMasks.length;
+      const listPath = writeConcatManifest(timeline.entries);
+      inputArgs.push('-f', 'concat', '-safe', '0', '-i', listPath);
+      blurMasks.push({ timeline, sigma: mask.sigma, inputIndex, label: `fxmask${blurMasks.length}` });
+    });
 
     // THE COMPOSITION's decoration images (backend/utils/videoDecoration.js):
     // still PNGs the video is masked by and laid between. The mask is looped —
@@ -501,7 +517,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // single frame on their own. Absent for an undecorated video.
     const composition = videoTransformOpts.composition || null;
     const decorationInputs = {};
-    let nextInputIndex = 2 + extraLayers.length;
+    let nextInputIndex = 2 + extraLayers.length + blurMasks.length;
     const decorationFiles = composition?.files || {};
     if (decorationFiles.mask) {
       inputArgs.push('-loop', '1', '-t', String(Math.ceil((videoTransformOpts.duration || 1) + 1)), '-i', decorationFiles.mask);
@@ -562,6 +578,21 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // chain it always was (captions, then each extra layer).
     const compositeStages = [];
     let currentBase = baseVideoLabel;
+    // BLUR effects, on the placed video itself, before any layer goes on: a
+    // Gaussian-blurred copy (gblur's sigma = the preview's canvas
+    // blur(sigma px)) laid over the video through the effect's mask, so only
+    // the tracked region is blurred — fading as the mask does.
+    blurMasks.forEach((mask, i) => {
+      const p = (name) => `[fxb${i}_${name}]`;
+      compositeStages.push(
+        `[${mask.inputIndex}:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${mask.timeline.total.toFixed(3)},setpts=PTS-STARTPTS,alphaextract${p('m')}`,
+        `${currentBase}split=2${p('base')}${p('src')}`,
+        `${p('src')}format=gbrp,gblur=sigma=${mask.sigma},format=rgba${p('blur')}`,
+        `${p('blur')}${p('m')}alphamerge${p('masked')}`,
+        `${p('base')}${p('masked')}overlay=x=0:y=0:format=rgb:eof_action=pass${p('out')}`
+      );
+      currentBase = p('out');
+    });
     const passes = [
       ...extraLayers.filter((layer) => layer.beneathCaptions),
       { label: 'captrack', blendMode: textBlendMode, prefix: 'ct' },

@@ -21,12 +21,14 @@ import { normalizeImageLayerList } from '../../shared/imageLayer.js';
 import { normalizeShapeLayerList } from '../../shared/shapeLayer.js';
 import { loadImageSources } from './imageAssets.js';
 import { prepareVideoComposition, compositionNeedsRender } from './videoDecoration.js';
+import { normalizeObjectEffectList } from '../../shared/objects/effects.js';
 
-/** Whether a project has anything only this pipeline can draw: text elements, image layers or shapes. */
+/** Whether a project has anything only this pipeline can draw: text elements, image layers, shapes or object effects. */
 function hasVisualObjects(params) {
   return normalizeTextElementList(params.textElements).some(isTextElementRenderable)
     || normalizeImageLayerList(params.imageLayers).some((img) => img.enabled !== false)
-    || normalizeShapeLayerList(params.shapeLayers).some((s) => s.enabled !== false);
+    || normalizeShapeLayerList(params.shapeLayers).some((s) => s.enabled !== false)
+    || normalizeObjectEffectList(params.objectEffects).some((e) => e.enabled !== false);
 }
 import { groupWordsToPhrases, sanitizePhraseTimings } from './phraseGrouper.js';
 import { normalizeCaptionEventList, resolveCaptionPhrases } from '../../shared/captionEvent.js';
@@ -80,7 +82,7 @@ export async function compositeTextElementsOnto(videoPath, styles, outputPath, f
   try {
     const { width, height, duration, frameRate } = await getVideoInfo(videoPath);
     const imageSources = await loadImageSources(normalizeImageLayerList(params.imageLayers));
-    const { captions, runs } = buildFullTimelineSegments([], params, width, height, duration, framesDir, { frameRate, imageSources });
+    const { captions, runs, objectEffects } = buildFullTimelineSegments([], params, width, height, duration, framesDir, { frameRate, imageSources });
     await compositeGraphicsCaptionTrack(videoPath, captions, outputPath, {
       frameRate,
       duration,
@@ -89,7 +91,8 @@ export async function compositeTextElementsOnto(videoPath, styles, outputPath, f
       textBlendMode: getASSStyleFromConfig(params).textBlendMode,
       // The fallback's captions are already burned in, so anything stacked
       // beneath the captions can only go on top of them here.
-      layerRuns: runs.map((run) => ({ ...run, beneathCaptions: false }))
+      layerRuns: runs.map((run) => ({ ...run, beneathCaptions: false })),
+      objectEffects
     });
     console.log(`[GraphicsExport] Composited ${runs.reduce((n, r) => n + r.segments.length, 0)} layer segments onto the fallback render.`);
     return true;
@@ -167,8 +170,14 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // second layer is added) for a project with no text elements.
     // Every picture the image layers use, decoded once for the whole render.
     const imageSources = await loadImageSources(normalizeImageLayerList(params.imageLayers));
-    const { captions: segments, runs: layerRuns, manualCaptions: manualCaptionSegments, text: textSegments } =
-      buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, { frameRate, imageSources });
+    const { captions: segments, runs: layerRuns, manualCaptions: manualCaptionSegments, text: textSegments, objectEffects } =
+      buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, {
+        frameRate,
+        imageSources,
+        // Where the video rests on the canvas: object effects place their
+        // tracked regions through it, as the preview does.
+        videoBox: { boxWidth: composition.boxWidth, boxHeight: composition.boxHeight }
+      });
     // The VIDEO's own keyframed transform (see shared/videoTransform.js) —
     // passed through so the exported file reproduces the same zoom/pan/
     // rotate/fade the live preview shows, independent of captions. The
@@ -195,6 +204,9 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       // The layer stack's runs (shared/visualLayers.js), in order — text
       // elements, images and shapes, beneath and above the captions.
       layerRuns,
+      // Object-aware effects (shared/objects/effects.js): an overlay under
+      // every layer, and masked blurs of the video itself.
+      objectEffects,
       // The audio timeline (sound effects + imported audio tracks — see
       // shared/audioTimeline.js). Passed through the same way videoTransform
       // above is, so the exported file's audio is resolved from the exact

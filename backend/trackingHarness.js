@@ -40,7 +40,7 @@ export function frameAt(file, time, info = probe(file), maxSide = 960) {
   const h = Math.round((info.height * scale) / 2) * 2;
   // A seek exactly onto the end finds no frame: stay a hair inside, as the editor's grabber does.
   const at = Math.min(Math.max(0, time), Math.max(0, info.duration - 0.1));
-  const r = spawnSync(ffmpegPath, ['-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1', '-vf', `scale=${w}:${h}`, '-f', 'rawvideo', '-pix_fmt', 'rgba', '-'], { maxBuffer: 1 << 28 });
+  const r = spawnSync(ffmpegPath, ['-v', 'error', '-ss', at.toFixed(3), '-i', file, '-frames:v', '1', '-vf', `scale=${w}:${h}`, '-f', 'rawvideo', '-pix_fmt', 'rgba', '-'], { maxBuffer: 1 << 28 });
   if (r.status !== 0 || !r.stdout.length) throw new Error(`no frame at ${time}`);
   return { data: new Uint8ClampedArray(r.stdout.buffer, r.stdout.byteOffset, r.stdout.length), width: w, height: h };
 }
@@ -52,7 +52,7 @@ function frameAtAsync(file, time, info, maxSide) {
   const h = Math.round((info.height * scale) / 2) * 2;
   const at = Math.min(Math.max(0, time), Math.max(0, info.duration - 0.1));
   return new Promise((resolve, reject) => {
-    const p = spawn(ffmpegPath, ['-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1', '-vf', `scale=${w}:${h}`, '-f', 'rawvideo', '-pix_fmt', 'rgba', '-']);
+    const p = spawn(ffmpegPath, ['-v', 'error', '-ss', at.toFixed(3), '-i', file, '-frames:v', '1', '-vf', `scale=${w}:${h}`, '-f', 'rawvideo', '-pix_fmt', 'rgba', '-']);
     const chunks = [];
     p.stdout.on('data', (c) => chunks.push(c));
     p.on('error', reject);

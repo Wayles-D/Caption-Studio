@@ -245,6 +245,7 @@ export function selectImageLayer(id) {
   updateState({
     selectedImageLayerId: id,
     selectedShapeLayerId: null,
+    selectedObjectEffectId: null,
     selectedTextElementId: null,
     selectedCaptionEventId: null,
     selectedAudioClipId: null

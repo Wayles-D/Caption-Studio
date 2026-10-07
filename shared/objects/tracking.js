@@ -602,15 +602,30 @@ function acrossGap(gaps, t1, t2) {
  * steady jitter without lag.
  */
 export function smoothSamples(samples, gaps = []) {
+  const usable = (s, n) => n.state === 'tracked' && !acrossGap(gaps, s.time, n.time);
   return samples.map((s, i) => {
     if (s.state !== 'tracked') return s;
+    // BALANCED: as far each way as BOTH ways reach. At the track's ends (and a
+    // gap's edges) the window would otherwise be one-sided, and averaging only
+    // the samples behind a moving object pulls its box back — measured: ~20px
+    // behind a walking person at his last sighting.
+    const extent = (k) => {
+      let far = 0;
+      for (let j = i + k; j >= 0 && j < samples.length; j += k) {
+        const dt = Math.abs(samples[j].time - s.time);
+        if (dt > SMOOTH_REACH) break;
+        if (usable(s, samples[j])) far = dt;
+      }
+      return far;
+    };
+    const reach = Math.min(extent(-1), extent(1)) + 1e-9;
     let cx = 0; let cy = 0; let w = 0; let h = 0; let wsum = 0;
     for (const k of [-1, 1]) {
       for (let j = k < 0 ? i : i + 1; j >= 0 && j < samples.length; j += k) {
         const n = samples[j];
         const dt = Math.abs(n.time - s.time);
-        if (dt > SMOOTH_REACH) break;
-        if (n.state !== 'tracked' || acrossGap(gaps, s.time, n.time)) continue;
+        if (dt > reach) break;
+        if (!usable(s, n)) continue;
         const weight = 1 - dt / (SMOOTH_REACH + 0.05);
         const c = centre(n.box);
         cx += c.x * weight; cy += c.y * weight; w += n.box.width * weight; h += n.box.height * weight; wsum += weight;

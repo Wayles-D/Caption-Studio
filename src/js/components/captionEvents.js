@@ -228,7 +228,8 @@ export function selectCaptionEvent(id) {
   updateState({ selectedCaptionEventId: id,
   // Selecting this releases a selected image (src/js/components/imageLayers.js) — one selection at a time.
   ...(id && appState.selectedImageLayerId ? { selectedImageLayerId: null } : {}),
-  ...(id && appState.selectedShapeLayerId ? { selectedShapeLayerId: null } : {}) }, { recordHistory: false });
+  ...(id && appState.selectedShapeLayerId ? { selectedShapeLayerId: null } : {}),
+  ...(id && appState.selectedObjectEffectId ? { selectedObjectEffectId: null } : {}) }, { recordHistory: false });
 }
 
 export function getSelectedCaptionEvent() {

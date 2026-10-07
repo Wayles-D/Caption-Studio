@@ -305,6 +305,22 @@ export function resetStyles() {
   updateState({ ...initialStyleState }, { recordHistory: true });
 }
 
+// Extra export fields from modules state.js must not import (they import it):
+// each returns fields to add, or {} — see objectEffects.js's payload, which
+// adds the object-aware effects and only the tracks they follow, and only
+// when there are any.
+const styleParamExtras = [];
+export function registerStyleParamsExtra(fn) {
+  if (typeof fn === 'function' && !styleParamExtras.includes(fn)) styleParamExtras.push(fn);
+}
+function styleExtras() {
+  const out = {};
+  styleParamExtras.forEach((fn) => {
+    try { Object.assign(out, fn() || {}); } catch (err) { console.warn('[state] a style-params extra failed:', err); }
+  });
+  return out;
+}
+
 /**
  * Single source of truth for resolved caption style parameters.
  * Every consumer (preview CSS, sidebar UI sync, upload/regenerate payloads)
@@ -399,6 +415,7 @@ export function getStyleParams() {
     // re-derived (see shared/captionEvent.js). The exporter renders these
     // instead of regrouping the word list, which is what makes a retimed,
     // split or merged caption survive an export at all.
-    captionEvents: appState.captionEvents
+    captionEvents: appState.captionEvents,
+    ...styleExtras()
   };
 }

@@ -11,7 +11,135 @@ import { useEffect, useState } from 'react';
 import { appState, subscribe } from '../js/state.js';
 import * as objects from '../js/components/objectDetection.js';
 import * as tracking from '../js/components/objectTracking.js';
+import * as effects from '../js/components/objectEffects.js';
 import { DETECTION_MODELS, DEFAULT_MODEL_ID } from '../../shared/objects/detections.js';
+import { OBJECT_EFFECT_TYPES, OBJECT_EFFECT_LABELS } from '../../shared/objects/effects.js';
+import { SELECT, Slider as SharedSlider, Toggle, ColorRow, TimeField } from './LayerInspectorControls.jsx';
+
+const EFFECT_API = { get: effects.getObjectEffect, update: effects.updateObjectEffect };
+const Slider = (props) => <SharedSlider api={EFFECT_API} {...props} />;
+const pct = (v) => `${Math.round(v * 100)}%`;
+
+/** The selected effect's settings — what each type has, and nothing it doesn't. */
+function EffectEditor({ effect }) {
+  const [openField, setOpenField] = useState(null);
+  const id = effect.id;
+  const a = effect.appearance;
+  const linked = effects.isEffectLinked(effect);
+  const look = (fields, opts) => effects.patchObjectEffectAppearance(id, fields, opts);
+  const colour = (label = 'Colour') => (
+    <ColorRow id="object-effect-color" label={label} value={a.color} openField={openField} setOpenField={setOpenField} apply={(hex, o) => look({ color: hex }, o)} />
+  );
+  const padding = <Slider id="object-effect-padding" layerId={id} label="Padding" value={a.padding} min={0} max={0.6} step={0.01} format={pct} onLive={(v, o) => look({ padding: v }, o)} />;
+  const roundness = <Slider id="object-effect-roundness" layerId={id} label="Roundness" value={a.cornerRadius} min={0} max={0.5} step={0.01} format={pct} onLive={(v, o) => look({ cornerRadius: v }, o)} />;
+  return (
+    <div className="flex flex-col gap-3 border-t border-[var(--border-color)] pt-3" id="object-effect-editor" data-type={effect.type} data-linked={linked ? 'yes' : 'no'}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[12px] font-bold text-[var(--accent-color)]">{effect.label || 'Object'}</span>
+        <select id="object-effect-type" className={`${SELECT} w-auto`} value={effect.type} onChange={(e) => effects.updateObjectEffect(id, { type: e.target.value })}>
+          {OBJECT_EFFECT_TYPES.map((t) => <option key={t} value={t}>{OBJECT_EFFECT_LABELS[t]}</option>)}
+        </select>
+      </div>
+      {!linked && (
+        <p className={HINT} id="object-effect-unlinked">
+          Its object is no longer tracked for this video, so it isn’t drawn. Select the object and track it again to bring it back.
+        </p>
+      )}
+      <Toggle id="object-effect-enabled" label="Show" on={effect.enabled} onChange={(on) => effects.updateObjectEffect(id, { enabled: on })} />
+      <div className="flex gap-2">
+        <TimeField id="object-effect-start" label="Start" value={effect.start} onCommit={(v) => effects.trimObjectEffect(id, 'start', v)} />
+        <TimeField id="object-effect-end" label="End" value={effect.end} onCommit={(v) => effects.trimObjectEffect(id, 'end', v)} />
+      </div>
+      {effect.type === 'outline' && (
+        <>
+          {colour()}
+          <Slider id="object-effect-thickness" layerId={id} label="Thickness" value={a.thickness} min={1} max={40} step={1} unit="px" onLive={(v, o) => look({ thickness: v }, o)} />
+          <Slider id="object-effect-opacity" layerId={id} label="Opacity" value={a.opacity} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ opacity: v }, o)} />
+          {padding}
+          {roundness}
+        </>
+      )}
+      {effect.type === 'glow' && (
+        <>
+          {colour()}
+          <Slider id="object-effect-intensity" layerId={id} label="Intensity" value={a.intensity} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ intensity: v }, o)} />
+          <Slider id="object-effect-radius" layerId={id} label="Radius" value={a.radius} min={2} max={120} step={1} unit="px" onLive={(v, o) => look({ radius: v }, o)} />
+          <Slider id="object-effect-opacity" layerId={id} label="Opacity" value={a.opacity} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ opacity: v }, o)} />
+          {padding}
+        </>
+      )}
+      {effect.type === 'spotlight' && (
+        <>
+          <Slider id="object-effect-strength" layerId={id} label="Dim the rest" value={a.strength} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ strength: v }, o)} />
+          <Slider id="object-effect-feather" layerId={id} label="Soft edge" value={a.feather} min={0} max={200} step={1} unit="px" onLive={(v, o) => look({ feather: v }, o)} />
+          {colour('Tint')}
+          {padding}
+          {roundness}
+        </>
+      )}
+      {effect.type === 'blur' && (
+        <>
+          <Slider id="object-effect-strength" layerId={id} label="Strength" value={a.strength} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ strength: v }, o)} />
+          {padding}
+          {roundness}
+        </>
+      )}
+      <Slider id="object-effect-fade" layerId={id} label="Fade in / out" value={effect.fade} min={0} max={1} step={0.05} format={(v) => `${v.toFixed(2)}s`} onLive={(v, o) => effects.updateObjectEffect(id, { fade: v }, o)} />
+      <button type="button" id="object-effect-delete" className={BTN} onClick={() => effects.removeObjectEffect(id)}>Delete effect</button>
+    </div>
+  );
+}
+
+/**
+ * Effects that FOLLOW a tracked object (shared/objects/effects.js): add one to
+ * the selected object once it is tracked; every effect, on every object, is
+ * listed here and on the timeline's Effects lane.
+ */
+function EffectsSection() {
+  const track = tracking.getSelectedTrack();
+  const all = effects.getObjectEffects();
+  const selected = effects.getSelectedObjectEffect();
+  if (!track && !all.length) return null;
+  return (
+    <div className={CARD} id="objects-effects">
+      <span className={SECTION_TITLE}>Effects</span>
+      {track ? (
+        <>
+          <p className={HINT}>Follows the selected {track.label?.toLowerCase() || 'object'} wherever it goes — no keyframes. Starts at the playhead.</p>
+          <div className="grid grid-cols-2 gap-2">
+            {OBJECT_EFFECT_TYPES.map((t) => (
+              <button type="button" key={t} id={`objects-effect-add-${t}`} data-add-effect={t} className={BTN} onClick={() => effects.addObjectEffect(t)}>
+                + {OBJECT_EFFECT_LABELS[t]}
+              </button>
+            ))}
+          </div>
+          <p className={HINT}>Outline, glow, spotlight and blur follow the object’s box — not yet its exact shape.</p>
+        </>
+      ) : (
+        <p className={HINT}>Select a tracked object to add an effect to it.</p>
+      )}
+      {all.length > 0 && (
+        <div className="flex flex-col gap-1.5" id="object-effects-list">
+          {all.map((e) => {
+            const on = selected?.id === e.id;
+            const linked = effects.isEffectLinked(e);
+            return (
+              <button
+                type="button" key={e.id} data-effect-id={e.id}
+                className={`${ROW} ${on ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-primary)]'}`}
+                onClick={() => effects.selectObjectEffect(on ? null : e.id)}
+              >
+                <span className="font-semibold">{effects.describeObjectEffect(e)}</span>
+                <span className="text-[11px] text-[var(--text-muted)]">{linked ? `${e.start.toFixed(1)}–${e.end.toFixed(1)}s` : 'not tracked'}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {selected && <EffectEditor effect={selected} />}
+    </div>
+  );
+}
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
 const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
@@ -176,6 +304,8 @@ export function ObjectsInspector() {
           <p className={HINT}>None — click a box on the video, or an object above.</p>
         )}
       </div>
+
+      <EffectsSection />
 
       <p className={HINT}>Detector: YOLOX-Tiny ({model.license}), runs on this device. Nothing is uploaded.</p>
     </div>

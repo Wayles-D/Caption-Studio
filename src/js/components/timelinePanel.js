@@ -33,6 +33,7 @@ import { getAudioTrackDuration } from '../../../shared/audioTimeline.js';
 import * as textElements from './textElements.js';
 import * as imageLayers from './imageLayers.js';
 import * as shapeLayers from './shapeLayers.js';
+import * as objectEffects from './objectEffects.js';
 import { SHAPE_KINDS, SHAPE_LABELS } from '../../../shared/shapeLayer.js';
 import * as captionEvents from './captionEvents.js';
 import * as rhythm from './rhythm.js';
@@ -174,6 +175,7 @@ function applyTimelineZoom(nextZoom, anchorClientX = null) {
   lastTextSignature = null;
   lastImageSignature = null;
   lastShapeSignature = null;
+  lastEffectSignature = null;
   lastAudioSignature = null;
 }
 
@@ -719,6 +721,14 @@ function buildDom(container, options) {
   const shapesLane = buildAudioLane('shapes', 'Shapes', 'Add a shape at the playhead');
   shapesLane.row.hidden = true;
   lanesEl.appendChild(shapesLane.row);
+  // OBJECT-AWARE EFFECTS: their own lane, only once there is one. They are
+  // added from the Objects panel — an effect needs a tracked object — so the
+  // lane has no "+" of its own.
+  const effectsLane = buildAudioLane('effects', 'Effects', 'Effects are added from the Objects panel');
+  effectsLane.row.hidden = true;
+  effectsLane.addBtn.hidden = true;
+  effectsLane.addBtn.style.display = 'none';
+  lanesEl.appendChild(effectsLane.row);
   lanesEl.appendChild(interludeLane.row);
   lanesEl.appendChild(captionsLane.row);
   lanesEl.appendChild(textLane.row);
@@ -826,6 +836,7 @@ function buildDom(container, options) {
     captionsTrack: captionsLane.track, interludeTrack: interludeLane.track, interludeRow: interludeLane.row, addInterludeBtn: interludeLane.addBtn,
     imagesTrack: imagesLane.track, imagesRow: imagesLane.row, addImagesLaneBtn: imagesLane.addBtn,
     shapesTrack: shapesLane.track, shapesRow: shapesLane.row, addShapesLaneBtn: shapesLane.addBtn,
+    effectsTrack: effectsLane.track, effectsRow: effectsLane.row,
     addSoundBtn: sfxLane.addBtn, addAudioBtn: audioLane.addBtn, addTextBtn: textLane.addBtn,
     addCaptionBtn: captionsLane.addBtn, addVideoBtn,
     zoomInBtn, zoomOutBtn, zoomLevel
@@ -1201,7 +1212,8 @@ document.addEventListener('keydown', (e) => {
   }
 
   if (imageLayers.removeSelectedImageLayer()) return;
-  shapeLayers.removeSelectedShapeLayer();
+  if (shapeLayers.removeSelectedShapeLayer()) return;
+  objectEffects.removeSelectedObjectEffect();
 });
 
 // Signature of "what markers should exist right now" (entry times + values +
@@ -1486,6 +1498,8 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       imageLayers.selectImageLayer(clip.id);
     } else if (kind === 'shape') {
       shapeLayers.selectShapeLayer(clip.id);
+    } else if (kind === 'effect') {
+      objectEffects.selectObjectEffect(clip.id);
     } else if (kind === 'text') {
       textElements.selectTextElement(clip.id);
       audioTimeline.selectClip(null);
@@ -1521,7 +1535,8 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       soundsBefore: kind === 'text' ? appState.soundEvents : null,
       // The image list, for the same rewind-then-commit.
       imagesBefore: kind === 'image' ? appState.imageLayers : null,
-      shapesBefore: kind === 'shape' ? appState.shapeLayers : null
+      shapesBefore: kind === 'shape' ? appState.shapeLayers : null,
+      effectsBefore: kind === 'effect' ? appState.objectEffects : null
     };
   });
 
@@ -1552,6 +1567,9 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       }
       if (dragClip.kind === 'shape' && dragClip.shapesBefore) {
         updateState({ shapeLayers: dragClip.shapesBefore }, { recordHistory: false });
+      }
+      if (dragClip.kind === 'effect' && dragClip.effectsBefore) {
+        updateState({ objectEffects: dragClip.effectsBefore }, { recordHistory: false });
       }
       applyClipDrag(e.clientX, el, { recordHistory: true });
     }
@@ -1602,12 +1620,13 @@ function clipShownTime(kind, clip, start) {
 }
 
 /** The clip kinds a beat snap applies to — the visual objects. */
-const SNAP_KINDS = new Set(['text', 'image', 'shape']);
+const SNAP_KINDS = new Set(['text', 'image', 'shape', 'effect']);
 /** How close, on screen, a beat must be to catch an edge. */
 const SNAP_PX = 8;
 
 function clipLength(kind, id) {
-  const list = kind === 'text' ? appState.textElements : kind === 'image' ? appState.imageLayers : kind === 'shape' ? appState.shapeLayers : null;
+  const list = kind === 'text' ? appState.textElements : kind === 'image' ? appState.imageLayers : kind === 'shape' ? appState.shapeLayers
+    : kind === 'effect' ? appState.objectEffects : null;
   const item = (list || []).find((x) => x.id === id);
   return item ? item.end - item.start : null;
 }
@@ -1643,6 +1662,7 @@ function applyClipDrag(clientX, el, options) {
     else if (dragClip.kind === 'text') textElements.moveTextElement(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'image') imageLayers.moveImageLayer(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'shape') shapeLayers.moveShapeLayer(dragClip.id, nextStart, options);
+    else if (dragClip.kind === 'effect') objectEffects.moveObjectEffect(dragClip.id, nextStart, options);
     else if (dragClip.kind === 'caption') captionEvents.moveCaptionEventTo(dragClip.id, nextStart, options);
     else audioTimeline.moveAudioTrack(dragClip.id, nextStart, options);
     return;
@@ -1662,6 +1682,10 @@ function applyClipDrag(clientX, el, options) {
   }
   if (dragClip.kind === 'shape') {
     shapeLayers.trimShapeLayer(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
+    return;
+  }
+  if (dragClip.kind === 'effect') {
+    objectEffects.trimObjectEffect(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
     return;
   }
 
@@ -1944,6 +1968,62 @@ function refreshShapeLane(duration) {
     return clip;
   });
   sizeLaneForRows(els.shapesTrack, stackClips(els.shapesTrack, clips));
+}
+
+/**
+ * One clip for one object-aware effect — the same clip element and gestures,
+ * kind 'effect'. Its colour is its swatch; an effect whose track no longer
+ * applies is shown UNLINKED (it draws nothing until the object is tracked
+ * again).
+ */
+function buildEffectClip(effect, duration, isSelected) {
+  const el = document.createElement('div');
+  el.className = `timeline-text-clip is-effect type-${effect.type}`;
+  if (isSelected) el.classList.add('selected');
+  if (!effect.enabled) el.classList.add('disabled');
+  const linked = objectEffects.isEffectLinked(effect);
+  if (!linked) el.classList.add('is-unlinked');
+  el.style.left = `${timeToPercent(effect.start, duration)}%`;
+  el.style.width = `${Math.max(1, timeToPercent(effect.end, duration) - timeToPercent(effect.start, duration))}%`;
+  el.style.setProperty('--shape-swatch', effect.appearance.color || '#9CA3AF');
+  el.dataset.clipId = effect.id;
+  el.tabIndex = 0;
+  el.title = `${objectEffects.describeObjectEffect(effect)} · ${effect.start.toFixed(2)}s → ${effect.end.toFixed(2)}s${linked ? '' : ' — its object is no longer tracked'} — drag to move, drag an edge to retime, Delete to remove`;
+  const swatch = document.createElement('span');
+  swatch.className = 'timeline-shape-clip-swatch kind-rounded';
+  el.appendChild(swatch);
+  const label = document.createElement('span');
+  label.className = 'timeline-text-clip-label';
+  label.textContent = objectEffects.describeObjectEffect(effect);
+  el.appendChild(label);
+  attachClipPointerHandlers(el, effect, 'effect', 'move');
+  ['start', 'end'].forEach((edge) => {
+    const handle = document.createElement('div');
+    handle.className = `timeline-text-clip-handle ${edge}`;
+    handle.title = edge === 'start' ? 'Change when it starts' : 'Change when it ends';
+    attachClipPointerHandlers(handle, effect, 'effect', edge === 'start' ? 'trim-start' : 'trim-end');
+    el.appendChild(handle);
+  });
+  return el;
+}
+
+let lastEffectSignature = null;
+function refreshEffectLane(duration) {
+  const effects = appState.objectEffects || [];
+  const selectedId = appState.selectedObjectEffectId;
+  const linked = effects.map((e) => objectEffects.isEffectLinked(e));
+  const signature = JSON.stringify({ effects, selectedId, duration, linked });
+  if (signature === lastEffectSignature || dragClip) return;
+  lastEffectSignature = signature;
+  clearClips(els.effectsTrack);
+  els.effectsRow.hidden = effects.length === 0;
+  if (!(duration > 0) || !effects.length) return;
+  const clips = effects.map((effect) => {
+    const clip = buildEffectClip(effect, duration, effect.id === selectedId);
+    els.effectsTrack.appendChild(clip);
+    return clip;
+  });
+  sizeLaneForRows(els.effectsTrack, stackClips(els.effectsTrack, clips));
 }
 
 /** The "+ Shape" menu: one row per kind; picking one adds it at the playhead. */
@@ -2458,6 +2538,7 @@ function tick() {
   refreshTextLane(duration);
   refreshImageLane(duration);
   refreshShapeLane(duration);
+  refreshEffectLane(duration);
   if (els.timeReadout) els.timeReadout.textContent = formatTime(currentTime);
 
   const paused = video?.paused ?? true;
@@ -2567,6 +2648,7 @@ export function initTimelinePanel(container, options = {}) {
   lastTextSignature = null;
   lastImageSignature = null;
   lastShapeSignature = null;
+  lastEffectSignature = null;
   dragClip = null;
   timelineZoom = 1;
   autoFollow = true;
