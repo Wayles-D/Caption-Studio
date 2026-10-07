@@ -9,6 +9,13 @@ import tailwindcss from '@tailwindcss/vite';
 // existing dev-server behavior otherwise.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // The object detector's and segmenter's runtimes are imported only inside
+  // their Web Workers, so the dev server discovers them the first time a
+  // worker starts — and RELOADS THE PAGE to re-optimise, mid-detection or
+  // mid-segmentation. Declared up front, they are ready from the start.
+  optimizeDeps: {
+    include: ['onnxruntime-web/wasm', 'onnxruntime-web/webgpu']
+  },
   server: {
     watch: {
       // The backend writes RUNTIME DATA inside this same project root, and the

@@ -106,6 +106,21 @@ export function getSavedImageFile(assetId) {
   return assetId ? getFile(imageKey(assetId)) : Promise.resolve(null);
 }
 
+// ANALYSIS ARTIFACTS (object segmentation masks — objectSegmentation.js):
+// derived data too big for the project document, kept beside it in the
+// files store. Never uploaded; dropped with the project (a new video clears
+// the store) or when the analysis they belong to is replaced or goes stale.
+const analysisKey = (key) => `analysis:${key}`;
+export function putAnalysisFile(key, blob) {
+  return key && blob ? putFile(analysisKey(key), blob) : Promise.resolve(null);
+}
+export function getAnalysisFile(key) {
+  return key ? getFile(analysisKey(key)) : Promise.resolve(null);
+}
+export function deleteAnalysisFile(key) {
+  return key ? run(FILE_STORE, 'readwrite', (store) => store.delete(analysisKey(key))) : Promise.resolve(null);
+}
+
 let saveTimer = null;
 // Set by discardSavedProject: the project is being thrown away, and nothing
 // (a pending save, the page-hide flush) may write it back.

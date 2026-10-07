@@ -48,6 +48,7 @@ import * as rhythmApi from './js/components/rhythm.js';
 import * as objectsApi from './js/components/objectDetection.js';
 import * as trackingApi from './js/components/objectTracking.js';
 import * as objectEffectsApi from './js/components/objectEffects.js';
+import * as segmentationApi from './js/components/objectSegmentation.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
 import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
@@ -516,6 +517,7 @@ export function App() {
       window.__objects = objectsApi;
       window.__tracking = trackingApi;
       window.__objectEffects = objectEffectsApi;
+      window.__segmentation = segmentationApi;
       window.__captionEvents = captionEventsApi;
     }
   }, []);

@@ -1,7 +1,8 @@
 /**
- * Builds the tracking fixtures — REAL people (cut from a real street video,
- * see README.md) walking known paths over a plain backdrop, so object
- * tracking can be checked against ground truth no ordinary footage provides.
+ * Builds the tracking and segmentation fixtures — REAL people (cut from a
+ * real street video, see README.md) walking known paths, so object tracking
+ * and segmentation can be checked against ground truth no ordinary footage
+ * provides.
  *
  * crossing.mp4 (4s)
  *   0.0s  WHITE (white shirt) at the left, GREEN (green shirt) at the right
@@ -19,6 +20,14 @@
  *   at the right (~3.7s). GREEN stands about on the left the whole time, a
  *   person who is NOT him.
  *
+ * segment.mp4 (4.5s) — SEGMENTATION ground truth: two people cut out with
+ *   their real silhouettes (soft-edged alpha — person-olive.png,
+ *   person-shirt.png) on a real street (street-bg.jpg). OLIVE walks right;
+ *   SHIRT walks left and passes IN FRONT of him (~1.6-2.4s); OLIVE passes
+ *   behind a pillar (~2.4-3.1s) and leaves the frame at the right (~3.8-4.1s).
+ *   `visibleMask(name, t, 'segment')` renders exactly the pixels of that
+ *   person that are visible at t — what a perfect segmentation would give.
+ *
  * Exported `truth(name, t, scene)` gives each person's box (0-1 of the frame)
  * at any time — the same function the frames were drawn with.
  *
@@ -35,22 +44,29 @@ export const W = 640;
 export const H = 360;
 export const FPS = 15;
 export const SECONDS = 4;
-const HEIGHT = 190;
-const TOP = 150;
 export const PILLAR = { x: 468, width: 36 };
 export const WALL = { x: 330, width: 200 };
 
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.join(here, '..', '..', '..');
+
 const PEOPLE = {
   white: { file: 'person-white.png', size: [63, 188] },
-  green: { file: 'person-green.png', size: [116, 486] }
+  green: { file: 'person-green.png', size: [116, 486] },
+  olive: { file: 'person-olive.png', size: [148, 460] },
+  shirt: { file: 'person-shirt.png', size: [272, 460] }
 };
 
-/** Who is in each scene: their look, start x (px), speed (px/s); drawn in this order (later = in front). */
+/**
+ * Who is in each scene: their look, start x (px), speed (px/s); drawn in
+ * this order (later = in front). An occluder (pillar, wall) stands in front
+ * of the person named in its `before`.
+ */
 export const SCENES = {
   crossing: {
     seconds: 4,
     people: { white: { look: 'white', from: 40, speed: 170 }, green: { look: 'green', from: 560, speed: -125 } },
-    pillar: PILLAR
+    occluders: [{ ...PILLAR, before: 'white' }]
   },
   lookalike: {
     seconds: 4,
@@ -59,55 +75,109 @@ export const SCENES = {
   reentry: {
     seconds: 4.5,
     people: { green: { look: 'green', from: 20, speed: 13 }, white: { look: 'white', from: 200, speed: 110 } },
-    wall: WALL
+    occluders: [{ ...WALL, before: 'white' }]
+  },
+  segment: {
+    seconds: 4.5,
+    height: 230,
+    top: 112,
+    background: 'street-bg.jpg',
+    people: { olive: { look: 'olive', from: 30, speed: 150 }, shirt: { look: 'shirt', from: 520, speed: -110 } },
+    occluders: [{ x: 470, width: 30, before: 'olive' }]
   }
 };
 
 export function truth(name, t, scene = 'crossing') {
-  const p = SCENES[scene].people[name];
+  const spec = SCENES[scene];
+  const p = spec.people[name];
   const s = PEOPLE[p.look];
-  const w = (s.size[0] * HEIGHT) / s.size[1];
+  const height = spec.height || 190;
+  const w = (s.size[0] * height) / s.size[1];
   const x = p.from + p.speed * t;
-  return { x: x / W, y: TOP / H, width: w / W, height: HEIGHT / H };
+  return { x: x / W, y: (spec.top ?? 150) / H, width: w / W, height: height / H };
 }
 
-async function build(scene) {
+let canvasLib = null;
+const images = new Map();
+async function lib() {
+  if (!canvasLib) canvasLib = await import(pathToFileURL(path.join(root, 'backend', 'node_modules', '@napi-rs', 'canvas', 'index.js')).href);
+  return canvasLib;
+}
+async function image(file) {
+  if (!images.has(file)) images.set(file, await (await lib()).loadImage(path.join(here, file)));
+  return images.get(file);
+}
+
+function drawPerson(ctx, img, b, mirror) {
+  const [x, y, w, h] = [b.x * W, b.y * H, b.width * W, b.height * H];
+  if (mirror) {
+    ctx.save();
+    ctx.translate(x + w, y);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, 0, 0, w, h);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, x, y, w, h);
+  }
+}
+
+/** One frame of a scene: the background, then each person — each followed by whatever stands in front of them. */
+async function drawScene(ctx, scene, t) {
   const spec = SCENES[scene];
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const root = path.join(here, '..', '..', '..');
-  const { createCanvas, loadImage } = await import(pathToFileURL(path.join(root, 'backend', 'node_modules', '@napi-rs', 'canvas', 'index.js')).href);
-  const ffmpegPath = (await import(pathToFileURL(path.join(root, 'backend', 'node_modules', 'ffmpeg-static', 'index.js')).href)).default;
-  const imgs = { white: await loadImage(path.join(here, PEOPLE.white.file)), green: await loadImage(path.join(here, PEOPLE.green.file)) };
-  const canvas = createCanvas(W, H);
-  const ctx = canvas.getContext('2d');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `bhynd-${scene}-`));
-  const frames = Math.round(spec.seconds * FPS);
-  for (let i = 0; i < frames; i++) {
-    const t = i / FPS;
+  if (spec.background) {
+    ctx.drawImage(await image(spec.background), 0, 0, W, H);
+  } else {
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, '#3b3a38');
     g.addColorStop(1, '#1d1c1b');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
-    for (const [name, p] of Object.entries(spec.people)) {
-      const b = truth(name, t, scene);
-      const [x, y, w, h] = [b.x * W, b.y * H, b.width * W, b.height * H];
-      if (p.mirror) {
-        ctx.save();
-        ctx.translate(x + w, y);
-        ctx.scale(-1, 1);
-        ctx.drawImage(imgs[p.look], 0, 0, w, h);
-        ctx.restore();
-      } else {
-        ctx.drawImage(imgs[p.look], x, y, w, h);
-      }
-      // The pillar and the wall stand in front of WHITE only.
-      if (name === 'white') {
-        ctx.fillStyle = '#6f6d69';
-        if (spec.pillar) ctx.fillRect(spec.pillar.x, 0, spec.pillar.width, H);
-        if (spec.wall) ctx.fillRect(spec.wall.x, 0, spec.wall.width, H);
-      }
-    }
+  }
+  for (const [name, p] of Object.entries(spec.people)) {
+    drawPerson(ctx, await image(PEOPLE[p.look].file), truth(name, t, scene), p.mirror);
+    (spec.occluders || []).filter((o) => o.before === name).forEach((o) => {
+      ctx.fillStyle = '#6f6d69';
+      ctx.fillRect(o.x, 0, o.width, H);
+    });
+  }
+}
+
+/**
+ * The pixels of `name` VISIBLE at `t` — its own alpha, less whatever is drawn
+ * over it (an occluder in front of it, anyone drawn after it) — as 0-255 per
+ * pixel of the W×H frame. The ground truth a segmentation is scored against.
+ */
+export async function visibleMask(name, t, scene = 'segment') {
+  const { createCanvas } = await lib();
+  const spec = SCENES[scene];
+  const c = createCanvas(W, H);
+  const ctx = c.getContext('2d');
+  const names = Object.keys(spec.people);
+  const me = spec.people[name];
+  drawPerson(ctx, await image(PEOPLE[me.look].file), truth(name, t, scene), me.mirror);
+  ctx.globalCompositeOperation = 'destination-out';
+  (spec.occluders || []).filter((o) => o.before === name).forEach((o) => { ctx.fillStyle = '#000'; ctx.fillRect(o.x, 0, o.width, H); });
+  for (const other of names.slice(names.indexOf(name) + 1)) {
+    const p = spec.people[other];
+    drawPerson(ctx, await image(PEOPLE[p.look].file), truth(other, t, scene), p.mirror);
+    (spec.occluders || []).filter((o) => o.before === other).forEach((o) => { ctx.fillStyle = '#000'; ctx.fillRect(o.x, 0, o.width, H); });
+  }
+  const d = ctx.getImageData(0, 0, W, H).data;
+  const out = new Uint8Array(W * H);
+  for (let i = 0; i < out.length; i++) out[i] = d[i * 4 + 3];
+  return out;
+}
+
+async function build(scene) {
+  const spec = SCENES[scene];
+  const { createCanvas } = await lib();
+  const ffmpegPath = (await import(pathToFileURL(path.join(root, 'backend', 'node_modules', 'ffmpeg-static', 'index.js')).href)).default;
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `bhynd-${scene}-`));
+  const frames = Math.round(spec.seconds * FPS);
+  for (let i = 0; i < frames; i++) {
+    await drawScene(ctx, scene, i / FPS);
     fs.writeFileSync(path.join(tmp, `f${String(i).padStart(3, '0')}.png`), canvas.toBuffer('image/png'));
   }
   const out = path.join(here, `${scene}.mp4`);

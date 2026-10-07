@@ -14,6 +14,7 @@ import { appState, subscribe } from '../state.js';
 import { videoBoxToComposition, videoToComposition, detectionAtScreenPoint } from '../../../shared/objects/coordinates.js';
 import { smoothSamples, trackSegments } from '../../../shared/objects/tracking.js';
 import { getSelectedTrack, getTrackedStateAt } from './objectTracking.js';
+import { getSelectedMaskAt, getSelectedSegmentation } from './objectSegmentation.js';
 import { resolveVideoTransformAtTime } from '../../../shared/videoTransform.js';
 import { getVideoBoxFraction } from './compositionView.js';
 import { getDetectionsAt, getSelectedObject, selectObject, clearSelectedObject, displayNames } from './objectDetection.js';
@@ -21,6 +22,10 @@ import { getDetectionsAt, getSelectedObject, selectObject, clearSelectedObject, 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 let root = null;
 let svg = null;
+// The selected object's SEGMENTATION mask (objectSegmentation.js), drawn
+// under the boxes — an editing aid like everything here, never exported.
+let maskCanvas = null;
+let lastMaskSig = '';
 let labels = null;
 let lastSig = '';
 let rafId = null;
@@ -50,6 +55,10 @@ function build() {
   svg.classList.add('object-overlay-boxes');
   labels = document.createElement('div');
   labels.className = 'object-overlay-labels';
+  maskCanvas = document.createElement('canvas');
+  maskCanvas.id = 'object-mask-canvas';
+  maskCanvas.className = 'object-mask-canvas';
+  root.appendChild(maskCanvas);
   root.appendChild(svg);
   root.appendChild(labels);
   surface.appendChild(root);
@@ -80,6 +89,7 @@ function render() {
   // The selected object's TRACK, at any time — scrubbing or playing.
   const track = getSelectedTrack();
   const tracked = track ? getTrackedStateAt(t) : null;
+  drawMask(t, placement);
   const sig = JSON.stringify([found?.time, found?.detections.map((d) => d.id), sel?.detectionId, placement, track?.samples.length, track?.gaps?.length, tracked]);
   if (sig === lastSig) return;
   lastSig = sig;
@@ -108,6 +118,69 @@ function render() {
     tag.textContent = `${names.get(d.id)} ${Math.round(d.confidence * 100)}%`;
     labels.appendChild(tag);
   });
+}
+
+const MASK_RGB = [16, 233, 160];
+let gridCanvas = null;
+
+/**
+ * The mask at `t`, in one of three views (appState.maskView): 'overlay' (the
+ * object tinted), 'silhouette' (everything else dimmed — the object alone),
+ * 'boundary' (its outline). The mask is in VIDEO space; it is placed exactly
+ * as the boxes are (coordinates.js's videoToComposition — the video's box,
+ * offset, scale, rotation), as one affine transform.
+ */
+function drawMask(t, placement) {
+  const view = appState.maskView || 'overlay';
+  const mask = view === 'off' ? null : getSelectedMaskAt(t);
+  const rec = getSelectedSegmentation();
+  const rect = root.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.max(1, Math.round(rect.width * dpr));
+  const ch = Math.max(1, Math.round(rect.height * dpr));
+  const sig = JSON.stringify([view, rec?.key, mask && [mask.time, mask.frame, mask.confidence], placement, cw, ch]);
+  if (sig === lastMaskSig) return;
+  lastMaskSig = sig;
+  root.dataset.maskView = view;
+  root.dataset.maskLevel = mask ? mask.level : '';
+  if (maskCanvas.width !== cw) maskCanvas.width = cw;
+  if (maskCanvas.height !== ch) maskCanvas.height = ch;
+  const ctx = maskCanvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, cw, ch);
+  if (!mask) return;
+  const { grid, alpha, frame } = mask;
+  if (!gridCanvas) gridCanvas = document.createElement('canvas');
+  gridCanvas.width = grid.width;
+  gridCanvas.height = grid.height;
+  const gc = gridCanvas.getContext('2d');
+  const img = gc.createImageData(grid.width, grid.height);
+  for (let i = 0; i < alpha.length; i++) {
+    let a = alpha[i];
+    if (view === 'boundary') {
+      const x = i % grid.width;
+      const inside = a >= 128;
+      const edge = inside && ((x > 0 && alpha[i - 1] < 128) || (x < grid.width - 1 && alpha[i + 1] < 128) || (i >= grid.width && alpha[i - grid.width] < 128) || (i < alpha.length - grid.width && alpha[i + grid.width] < 128));
+      a = edge ? 255 : 0;
+    } else if (view === 'overlay') a = Math.round(a * 0.55);
+    img.data[i * 4] = MASK_RGB[0]; img.data[i * 4 + 1] = MASK_RGB[1]; img.data[i * 4 + 2] = MASK_RGB[2]; img.data[i * 4 + 3] = a;
+  }
+  gc.putImageData(img, 0, 0);
+  // Video space → this canvas: the placement is affine, so three points fix it.
+  const o = videoToComposition({ x: 0, y: 0 }, placement);
+  const ux = videoToComposition({ x: 1, y: 0 }, placement);
+  const vy = videoToComposition({ x: 0, y: 1 }, placement);
+  if (view === 'silhouette') {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.globalCompositeOperation = 'destination-out';
+  }
+  ctx.setTransform((ux.x - o.x) * cw, (ux.y - o.y) * ch, (vy.x - o.x) * cw, (vy.y - o.y) * ch, o.x * cw, o.y * ch);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(gridCanvas, frame.x, frame.y, frame.width, frame.height);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 /** The track's path (faint, broken where it was lost and found again), and where the object is now (box + label). */

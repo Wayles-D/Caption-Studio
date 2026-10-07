@@ -35,3 +35,16 @@ Built by `make-crossing.mjs`, which also exports the ground truth
   [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/):
   https://commons.wikimedia.org/wiki/File:Vespero_en_Hong_Kong_Island_(2014)_02.webm
   — cropped; the three tracking videos are derivatives and share that license.
+
+## Segmentation fixture (V2.0)
+
+- `segment.mp4` — 640×360, 15 fps, 4.5s: two people with their REAL
+  silhouettes walk a street; one crosses in front of the other, which then
+  passes behind a pillar and leaves the frame. `make-crossing.mjs`'s
+  `visibleMask(name, t, 'segment')` renders exactly the pixels of a person
+  visible at any time — the ground truth segmentation is scored against.
+- `person-olive.png`, `person-shirt.png` — two people with soft-edged alpha
+  cut-outs; `street-bg.jpg` — an empty stretch of the same street. All from
+  frames of the same clip (CC BY-SA 4.0, above): the cut-outs were made with
+  MobileSAM and cleaned by hand (stray scene fragments removed); the
+  background cropped. `segment.mp4` is a derivative and shares the license.

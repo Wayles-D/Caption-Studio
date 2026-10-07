@@ -18,6 +18,14 @@
  *                      FOLLOWS a track by its key. Editing work, so undoable
  *                      and saved — like shapes.
  *   selectedObjectEffectId  the effect being edited (session only).
+ *   objectSegmentations  segmentation RECORDS (shared/objects/segmentation.js),
+ *                      keyed by segmentation cache key — keyframe times and
+ *                      confidences, no pixels (those are an analysis file:
+ *                      projectPersistence.js's putAnalysisFile). Saved, not
+ *                      undoable — an analysis result, like tracks.
+ *   segmentationStatus what the segmenter is doing now (session only).
+ *   maskView           how the editor shows a mask: 'off' | 'overlay' |
+ *                      'silhouette' | 'boundary' (session only, editor-only).
  */
 import { create } from 'zustand';
 
@@ -30,10 +38,13 @@ export const OBJECT_DEFAULTS = {
   objectTracks: {},
   trackingStatus: { state: 'idle', done: 0, total: 0, message: null },
   objectEffects: [],
-  selectedObjectEffectId: null
+  selectedObjectEffectId: null,
+  objectSegmentations: {},
+  segmentationStatus: { state: 'idle', done: 0, total: 0, message: null, backend: null },
+  maskView: 'overlay'
 };
 
 export const OBJECT_DOCUMENT_KEYS = ['selectedObject', 'objectEffects'];
-export const OBJECT_PROJECT_KEYS = ['objectDetections', 'objectTracks'];
+export const OBJECT_PROJECT_KEYS = ['objectDetections', 'objectTracks', 'objectSegmentations'];
 
 export const useObjectStore = create(() => ({ ...OBJECT_DEFAULTS }));

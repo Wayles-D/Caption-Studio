@@ -117,7 +117,8 @@ function grabFrame(url, time, { lane = 0, region = null } = {}) {
  * private video — and, with `region`, that region cropped from the video at
  * its FULL resolution, sized for the detector (shared/objects/frames.js).
  */
-async function grabFrameNow(url, time, lane, region) {
+/** A lane's private video, loaded and showing the frame at `time`. */
+async function seekPrivate(url, time, lane) {
   const v = frameVideo(url, lane);
   if (!(v.readyState >= 1)) await once(v, 'loadedmetadata', 15000);
   const target = Math.min(Math.max(0, time), Math.max(0, v.duration - 0.01));
@@ -126,6 +127,35 @@ async function grabFrameNow(url, time, lane, region) {
     v.currentTime = target;
     await seeked;
   }
+  return v;
+}
+
+/**
+ * SEGMENTATION's input (objectSegmentation.js): the crop of the frame at
+ * `time`, drawn straight from the private video at its full resolution and
+ * resized to the encoder's input — HWC RGB 0-255 floats. Through lane 0's
+ * lock, like every other read of that video.
+ * @param {{x:number, y:number, width:number, height:number, inputWidth:number, inputHeight:number}} crop video pixels (segmentation.js's cropFor)
+ */
+export function grabSegmentationInput(time, crop) {
+  const source = getDetectionSource();
+  if (!source) return Promise.reject(new Error('no video to analyse'));
+  const l = getLane(0);
+  const run = l.queue.then(async () => {
+    const v = await seekPrivate(source.url, time, 0);
+    const c = new OffscreenCanvas(crop.inputWidth, crop.inputHeight).getContext('2d', { willReadFrequently: true });
+    c.drawImage(v, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.inputWidth, crop.inputHeight);
+    const rgba = c.getImageData(0, 0, crop.inputWidth, crop.inputHeight).data;
+    const data = new Float32Array(crop.inputWidth * crop.inputHeight * 3);
+    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { data[j] = rgba[i]; data[j + 1] = rgba[i + 1]; data[j + 2] = rgba[i + 2]; }
+    return { data };
+  });
+  l.queue = run.catch(() => {});
+  return run;
+}
+
+async function grabFrameNow(url, time, lane, region) {
+  const v = await seekPrivate(url, time, lane);
   const scale = Math.min(1, MAX_FRAME_SIDE / Math.max(v.videoWidth, v.videoHeight));
   const w = Math.max(1, Math.round(v.videoWidth * scale));
   const h = Math.max(1, Math.round(v.videoHeight * scale));

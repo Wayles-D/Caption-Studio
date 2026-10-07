@@ -12,6 +12,7 @@ import { appState, subscribe } from '../js/state.js';
 import * as objects from '../js/components/objectDetection.js';
 import * as tracking from '../js/components/objectTracking.js';
 import * as effects from '../js/components/objectEffects.js';
+import * as segmentation from '../js/components/objectSegmentation.js';
 import { DETECTION_MODELS, DEFAULT_MODEL_ID } from '../../shared/objects/detections.js';
 import { OBJECT_EFFECT_TYPES, OBJECT_EFFECT_LABELS } from '../../shared/objects/effects.js';
 import { SELECT, Slider as SharedSlider, Toggle, ColorRow, TimeField } from './LayerInspectorControls.jsx';
@@ -187,6 +188,70 @@ function TrackSection() {
   );
 }
 
+const duration = (sec) => (sec >= 90 ? `${Math.round(sec / 60)} min` : `${Math.max(1, Math.round(sec))}s`);
+
+const MASK_VIEWS = [['overlay', 'Mask'], ['silhouette', 'Silhouette'], ['boundary', 'Outline'], ['off', 'Off']];
+
+/**
+ * Segmenting the tracked object (objectSegmentation.js): which PIXELS are it,
+ * over time. Shown once the object is tracked; the mask shows on the frame
+ * while this panel is open, in the chosen view — an editing aid, never exported.
+ */
+function SegmentSection() {
+  const track = tracking.getSelectedTrack();
+  if (!track) return null;
+  const status = appState.segmentationStatus || {};
+  const running = segmentation.isSegmenting();
+  const record = segmentation.getSelectedSegmentation();
+  const info = segmentation.describeSegmentation(record);
+  const failed = !running && status.state === 'failed' && !record;
+  const view = appState.maskView || 'overlay';
+  const estimate = !running && !record ? segmentation.estimateSegmentation() : null;
+  return (
+    <div className="flex flex-col gap-2 border-t border-[var(--border-color)] pt-3" id="objects-segment" data-state={running ? 'segmenting' : record ? record.status : failed ? 'failed' : 'none'}>
+      {running && (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[12px] font-semibold text-[var(--text-primary)]" id="objects-segment-status">
+            Segmenting…{status.total ? ` ${status.done} of about ${status.total} keyframes` : ''}{status.backend ? ` · ${status.backend === 'gpu' ? 'GPU' : 'CPU (slow)'}` : ''}{status.secondsLeft > 0 ? ` · about ${duration(status.secondsLeft)} left` : ''}
+          </span>
+          <button type="button" id="objects-segment-stop" className={`${BTN} flex-none px-3 h-7`} onClick={() => segmentation.cancelSegmentation()}>Stop</button>
+        </div>
+      )}
+      {!running && info && (
+        <div className="flex flex-col gap-1" id="objects-segment-status">
+          <span className="text-[12px] font-semibold text-[var(--text-primary)]">{info.title} · {Math.round(info.confidence * 100)}%</span>
+          <span className={HINT}>{info.detail}</span>
+          {info.note && <span className={HINT}>{info.note}</span>}
+        </div>
+      )}
+      {!running && failed && (
+        <span className="text-[12px] text-[var(--text-primary)]" id="objects-segment-status">Segmentation failed — {status.message}. Editing works as normal.</span>
+      )}
+      {!running && !record && !failed && (
+        <p className={HINT} id="objects-segment-estimate">
+          Find exactly which pixels are the {track.label?.toLowerCase() || 'object'}, frame by frame.{estimate ? ` About ${estimate.keyframes} keyframes — roughly ${duration(estimate.seconds)} on this device.` : ''} Masks appear as each is done; keep editing meanwhile.
+        </p>
+      )}
+      {!running && (
+        <button type="button" id="objects-segment-start" className={BTN} onClick={() => segmentation.segmentSelectedObject({ force: !!record })}>
+          {record ? 'Re-segment' : 'Segment object'}
+        </button>
+      )}
+      {record && (
+        <div className="flex gap-1" id="objects-mask-views">
+          {MASK_VIEWS.map(([v, label]) => (
+            <button
+              type="button" key={v} id={`objects-mask-view-${v}`} data-mask-view={v}
+              className={`h-7 flex-1 rounded-[3px] border text-[11px] font-bold cursor-pointer ${view === v ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+              onClick={() => segmentation.setMaskView(v)}
+            >{label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ObjectsInspector() {
   const [, force] = useState(0);
   useEffect(() => subscribe('*', () => force((n) => n + 1)), []);
@@ -295,6 +360,7 @@ export function ObjectsInspector() {
               <span className="text-[11px] text-[var(--text-muted)]">{Math.round(selected.confidence * 100)}% · at {selected.timestamp.toFixed(2)}s</span>
             </div>
             <TrackSection />
+            <SegmentSection />
             <div className="flex gap-2">
               <button type="button" className={BTN} onClick={() => jumpTo(selected.timestamp)}>Show</button>
               <button type="button" id="objects-deselect" className={BTN} onClick={() => objects.clearSelectedObject()}>Deselect</button>
