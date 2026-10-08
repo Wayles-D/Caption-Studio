@@ -18,8 +18,29 @@
  * into App.jsx's own bar rendered directly above this panel instead of
  * leaving it inside this component's header.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { initTimelinePanel } from '../js/components/timelinePanel.js';
+
+/** The panel's default height, and its limits: never so short the lanes vanish, never so tall the preview does. */
+export const TIMELINE_DEFAULT_HEIGHT = 272;
+const TIMELINE_MIN_HEIGHT = 140;
+const PREVIEW_MIN_HEIGHT = 220;
+const HEIGHT_STORAGE_KEY = 'bhynd.timeline.height';
+
+function clampHeight(h) {
+  const max = Math.max(TIMELINE_MIN_HEIGHT, window.innerHeight - 56 - 80 - PREVIEW_MIN_HEIGHT);
+  return Math.round(Math.min(max, Math.max(TIMELINE_MIN_HEIGHT, h)));
+}
+
+/** The height the user last left the timeline at (an editor preference, kept per browser). */
+export function readStoredTimelineHeight() {
+  try {
+    const v = Number(window.localStorage.getItem(HEIGHT_STORAGE_KEY));
+    return Number.isFinite(v) && v > 0 ? clampHeight(v) : TIMELINE_DEFAULT_HEIGHT;
+  } catch {
+    return TIMELINE_DEFAULT_HEIGHT;
+  }
+}
 
 export function TimelinePanel({
   containerRef: externalContainerRef,
@@ -30,9 +51,12 @@ export function TimelinePanel({
   onSoundLibraryToggle,
   onSoundLibraryClose,
   onSoundReplace,
-  getPlaybackRowContainer
+  getPlaybackRowContainer,
+  height = TIMELINE_DEFAULT_HEIGHT,
+  onHeightChange
 }) {
   const internalContainerRef = useRef(null);
+  const [resizing, setResizing] = useState(false);
   const containerRef = externalContainerRef || internalContainerRef;
 
   useEffect(() => {
@@ -55,11 +79,52 @@ export function TimelinePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Dragging the top edge slides the timeline up or down: taller for more
+  // lanes, shorter for a bigger preview. Double-click puts it back.
+  const startResize = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = height;
+    setResizing(true);
+    const move = (ev) => onHeightChange?.(clampHeight(startH + (startY - ev.clientY)));
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setResizing(false);
+      const final = clampHeight(startH + (startY - ev.clientY));
+      onHeightChange?.(final);
+      try { window.localStorage.setItem(HEIGHT_STORAGE_KEY, String(final)); } catch { /* preference only */ }
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  const reset = () => {
+    onHeightChange?.(clampHeight(TIMELINE_DEFAULT_HEIGHT));
+    try { window.localStorage.removeItem(HEIGHT_STORAGE_KEY); } catch { /* preference only */ }
+  };
+
   return (
-    <div
-      id="timeline-panel-container"
-      className="w-full h-[272px] bg-[var(--bg-sidebar)] border-t border-[var(--border-color)] flex-shrink-0"
-      ref={containerRef}
-    />
+    <div className="relative w-full flex-shrink-0">
+      <div
+        id="timeline-resize-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize timeline"
+        title="Drag to resize the timeline — double-click to reset"
+        className={`absolute -top-[3px] left-0 right-0 h-[7px] z-20 cursor-ns-resize touch-none
+          after:content-[''] after:absolute after:left-1/2 after:-translate-x-1/2 after:top-[2px] after:w-10 after:h-[3px]
+          after:rounded-full after:bg-[var(--border-color-hover)] hover:after:bg-[var(--accent-color)]
+          ${resizing ? 'after:bg-[var(--accent-color)]' : ''}`}
+        onPointerDown={startResize}
+        onDoubleClick={reset}
+      />
+      <div
+        id="timeline-panel-container"
+        className="w-full bg-[var(--bg-sidebar)] border-t border-[var(--border-color)]"
+        style={{ height }}
+        ref={containerRef}
+      />
+    </div>
   );
 }

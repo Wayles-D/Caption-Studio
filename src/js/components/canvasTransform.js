@@ -59,6 +59,8 @@ import { deselectVideoTarget } from './videoTransform.js';
 import { getTextElement, updateTextElement, updateTextElementStyle, setTextElementValues, selectTextElement } from './textElements.js';
 import { textElementToPhrase } from '../../../shared/textElement.js';
 import { getImageLayer, updateImageLayer, patchImageLayer, selectImageLayer } from './imageLayers.js';
+import { getShapeLayer, updateShapeLayer, patchShapeLayer, selectShapeLayer } from './shapeLayers.js';
+import { resolveLayerStack } from '../../../shared/visualLayers.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
 import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../../../shared/captionGraphics.js';
 
@@ -141,12 +143,21 @@ let selectedTextWordIndex = null;
 // that click never lands the user inside a word unasked.
 let textSelectedOnCanvas = false;
 
-// IMAGE LAYERS (shared/imageLayer.js) — their on-screen boxes, published by
-// preview.js every frame (under-captions first, then those drawn with the
-// text, bottom to top), and the one selected. The same box element and
-// handles serve them; their gestures write the image's resting transform.
-let imageBoxes = [];
-let selectedImageId = null;
+// GRAPHIC LAYERS — images (shared/imageLayer.js) and shapes
+// (shared/shapeLayer.js): their on-screen boxes, published by preview.js
+// every frame, and the one selected. The same box element and handles serve
+// both; their gestures write the object's resting transform, through the
+// object's own module (GRAPHICS below).
+let graphicBoxes = [];
+let selectedGraphicId = null;
+let selectedGraphicType = null;
+
+/** Per graphic type: how to read, write and select it — the one place this file names them. */
+const GRAPHICS = {
+  image: { get: getImageLayer, update: updateImageLayer, patchTransform: (id, f, o) => patchImageLayer(id, 'transform', f, o), select: selectImageLayer, stateKey: 'selectedImageLayerId' },
+  shape: { get: getShapeLayer, update: updateShapeLayer, patchTransform: (id, f, o) => patchShapeLayer(id, 'transform', f, o), select: selectShapeLayer, stateKey: 'selectedShapeLayerId' }
+};
+const graphicApi = (type = selectedGraphicType) => GRAPHICS[type] || GRAPHICS.image;
 
 /**
  * The per-word edits the current selection's words live in. A caption's
@@ -1176,8 +1187,8 @@ function getTextElementDisplayBox() {
 }
 
 function getDisplayBox() {
-  if (selectedImageId) {
-    const entry = imageBoxes.find((b) => b.id === selectedImageId);
+  if (selectedGraphicId) {
+    const entry = graphicBoxes.find((b) => b.id === selectedGraphicId);
     return entry ? ensureMinimumGrabBox(inflateBox(entry.box, CAPTION_SELECTION_PADDING_CSS_PX)) : null;
   }
   // Checked BEFORE currentBox: a text element is independent of the
@@ -1329,7 +1340,7 @@ function currentSelectionTarget() {
   // group scope buttons apply to it (there is no "all captions" for an
   // object that exists exactly once), so classifying it here is what keeps
   // every one of them hidden in updateScopeButtons.
-  if (selectedImageId) return 'image';
+  if (selectedGraphicId) return selectedGraphicType || 'image';
   if (selectedTextElementId) return selectedTextWordIndex != null ? 'text-word' : 'text';
   if (selectedWordIndex == null) {
     // A partial/custom group (some caption words detached, or an explicitly
@@ -1675,9 +1686,9 @@ export function hideCanvasTransformOverlay() {
   // Reads last frame's box list, since this runs at the top of the tick
   // before syncTextElementsCanvas republishes; one frame of lag at the
   // moment the last element scrolls off is harmless.
-  const keepForText = textElementBoxes.length > 0 || imageBoxes.length > 0;
+  const keepForText = textElementBoxes.length > 0 || graphicBoxes.length > 0;
   if (overlayEl && !keepForText) overlayEl.classList.remove('active');
-  if (boxEl && !selectedTextElementId && !selectedImageId) boxEl.hidden = true;
+  if (boxEl && !selectedTextElementId && !selectedGraphicId) boxEl.hidden = true;
 }
 
 function clientToCssPoint(clientX, clientY) {
@@ -1697,22 +1708,26 @@ function clientToCssPoint(clientX, clientY) {
  * behind several early returns (demo fallback, Word Mode, no active phrase)
  * that a text element is by definition independent of.
  */
-/** Image boxes for this frame — see preview.js's paintImageLayer. Follows appState's selection, as text does. */
-export function setImageLayerBoxes(boxes) {
-  imageBoxes = Array.isArray(boxes) ? boxes : [];
-  const stateId = appState.selectedImageLayerId || null;
-  if (stateId !== selectedImageId) {
-    if (stateId) selectImageTarget(stateId, { fromState: true });
-    else clearImageSelection({ fromState: true });
+/**
+ * Graphic boxes for this frame — see preview.js (images and shapes, each
+ * { id, type, box }). Follows appState's selection, as text does.
+ */
+export function setGraphicBoxes(boxes) {
+  graphicBoxes = Array.isArray(boxes) ? boxes : [];
+  const stateType = appState.selectedImageLayerId ? 'image' : appState.selectedShapeLayerId ? 'shape' : null;
+  const stateId = stateType ? appState[GRAPHICS[stateType].stateKey] : null;
+  if (stateId !== selectedGraphicId || (stateId && stateType !== selectedGraphicType)) {
+    if (stateId) selectGraphicTarget(stateType, stateId, { fromState: true });
+    else clearGraphicSelection({ fromState: true });
   }
   if (!overlayEl || !boxEl) return;
-  if (imageBoxes.length) {
+  if (graphicBoxes.length) {
     overlayEl.classList.add('active');
     syncOverlayToContentRect(overlayEl);
   }
-  if (!selectedImageId || drag) return;
+  if (!selectedGraphicId || drag) return;
   // Selected but not on screen this instant: hide the handles, keep the selection.
-  if (!imageBoxes.some((b) => b.id === selectedImageId)) {
+  if (!graphicBoxes.some((b) => b.id === selectedGraphicId)) {
     boxEl.hidden = true;
     return;
   }
@@ -1720,44 +1735,40 @@ export function setImageLayerBoxes(boxes) {
   positionBoxElement();
 }
 
-function selectImageTarget(id, { fromState = false } = {}) {
+function selectGraphicTarget(type, id, { fromState = false } = {}) {
   if (selectedTextElementId) clearTextElementSelection();
   resetKeywordScopeState();
   selected = true;
   selectedWordIndex = null;
   selectedGroupId = null;
   explicitCaptionSelectionKey = null;
-  selectedImageId = id;
+  selectedGraphicId = id;
+  selectedGraphicType = type;
   if (toolbarEl) toolbarEl.hidden = true;
-  if (!fromState) selectImageLayer(id);
+  if (!fromState) graphicApi(type).select(id);
   notifySelectionChangedIfNeeded();
 }
 
-function clearImageSelection({ fromState = false } = {}) {
-  if (!selectedImageId) return;
-  selectedImageId = null;
+function clearGraphicSelection({ fromState = false } = {}) {
+  if (!selectedGraphicId) return;
+  const type = selectedGraphicType;
+  selectedGraphicId = null;
+  selectedGraphicType = null;
   selected = false;
   if (toolbarEl) toolbarEl.hidden = false;
   if (boxEl) boxEl.hidden = true;
-  if (!fromState) selectImageLayer(null);
+  if (!fromState) graphicApi(type).select(null);
   notifySelectionChangedIfNeeded();
 }
 
-/** The topmost image whose (rotated) box contains the point, among the given placements. */
-function findImageAtClient(clientX, clientY, placements) {
-  if (!imageBoxes.length) return null;
+/** Whether a client point is inside one published (rotated) box. */
+function pointInPublishedBox(clientX, clientY, box) {
   const { x, y } = clientToCssPoint(clientX, clientY);
-  for (let i = imageBoxes.length - 1; i >= 0; i--) {
-    const { id, box } = imageBoxes[i];
-    if (!placements.includes(getImageLayer(id)?.layer)) continue;
-    const s = box.cssPxScale || 1;
-    const cssBox = { centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s, rotationDeg: box.rotationDeg };
-    if (pointInRotatedBox(x, y, cssBox)) return { id, box };
-  }
-  return null;
+  const s = box.cssPxScale || 1;
+  return pointInRotatedBox(x, y, { centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s, rotationDeg: box.rotationDeg });
 }
 
-/** Whether the point lands on the caption currently on screen (so a caption above an image wins the click). */
+/** Whether the point lands on the caption currently on screen. */
 function pointHitsCaption(clientX, clientY) {
   if (!currentBox) return false;
   const { x, y } = clientToCssPoint(clientX, clientY);
@@ -1766,24 +1777,56 @@ function pointHitsCaption(clientX, clientY) {
   return pointInRotatedBox(x, y, { centerX: padded.centerX / s, centerY: padded.centerY / s, width: padded.width / s, height: padded.height / s, rotationDeg: padded.rotationDeg });
 }
 
-/** Selects an image hit by a press and starts moving it on that same press. */
-function pressImage(e, hit) {
+/**
+ * The TOPMOST object under a point, by the one layer stack
+ * (shared/visualLayers.js), whatever its type — so a click picks what is
+ * visibly on top: a shape over a caption, a caption over a picture, text
+ * over a shape. Returns { type: 'text', hit } | { type: 'image'|'shape', hit } |
+ * { type: 'captions' } | null.
+ */
+function topmostHitAt(clientX, clientY) {
+  const stack = resolveLayerStack({
+    layerOrder: appState.layerOrder,
+    textElements: appState.textElements || [],
+    imageLayers: appState.imageLayers || [],
+    shapeLayers: appState.shapeLayers || []
+  });
+  for (let i = stack.length - 1; i >= 0; i--) {
+    const entry = stack[i];
+    if (entry.type === 'captions') {
+      if (pointHitsCaption(clientX, clientY)) return { type: 'captions' };
+      continue;
+    }
+    if (entry.type === 'text') {
+      const b = textElementBoxes.find((tb) => tb.id === entry.id);
+      if (b && pointInPublishedBox(clientX, clientY, ensureMinimumGrabBox(inflateBox(b.box, CAPTION_SELECTION_PADDING_CSS_PX)))) return { type: 'text', hit: b };
+      continue;
+    }
+    const g = graphicBoxes.find((gb) => gb.id === entry.id);
+    if (g && pointInPublishedBox(clientX, clientY, g.box)) return { type: entry.type, hit: g };
+  }
+  return null;
+}
+
+/** Selects a graphic hit by a press and starts moving it on that same press. */
+function pressGraphic(e, type, hit) {
   deselectVideoTarget();
-  if (selectedImageId !== hit.id) selectImageTarget(hit.id);
+  if (selectedGraphicId !== hit.id || selectedGraphicType !== type) selectGraphicTarget(type, hit.id);
   boxEl.hidden = false;
   positionBoxElement();
   updateScopeButtons();
-  beginImageDrag(e, 'move', hitAreaEl);
+  beginGraphicDrag(e, 'move', hitAreaEl);
 }
 
 /**
- * Move / resize / rotate an image: written into its resting transform
- * (x, y — % of the frame; scale; rotation), live with history off, committed
- * once at the end. Motion is never involved — it is applied on top at draw
- * time — so editing an animated image edits where it RESTS.
+ * Move / resize / rotate an image or a shape: written into its resting
+ * transform (x, y — % of the frame; scale; rotation), live with history off,
+ * committed once at the end. Motion is never involved — it is applied on top
+ * at draw time — so editing an animated object edits where it RESTS.
  */
-function beginImageDrag(e, kind, captureEl = e.target) {
-  const layer = getImageLayer(selectedImageId);
+function beginGraphicDrag(e, kind, captureEl = e.target) {
+  const api = graphicApi();
+  const layer = api.get(selectedGraphicId);
   const box = getDisplayBox();
   if (!layer || !box) return;
   const { x, y, rect } = clientToCssPoint(e.clientX, e.clientY);
@@ -1791,7 +1834,8 @@ function beginImageDrag(e, kind, captureEl = e.target) {
   drag = {
     kind,
     pointerId: e.pointerId,
-    imageId: layer.id,
+    graphicId: layer.id,
+    graphicType: selectedGraphicType,
     startLayer: JSON.parse(JSON.stringify(layer)),
     startPointerXPct: (x / rect.width) * 100,
     startPointerYPct: (y / rect.height) * 100,
@@ -1800,7 +1844,7 @@ function beginImageDrag(e, kind, captureEl = e.target) {
   captureEl.setPointerCapture(e.pointerId);
 }
 
-function onImagePointerMove(e) {
+function onGraphicPointerMove(e) {
   if (!drag.moved) {
     const origin = drag.pressClient || (drag.pressClient = pressClient || { x: e.clientX, y: e.clientY });
     if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < DRAG_DEAD_ZONE_PX) return;
@@ -1823,16 +1867,17 @@ function onImagePointerMove(e) {
   } else {
     fields = { rotation: Math.round((Math.atan2(y - box.centerY / s, x - box.centerX / s) * 180) / Math.PI + 90) };
   }
-  patchImageLayer(drag.imageId, 'transform', fields, { recordHistory: false });
+  graphicApi(drag.graphicType).patchTransform(drag.graphicId, fields, { recordHistory: false });
 }
 
 /** One undo step per gesture; a press that never moved changes nothing. */
-function endImageDrag(d) {
+function endGraphicDrag(d) {
   if (!d.moved) return;
-  const final = getImageLayer(d.imageId);
+  const api = graphicApi(d.graphicType);
+  const final = api.get(d.graphicId);
   if (!final) return;
-  updateImageLayer(d.imageId, d.startLayer, { recordHistory: false });
-  updateImageLayer(d.imageId, final, { recordHistory: true });
+  api.update(d.graphicId, d.startLayer, { recordHistory: false });
+  api.update(d.graphicId, final, { recordHistory: true });
 }
 
 export function setTextElementBoxes(boxes) {
@@ -1986,7 +2031,8 @@ function selectTextElementTarget(id) {
   selectedWordIndex = null;
   selectedGroupId = null;
   explicitCaptionSelectionKey = null;
-  selectedImageId = null;
+  selectedGraphicId = null;
+  selectedGraphicType = null;
   selectedTextElementId = id;
   selectedTextWordIndex = null;
   textSelectedOnCanvas = false;
@@ -2373,7 +2419,7 @@ let pressClient = null;
 const DRAG_DEAD_ZONE_PX = 3;
 
 function onPointerMove(e) {
-  if (drag && drag.imageId) { onImagePointerMove(e); return; }
+  if (drag && drag.graphicId) { onGraphicPointerMove(e); return; }
   // Checked before the currentBox guard: a text element can be dragged on a
   // frame with no caption on screen, where currentBox is null.
   if (drag && drag.textElementId) { onTextPointerMove(e); return; }
@@ -2501,8 +2547,8 @@ function endDrag() {
   const { kind, phrase, wordIndex, groupMembers, textElementId } = drag;
   drag = null;
 
-  if (finished.imageId) {
-    endImageDrag(finished);
+  if (finished.graphicId) {
+    endGraphicDrag(finished);
     return;
   }
   if (textElementId) {
@@ -2597,11 +2643,16 @@ if (import.meta.env.DEV) {
   });
   window.__debugSelectedTextElementId = () => selectedTextElementId;
   // Image boxes (CSS px in the video frame) and the selected image.
-  window.__debugImageRects = () => imageBoxes.map(({ id, box }) => {
+  window.__debugImageRects = () => graphicBoxes.filter((g) => g.type !== 'shape').map(({ id, box }) => {
     const s = box.cssPxScale || 1;
     return { id, centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s, rotationDeg: box.rotationDeg };
   });
-  window.__debugSelectedImageId = () => selectedImageId;
+  window.__debugSelectedImageId = () => (selectedGraphicType === 'image' ? selectedGraphicId : null);
+  window.__debugShapeRects = () => graphicBoxes.filter((g) => g.type === 'shape').map(({ id, box }) => {
+    const s = box.cssPxScale || 1;
+    return { id, centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s, rotationDeg: box.rotationDeg };
+  });
+  window.__debugSelectedShapeId = () => (selectedGraphicType === 'shape' ? selectedGraphicId : null);
 
   window.__debugWordScreenRect = (wordIndex) => {
     if (!currentBox) return null;
@@ -2761,13 +2812,12 @@ export function initCanvasTransform() {
     // normally.
     if (inlineEditingId) endInlineEdit(true);
 
-    // Top first: images above all text, then text, then images above the
-    // captions (all drawn on the text layer, in that order), then the
-    // caption, then images under the captions.
-    const overTextImage = findImageAtClient(e.clientX, e.clientY, ['over-text']);
-    if (overTextImage) { pressImage(e, overTextImage); return; }
+    // The topmost object under the press, by the layer stack — whatever its
+    // type (see topmostHitAt).
+    const top = topmostHitAt(e.clientX, e.clientY);
+    if (top && (top.type === 'image' || top.type === 'shape')) { pressGraphic(e, top.type, top.hit); return; }
 
-    const textHit = findTextElementAtClient(e.clientX, e.clientY);
+    const textHit = top && top.type === 'text' ? top.hit : null;
     if (textHit) {
       deselectVideoTarget();
       const wasSelected = selectedTextElementId === textHit.id && textSelectedOnCanvas;
@@ -2795,16 +2845,10 @@ export function initCanvasTransform() {
       if (drag && pendingWord != null) drag.pendingTextWord = pendingWord;
       return;
     }
-    const underTextImage = findImageAtClient(e.clientX, e.clientY, ['under-text']);
-    if (underTextImage) { pressImage(e, underTextImage); return; }
-    if (!pointHitsCaption(e.clientX, e.clientY)) {
-      const underCaptionImage = findImageAtClient(e.clientX, e.clientY, ['under-captions']);
-      if (underCaptionImage) { pressImage(e, underCaptionImage); return; }
-    }
-    // Clicked away from every text element and image — release those
-    // selections before the caption logic below claims the click.
+    // On the caption, or on nothing — release a text or graphic selection
+    // before the caption logic below claims the click.
     clearTextElementSelection();
-    clearImageSelection();
+    clearGraphicSelection();
 
     if (!currentBox) {
       selected = false;
@@ -2958,7 +3002,7 @@ export function initCanvasTransform() {
   boxEl.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
 
-    if (selectedImageId) { beginImageDrag(e, 'move', hitAreaEl); return; }
+    if (selectedGraphicId) { beginGraphicDrag(e, 'move', hitAreaEl); return; }
     // A selected text element's box sits on top of hitAreaEl, so this is
     // where its own re-drag starts — and where its second click lands, the
     // one that picks a WORD inside it (decided on release: see endTextDrag).
@@ -3024,7 +3068,7 @@ export function initCanvasTransform() {
   boxEl.querySelectorAll('.caption-transform-handle[data-handle]').forEach((handle) => {
     handle.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      if (selectedImageId) beginImageDrag(e, 'resize');
+      if (selectedGraphicId) beginGraphicDrag(e, 'resize');
       else if (selectedTextElementId) beginTextResize(e, handle.dataset.handle);
       else beginResize(e, handle.dataset.handle);
     });
@@ -3033,7 +3077,7 @@ export function initCanvasTransform() {
   if (rotateHandleEl) {
     rotateHandleEl.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      if (selectedImageId) beginImageDrag(e, 'rotate');
+      if (selectedGraphicId) beginGraphicDrag(e, 'rotate');
       else if (selectedTextElementId) beginTextRotate(e);
       else beginRotate(e);
     });
@@ -3360,8 +3404,8 @@ export function onSelectionChange(cb) {
 
 function notifySelectionChangedIfNeeded() {
   const target = getKeyframeTarget();
-  const signature = selectedImageId
-    ? `image:${selectedImageId}`
+  const signature = selectedGraphicId
+    ? `${selectedGraphicType}:${selectedGraphicId}`
     : selectedTextElementId
     ? `text:${selectedTextElementId}:${selectedTextWordIndex ?? ''}`
     : target ? `${target.kind}:${(target.wordIndexes || []).join(',')}` : 'none';

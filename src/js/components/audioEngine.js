@@ -84,16 +84,45 @@ function getContext() {
   return ctx;
 }
 
+/** url -> Promise<ArrayBuffer>: the file's bytes, fetched ahead of first play (see prefetchTimeline). */
+const bytesCache = new Map();
+
+function fetchBytes(url) {
+  if (!bytesCache.has(url)) {
+    bytesCache.set(url, fetch(url).then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.arrayBuffer();
+    }));
+  }
+  return bytesCache.get(url);
+}
+
+/**
+ * Downloads every sound the project uses as soon as it is known — at load,
+ * and whenever a clip is added — instead of on the first press of play.
+ * Fetched only, not decoded: decoding needs the AudioContext, which a browser
+ * won't start before a click; decoding a short effect then takes
+ * milliseconds. Without it, a fresh load's first play had to download every
+ * file first, and the effects due before they arrived were silent.
+ */
+function prefetchTimeline() {
+  (appState.soundEvents || []).forEach((event) => {
+    const url = resolveSoundUrl(event.soundId, SOUNDS_BASE_URL);
+    if (url && !bufferCache.has(url)) fetchBytes(url).catch(() => {});
+  });
+  (appState.audioTracks || []).forEach((track) => {
+    if (track.url && !bufferCache.has(track.url)) fetchBytes(track.url).catch(() => {});
+  });
+}
+
 function loadBuffer(url) {
   if (!url) return Promise.resolve(null);
   if (bufferCache.has(url)) return bufferCache.get(url);
 
-  const promise = fetch(url)
-    .then((res) => {
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.arrayBuffer();
-    })
+  const promise = fetchBytes(url)
     .then((data) => {
+      // Decoding takes (detaches) the bytes; the decoded buffer is cached from here on.
+      bytesCache.delete(url);
       const context = getContext();
       if (!context) return null;
       return context.decodeAudioData(data);
@@ -223,10 +252,39 @@ function reschedule() {
 
   const context = getContext();
   if (!context) return;
+  // Never schedule against a clock that isn't running. A suspended context's
+  // currentTime stands still while the video plays, so every effect would be
+  // silent now and then fire, late and all at once, whenever the context
+  // finally resumes — typically on the user's next click, which is pause.
+  if (context.state !== 'running') {
+    context.resume().then(() => {
+      if (generation === scheduleGeneration && context.state === 'running') queueReschedule();
+    }).catch(() => {});
+    return;
+  }
 
   const rate = video.playbackRate || 1;
   const videoTime = video.currentTime;
   const contextNow = context.currentTime;
+  /**
+   * True while the video is still where this schedule's mapping says it
+   * should be. NOT "has the video moved since we started": it is meant to be
+   * moving. Comparing against the start time instead dropped every effect on
+   * a first play whose sounds took over half a second to load — the video had
+   * simply played on in the meantime.
+   */
+  const mappingHolds = (v) => {
+    const expected = videoTime + (context.currentTime - contextNow) * rate;
+    return Math.abs(v.currentTime - expected) < 0.25;
+  };
+  /** A buffer arrived for this schedule: play it if the mapping still holds, otherwise rebuild from where the video is now (it's cached, so that's instant). */
+  const ready = (buffer) => {
+    if (!buffer || generation !== scheduleGeneration) return false;
+    const v = getVideo();
+    if (!v || v.paused || v.ended) return false;
+    if (!mappingHolds(v)) { queueReschedule(); return false; }
+    return true;
+  };
   // Small lead so sources scheduled for "right now" land on a future audio
   // clock instant rather than racing it (which the spec resolves as "start
   // immediately", losing sub-block accuracy for that one clip).
@@ -239,13 +297,11 @@ function reschedule() {
     if (!event.enabled) return;
     const url = resolveSoundUrl(event.soundId, SOUNDS_BASE_URL);
     loadBuffer(url).then((buffer) => {
-      if (!buffer || generation !== scheduleGeneration) return;
       // The schedule this buffer was requested for may have been torn down
-      // while the fetch/decode was in flight (a seek, a pause). Re-checking
-      // the video's state here is what stops a late decode from playing a
-      // sound for a position the user has already left.
-      const v = getVideo();
-      if (!v || v.paused || Math.abs(v.currentTime - videoTime) > 0.5) return;
+      // while the fetch/decode was in flight (a seek, a pause, a stall).
+      // Re-checking here is what stops a late decode from playing a sound for
+      // a position the user has already left.
+      if (!ready(buffer)) return;
 
       const naturalDuration = buffer.duration / (event.playbackRate || 1);
       const clipDuration = event.duration != null
@@ -268,9 +324,7 @@ function reschedule() {
   (appState.audioTracks || []).forEach((track) => {
     if (!track.enabled || !track.url) return;
     loadBuffer(track.url).then((buffer) => {
-      if (!buffer || generation !== scheduleGeneration) return;
-      const v = getVideo();
-      if (!v || v.paused || Math.abs(v.currentTime - videoTime) > 0.5) return;
+      if (!ready(buffer)) return;
 
       // sourceDuration may not have been known when the clip was created
       // (metadata still loading); the decoded buffer is authoritative, so an
@@ -377,6 +431,17 @@ export function applyVideoAudio() {
 }
 
 /**
+ * Stops playback AND retires the current schedule. Bumping the generation is
+ * what matters on a stall (`waiting`): the video is frozen but not paused, so
+ * a sound whose decode finishes during the stall would otherwise pass every
+ * check and play over a frozen picture. `playing` reschedules afterwards.
+ */
+function halt() {
+  scheduleGeneration++;
+  stopAll();
+}
+
+/**
  * Coalesces bursts of reschedule requests into one per frame. An edit like
  * dragging a clip fires a state notification per pointermove; without this,
  * each one would tear down and rebuild the entire schedule mid-drag.
@@ -463,11 +528,24 @@ export function initAudioEngine() {
       video.addEventListener(name, queueReschedule);
     });
     ['pause', 'ended', 'emptied', 'waiting'].forEach((name) => {
-      video.addEventListener(name, stopAll);
+      video.addEventListener(name, halt);
     });
   };
 
+  // Creates/resumes the AudioContext INSIDE a real user gesture. Scheduling
+  // runs a frame after `play` — outside the click — and a context first
+  // touched there (or one born suspended because a waveform decoded at page
+  // load) can stay suspended, which is a silent first play.
+  const unlock = () => {
+    const context = getContext();
+    if (context?.state === 'running') {
+      ['pointerdown', 'keydown'].forEach((n) => document.removeEventListener(n, unlock, true));
+    }
+  };
+  ['pointerdown', 'keydown'].forEach((n) => document.addEventListener(n, unlock, true));
+
   attach(getVideo());
+  prefetchTimeline();
   // The <video> is mounted by React and may not exist yet on the first call
   // (and is replaced when a new upload swaps the source), so re-attach on a
   // short poll rather than assuming a single stable element. Cheap, and it
@@ -477,7 +555,7 @@ export function initAudioEngine() {
   // Edits to the audio timeline while playing take effect immediately —
   // adding a sound mid-playback should be audible on this pass, not the next.
   const unsubscribers = [
-    ...['soundEvents', 'audioTracks'].map((key) => subscribe(key, queueReschedule)),
+    ...['soundEvents', 'audioTracks'].map((key) => subscribe(key, () => { prefetchTimeline(); queueReschedule(); })),
     // The video's own level is applied to the element directly rather than
     // scheduled, so it takes effect instantly — including mid-playback.
     ...['videoVolume', 'videoMuted'].map((key) => subscribe(key, applyVideoAudio))
@@ -485,6 +563,7 @@ export function initAudioEngine() {
 
   return () => {
     clearInterval(pollId);
+    ['pointerdown', 'keydown'].forEach((n) => document.removeEventListener(n, unlock, true));
     unsubscribers.forEach((fn) => fn());
     stopAll();
     started = false;

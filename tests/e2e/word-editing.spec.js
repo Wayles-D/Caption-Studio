@@ -97,7 +97,13 @@ async function selectCardWord(page, index) {
   expect(await page.evaluate(() => window.__debugSelectedTextWordIndex())).toBe(index);
 }
 
-/** Dark (text) pixels in a frame-relative rect of the card layer. */
+/**
+ * How much dark (text) ink is in a frame-relative rect of the card layer —
+ * the summed darkness, not a count of pixels past a threshold. A count
+ * changes when text moves by a fraction of a pixel (anti-aliased edge
+ * pixels cross the threshold); the total darkness does not, which is what
+ * "this word looks the same" means. Scaled to whole-pixel units.
+ */
 const darkIn = (page, r) => page.evaluate((rect) => {
   const frame = document.getElementById('preview-video').getBoundingClientRect();
   const c = document.getElementById('text-elements-canvas');
@@ -105,8 +111,8 @@ const darkIn = (page, r) => page.evaluate((rect) => {
   const s = c.width / cr.width;
   const d = c.getContext('2d').getImageData(Math.round((frame.x + rect.x - cr.left) * s), Math.round((frame.y + rect.y - cr.top) * s), Math.max(1, Math.round(rect.width * s)), Math.max(1, Math.round(rect.height * s))).data;
   let n = 0;
-  for (let i = 0; i < d.length; i += 4) if (d[i] < 100 && d[i + 1] < 100 && d[i + 2] < 100 && d[i + 3] > 200) n++;
-  return n;
+  for (let i = 0; i < d.length; i += 4) n += (d[i + 3] / 255) * (1 - (d[i] + d[i + 1] + d[i + 2]) / 765);
+  return Math.round(n);
 }, r);
 
 const card = (page) => page.evaluate(() => window.__appState.textElements[0]);

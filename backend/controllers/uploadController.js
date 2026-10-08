@@ -34,6 +34,9 @@ import { getVideoInfo, getAudioInfo } from '../utils/graphicsCompositor.js';
 import { normalizeAudioTimeline, hasAnyAudio } from '../../shared/audioTimeline.js';
 import { normalizeTextElementList, isTextElementRenderable } from '../../shared/textElement.js';
 import { normalizeImageLayerList } from '../../shared/imageLayer.js';
+import { normalizeShapeLayerList } from '../../shared/shapeLayer.js';
+import { normalizeObjectEffectList } from '../../shared/objects/effects.js';
+import { compositionNeedsRender } from '../utils/videoDecoration.js';
 
 /**
  * Everything the ASS/libass fallback burn needs to mix the audio timeline
@@ -468,7 +471,12 @@ export async function regenerateCaptions(req, res, next) {
   // An empty transcript is allowed when there is text to draw: a video with no
   // speech can still carry cinematic text and overlays (see graphicsExport.js).
   const hasTextElements = normalizeTextElementList(styles?.textElements).some(isTextElementRenderable)
-    || normalizeImageLayerList(styles?.imageLayers).some((img) => img.enabled !== false);
+    || normalizeImageLayerList(styles?.imageLayers).some((img) => img.enabled !== false)
+    || normalizeShapeLayerList(styles?.shapeLayers).some((s) => s.enabled !== false)
+    // ...or object-aware effects (shared/objects/effects.js).
+    || normalizeObjectEffectList(styles?.objectEffects).some((e) => e.enabled !== false)
+    // ...or a reshaped canvas / decorated video (shared/composition.js).
+    || compositionNeedsRender(styles);
   if (!words || !Array.isArray(words) || (words.length === 0 && !hasTextElements)) {
     return res.status(400).json({ success: false, message: 'words array is required and must not be empty.' });
   }

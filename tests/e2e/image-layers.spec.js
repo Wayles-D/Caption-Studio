@@ -267,9 +267,10 @@ test('stacking: under the captions the caption shows through; above all text the
   expect(under).toBeGreaterThan(50);
   expect((await where())?.canvas).not.toBe('text-elements-canvas');
 
-  await page.locator('#img-layer').selectOption('over-text');
+  // Bring it to the front of the one layer stack — above the captions.
+  await page.locator('#img-to-front').click();
   await seek(page, 2.01);
-  expect((await layer(page, img.id)).layer).toBe('over-text');
+  expect((await page.evaluate(() => window.__layerStack.getLayerStack().map((e) => e.id))).at(-1)).toBe(img.id);
   // Now the topmost drawn pixel over the caption is the picture, on the text layer.
   expect((await where())?.canvas).toBe('text-elements-canvas');
 });
@@ -279,12 +280,15 @@ test('several pictures: independent, restacked, duplicated without sharing state
   const a = await addImage(page, 1);
   const b = await addImage(page, 1.5);
   expect((await layers(page)).map((l) => l.id)).toEqual([a.id, b.id]);
-  // Restack: A in front of B.
+  // Restack in the one layer stack: A in front of B, then back one place.
+  const order = () => page.evaluate(() => window.__layerStack.getLayerStack().map((e) => e.id));
   await page.evaluate((id) => window.__imageLayers.selectImageLayer(id), a.id);
   await page.locator('#img-to-front').click();
-  expect((await layers(page)).map((l) => l.id)).toEqual([b.id, a.id]);
+  let ids = await order();
+  expect(ids.indexOf(a.id)).toBeGreaterThan(ids.indexOf(b.id));
   await page.locator('#img-backward').click();
-  expect((await layers(page)).map((l) => l.id)).toEqual([a.id, b.id]);
+  ids = await order();
+  expect(ids.indexOf(a.id)).toBe(ids.length - 2);
 
   // Duplicate A, then move the copy: A stays put.
   await page.locator('#img-duplicate').click();
@@ -326,14 +330,17 @@ test('the project survives a reload: the picture, its look, its motion and its s
     window.__imageLayers.patchImageLayer(id, 'transform', { x: 30, rotation: 15 });
     window.__imageLayers.patchImageLayer(id, 'border', { enabled: true, color: '#FFFF00' });
     window.__imageLayers.setImageLayerEntrance(id, { preset: 'pop', duration: 0.3 });
-    window.__imageLayers.setImageLayerPlacement(id, 'over-text');
+    window.__layerStack.moveLayer(id, 'front');
   }, img.id);
   const before = await layer(page, img.id);
+  const orderBefore = await page.evaluate(() => window.__appState.layerOrder);
   await page.waitForTimeout(1200);
   await page.reload();
   await expect(page.locator('#state-video.active')).toBeVisible({ timeout: 15000 });
   await page.evaluate(() => new Promise((r) => { const v = document.getElementById('preview-video'); if (v.readyState >= 1) return r(); v.addEventListener('loadedmetadata', r, { once: true }); }));
   expect(await layer(page, img.id)).toEqual(before);
+  // Its place in the layer stack is saved too.
+  expect(await page.evaluate(() => window.__appState.layerOrder)).toEqual(orderBefore);
   // Drawn again — from the browser's saved copy of the file.
   await seek(page, 2);
   await page.waitForTimeout(600);

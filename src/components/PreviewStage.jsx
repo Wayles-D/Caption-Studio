@@ -117,6 +117,9 @@ export function PreviewStage({
         {/* Video Preview View */}
         <div className={`view-state${viewState === 'video' ? ' active' : ''}`} id="state-video">
           <video id="preview-video" src={videoSrc} playsInline preload="metadata" loop />
+          {/* Object-aware effects (shared/objects/effects.js): on the video,
+              beneath every layer — where the export composites them. */}
+          <canvas className="object-effects-canvas" id="object-effects-canvas" />
           <div className="subtitles-overlay" id="subtitles-overlay">
             <div className="captions-text" id="captions-text" />
           </div>

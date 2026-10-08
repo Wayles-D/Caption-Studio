@@ -87,12 +87,21 @@ export function buildWordChip(wordObj, idx) {
   // own timestamp (when it isn't already the one on screen) so the canvas is
   // already showing this word, and any edit typed next is visible without
   // the user having to separately hunt for the right point in the video.
+  //
+  // The MIDDLE of the word, not its start. Transcript words usually touch —
+  // the previous word ends on the very instant this one starts — and the
+  // preview resolves a time on a shared boundary to the EARLIER word/phrase
+  // (its lookups are inclusive at both ends), so seeking to `start` put the
+  // neighbour on the canvas: the previous word highlighted, or for the first
+  // word of a caption, the previous caption entirely. For the same reason a
+  // playhead sitting exactly on a boundary doesn't count as "already here".
   chip.addEventListener('focus', () => {
     const previewVideo = document.getElementById('preview-video');
     if (!previewVideo || typeof wordObj.start !== 'number') return;
-    const end = typeof wordObj.end === 'number' ? wordObj.end : wordObj.start;
-    if (previewVideo.currentTime < wordObj.start || previewVideo.currentTime > end) {
-      previewVideo.currentTime = wordObj.start;
+    const end = typeof wordObj.end === 'number' ? Math.max(wordObj.end, wordObj.start) : wordObj.start;
+    const t = previewVideo.currentTime;
+    if (!(t > wordObj.start && t < end)) {
+      previewVideo.currentTime = wordObj.start + (end - wordObj.start) / 2;
     }
   });
 
@@ -112,9 +121,51 @@ export function buildWordChip(wordObj, idx) {
     setWordKeyword(idx, !wordObj.isKeyword);
   });
 
+  // A sound effect ON this word: opens the sound library (App.jsx listens
+  // for the event — this module owns no React state) with the word's start
+  // as the placement, so the pick lands on the SFX lane exactly where the
+  // word is spoken. Lit while a sound already sits on the word.
+  const sfxToggle = document.createElement('button');
+  sfxToggle.type = 'button';
+  sfxToggle.className = 'word-chip-sfx-toggle';
+  sfxToggle.dataset.wordSfx = String(idx);
+  sfxToggle.textContent = '♪';
+  markWordSound(sfxToggle, wordObj);
+  sfxToggle.addEventListener('mousedown', (e) => e.preventDefault());
+  sfxToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (typeof wordObj.start !== 'number') return;
+    window.dispatchEvent(new CustomEvent('bhynd:add-sound-at', { detail: { word: wordObj } }));
+  });
+
   wrap.appendChild(chip);
   wrap.appendChild(keywordToggle);
+  wrap.appendChild(sfxToggle);
   return wrap;
+}
+
+/** Within this of a word's start, a sound effect counts as being ON that word. */
+const WORD_SOUND_TOLERANCE = 0.03;
+
+function markWordSound(button, wordObj) {
+  const on = typeof wordObj.start === 'number'
+    && (appState.soundEvents || []).some((e) => Math.abs(e.startTime - wordObj.start) <= WORD_SOUND_TOLERANCE);
+  button.classList.toggle('active', on);
+  button.title = on ? 'Add another sound effect on this word' : 'Add a sound effect on this word';
+}
+
+/**
+ * Re-lights every chip's ♪ from the current sound effects. Chips are only
+ * rebuilt when `words` changes, so RightInspector calls this whenever
+ * `soundEvents` does — adding, moving or deleting a clip is reflected here.
+ */
+export function refreshWordSoundMarks(container) {
+  if (!container) return;
+  const words = appState.words || [];
+  container.querySelectorAll('.word-chip-sfx-toggle').forEach((button) => {
+    const wordObj = words[Number(button.dataset.wordSfx)];
+    if (wordObj) markWordSound(button, wordObj);
+  });
 }
 
 /**

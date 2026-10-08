@@ -31,6 +31,7 @@ import {
 } from '../../shared/soundProfiles.js';
 import { getAudioTrackDuration } from '../../shared/audioTimeline.js';
 import { ToggleSwitch } from './ToggleSwitch.jsx';
+import { RhythmCard } from './RhythmCard.jsx';
 
 /**
  * The library as <option>s, grouped by section and family. A flat list stopped
@@ -365,6 +366,8 @@ export function AudioInspector({ onNotify }) {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* The rhythm the beats on the timeline come from (V1.6). */}
+      <RhythmCard />
       {/* --- The video's own soundtrack ---
           First, because it is the level every other clip is balanced against.
           Same 0-200% control as a sound effect or an imported track, so

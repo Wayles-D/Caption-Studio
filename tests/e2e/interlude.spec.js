@@ -365,3 +365,24 @@ test('an overlay is untouched by all of this', async ({ page }) => {
   expect(s.active).toBe(true);
   expect(cornersAre(s, [255, 255, 255])).toBe(false);
 });
+
+test('clicking an interlude on the timeline shows its text, not just its background', async ({ page }) => {
+  await setup(page);
+  const el = await page.evaluate(() => window.__textElements.addInterlude({ start: 2 }));
+  await seek(page, 6);
+  await page.locator(`[data-clip-id="${el.id}"]`).click();
+  await page.waitForFunction(() => !document.getElementById('preview-video').seeking);
+  await seek(page, await page.evaluate(() => document.getElementById('preview-video').currentTime));
+  const t = await page.evaluate(() => document.getElementById('preview-video').currentTime);
+  // On the interlude, past its entrance — its first frame is fully transparent text.
+  expect(t).toBeGreaterThan(el.start);
+  expect(t).toBeLessThan(el.end);
+  const shown = await sample(page);
+  await seek(page, 3);
+  const settled = await sample(page);
+  expect(settled.dark).toBeGreaterThan(500);
+  expect(shown.dark).toBeGreaterThan(settled.dark * 0.95);
+  // The playhead already on the visible interlude: a click leaves it there.
+  await page.locator(`[data-clip-id="${el.id}"]`).click();
+  expect(await page.evaluate(() => document.getElementById('preview-video').currentTime)).toBeCloseTo(3, 6);
+});

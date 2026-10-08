@@ -27,9 +27,21 @@ const FADE_MS = 450;
  * `?splash=0` turns it off, which is how the e2e suite gets to the editor
  * without waiting four seconds in all eighty-odd specs. The splash has its
  * own spec that omits the flag and drives the real thing.
+ *
+ * Starting a NEW PROJECT reloads the page (see Toolbar.jsx) — straight back
+ * to the start screen, not through the intro again: it leaves a one-time
+ * SKIP_SPLASH_ONCE mark, used up here.
  */
+export const SKIP_SPLASH_ONCE = 'bhynd:skip-splash-once';
+
 export function shouldShowSplash() {
   if (typeof window === 'undefined') return false;
+  try {
+    if (window.sessionStorage.getItem(SKIP_SPLASH_ONCE)) {
+      window.sessionStorage.removeItem(SKIP_SPLASH_ONCE);
+      return false;
+    }
+  } catch { /* storage blocked: the splash just plays */ }
   try {
     return new URLSearchParams(window.location.search).get('splash') !== '0';
   } catch {

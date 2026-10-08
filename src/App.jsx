@@ -35,9 +35,23 @@ import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
 import { WordToolPanel } from './components/WordInspector.jsx';
 import { ImageInspector } from './components/ImageInspector.jsx';
+import { ShapeInspector } from './components/ShapeInspector.jsx';
+import { CanvasInspector } from './components/CanvasInspector.jsx';
+import { ObjectsInspector } from './components/ObjectsInspector.jsx';
+import { LayersPanel } from './components/LayerControls.jsx';
+import * as shapeLayersApi from './js/components/shapeLayers.js';
+import * as layerStackApi from './js/components/layerStack.js';
+import * as compositionApi from './js/components/composition.js';
+import * as compositionViewApi from './js/components/compositionView.js';
+import * as videoTransformApi from './js/components/videoTransform.js';
+import * as rhythmApi from './js/components/rhythm.js';
+import * as objectsApi from './js/components/objectDetection.js';
+import * as trackingApi from './js/components/objectTracking.js';
+import * as objectEffectsApi from './js/components/objectEffects.js';
+import * as segmentationApi from './js/components/objectSegmentation.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
-import { TimelinePanel } from './components/TimelinePanel.jsx';
+import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
 
@@ -105,6 +119,28 @@ const MOBILE_TOOLS = [
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-9 9" /></svg>
   },
   {
+    // Generated shapes over the video (shared/shapeLayer.js).
+    key: 'shape-layer', label: 'Shape', group: 'shape',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="3" width="10" height="10" rx="1" /><circle cx="16" cy="16" r="5" /></svg>
+  },
+  {
+    // The one layer stack (shared/visualLayers.js): every visual object, top first.
+    key: 'layers', label: 'Layers', group: 'layers',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="m12 3 9 5-9 5-9-5 9-5z" /><path d="m3 13 9 5 9-5" /></svg>
+  },
+  {
+    // The composition (shared/composition.js): the canvas's shape and
+    // background, and the video placed and styled inside it.
+    key: 'objects', label: 'Objects', group: 'objects',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" /><circle cx="12" cy="10" r="2.5" /><path d="M8 17c.6-2.2 2.1-3.3 4-3.3s3.4 1.1 4 3.3" /></svg>
+  },
+  {
+    // The composition (shared/composition.js): the canvas's shape and
+    // background, and the video placed and styled inside it.
+    key: 'canvas', label: 'Canvas', group: 'canvas',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="3" width="18" height="18" rx="2" /><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+  },
+  {
     // Sound effects + audio tracks. One tool, because they are one panel
     // (see AudioInspector.jsx) — the two CONCEPTS stay separate everywhere it
     // matters: separate lanes on the timeline, separate lists here, separate
@@ -136,7 +172,7 @@ const MOBILE_TOOLS = [
 // is what a selected cinematic interlude or overlay is edited in, and as a
 // bottom sheet it covered the very timeline clip being edited.
 // 'image-layer' (the Image panel) too, for the same reason.
-const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay', 'image-layer']);
+const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas', 'objects']);
 
 // The desktop side panel's default/home content — always visible (an
 // anchored sidebar, like the app's original layout), showing Video
@@ -146,7 +182,6 @@ const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-
 const DESKTOP_SIDE_PANEL_DEFAULT = 'video-info';
 
 const MOBILE_TOOLBAR_HEIGHT = 80; // px — kept in sync with the `h-20` toolbar below
-const TIMELINE_HEIGHT = 272; // px — kept in sync with TimelinePanel.jsx's `h-[272px]` (grew to fit the SFX + Audio lanes)
 const DESKTOP_BREAKPOINT_QUERY = '(min-width: 1024px)'; // Tailwind's `lg`
 
 // Bottom-sheet resize: the sheet used to always render at `max-h-[65vh]`
@@ -269,6 +304,9 @@ export function App() {
   // — not in an effect, so the editor is never briefly visible before the
   // splash lands on top of it.
   const [splashing, setSplashing] = useState(shouldShowSplash);
+  // The timeline's height — the user drags its top edge to slide it up or
+  // down (see TimelinePanel.jsx). The side panels end where it begins.
+  const [timelineHeight, setTimelineHeight] = useState(readStoredTimelineHeight);
 
   const [soundLibraryOpen, setSoundLibraryOpen] = useState(false);
   // Which clip the library is REPLACING the sound on, or null when it is
@@ -278,17 +316,41 @@ export function App() {
   // Which text element (a cinematic interlude) the next pick is LINKED to, or
   // null when adding an ordinary effect at the playhead.
   const [soundAttachTargetId, setSoundAttachTargetId] = useState(null);
+  // A transcript word's ♪: the exact time the next pick lands at (the word's
+  // start), or null for "at the playhead". Pinned rather than read from the
+  // playhead at pick time, so auditioning by scrubbing can't move it.
+  const [soundPlaceAt, setSoundPlaceAt] = useState(null);
   const closeSoundLibrary = useCallback(() => {
     setSoundLibraryOpen(false);
     setSoundReplaceTargetId(null);
     setSoundAttachTargetId(null);
+    setSoundPlaceAt(null);
   }, []);
   const toggleSoundLibrary = useCallback(() => {
     // The "+" always means "add", so re-pressing it while a replace is open
     // drops the target rather than silently replacing with the next pick.
     setSoundReplaceTargetId(null);
     setSoundAttachTargetId(null);
+    setSoundPlaceAt(null);
     setSoundLibraryOpen((open) => !open);
+  }, []);
+  // From the transcript (transcriptEditorState.js): a sound ON one word. The
+  // playhead goes to the word's middle — its start is shared with the previous
+  // word, which the canvas would show instead — and the pick lands at its start.
+  useEffect(() => {
+    const onAddSoundAt = (e) => {
+      const word = e.detail?.word;
+      if (!word || !Number.isFinite(word.start)) return;
+      const end = Number.isFinite(word.end) ? Math.max(word.end, word.start) : word.start;
+      const video = document.getElementById('preview-video');
+      if (video) video.currentTime = word.start + (end - word.start) / 2;
+      setSoundReplaceTargetId(null);
+      setSoundAttachTargetId(null);
+      setSoundPlaceAt(word.start);
+      setSoundLibraryOpen(true);
+    };
+    window.addEventListener('bhynd:add-sound-at', onAddSoundAt);
+    return () => window.removeEventListener('bhynd:add-sound-at', onAddSoundAt);
   }, []);
   // An interlude's "+ Sound at start": the playhead goes to its first frame
   // (so what you hear while choosing is in context) and the ordinary library
@@ -298,10 +360,12 @@ export function App() {
     if (video && Number.isFinite(time)) video.currentTime = time;
     setSoundReplaceTargetId(null);
     setSoundAttachTargetId(attachToTextElementId);
+    setSoundPlaceAt(null);
     setSoundLibraryOpen(true);
   }, []);
   const openSoundReplace = useCallback((clipId) => {
     setSoundReplaceTargetId(clipId);
+    setSoundPlaceAt(null);
     setSoundLibraryOpen(true);
   }, []);
   const desktopSidePanelElRef = useRef(null);
@@ -380,7 +444,7 @@ export function App() {
       const id = appState.selectedImageLayerId;
       if (id === lastId) return;
       lastId = id;
-      if (id && isDesktopRef.current) setDesktopSidePanel('image-layer');
+      if (id && isDesktopRef.current && desktopSidePanelRef.current !== 'layers') setDesktopSidePanel('image-layer');
     });
   }, []);
 
@@ -390,7 +454,7 @@ export function App() {
   // either used to close the panel mid-edit. Read lazily: both mount later.
   const soundLibraryElRef = useMemo(() => ({ get current() { return document.getElementById('sound-library-panel'); } }), []);
   const previewElRef = useMemo(() => ({ get current() { return document.getElementById('state-video'); } }), []);
-  const sidePanelInsideRefs = useMemo(() => (desktopSidePanel === 'text-overlay' || desktopSidePanel === 'image-layer'
+  const sidePanelInsideRefs = useMemo(() => (['text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas', 'objects'].includes(desktopSidePanel)
     ? [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, soundLibraryElRef, previewElRef]
     : [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef]), [desktopSidePanel, soundLibraryElRef, previewElRef]);
   useClickOutside(
@@ -444,6 +508,16 @@ export function App() {
       // create/move/trim without depending on pointer gymnastics.
       window.__textElements = textElementsApi;
       window.__imageLayers = imageLayersApi;
+      window.__shapeLayers = shapeLayersApi;
+      window.__layerStack = layerStackApi;
+      // The video's own placement (videoTransform.js) rides along: it is the
+      // composition object the panel and the on-video gestures move.
+      window.__composition = { ...compositionApi, ...compositionViewApi, ...videoTransformApi };
+      window.__rhythm = rhythmApi;
+      window.__objects = objectsApi;
+      window.__tracking = trackingApi;
+      window.__objectEffects = objectEffectsApi;
+      window.__segmentation = segmentationApi;
       window.__captionEvents = captionEventsApi;
     }
   }, []);
@@ -479,6 +553,29 @@ export function App() {
     setToastMessage(message);
     setToastVisible(true);
     setTimeout(() => setToastVisible(false), 2500);
+  }, []);
+
+  // ...and selecting a SHAPE brings up the Shape panel, the same way.
+  useEffect(() => {
+    let lastId = appState.selectedShapeLayerId;
+    return subscribe('selectedShapeLayerId', () => {
+      const id = appState.selectedShapeLayerId;
+      if (id === lastId) return;
+      lastId = id;
+      if (id && isDesktopRef.current && desktopSidePanelRef.current !== 'layers') setDesktopSidePanel('shape-layer');
+    });
+  }, []);
+
+  // ...and selecting an OBJECT EFFECT (a clip on the Effects lane) brings up
+  // the Objects panel, where effects are edited.
+  useEffect(() => {
+    let lastId = appState.selectedObjectEffectId;
+    return subscribe('selectedObjectEffectId', () => {
+      const id = appState.selectedObjectEffectId;
+      if (id === lastId) return;
+      lastId = id;
+      if (id && isDesktopRef.current && desktopSidePanelRef.current !== 'layers') setDesktopSidePanel('objects');
+    });
   }, []);
 
   // A failure the editor has to tell the user about from outside React (an
@@ -838,6 +935,8 @@ export function App() {
           onSoundLibraryToggle={toggleSoundLibrary}
           onSoundLibraryClose={closeSoundLibrary}
           onSoundReplace={openSoundReplace}
+          height={timelineHeight}
+          onHeightChange={setTimelineHeight}
         />
       </div>
 
@@ -855,9 +954,9 @@ export function App() {
         <div
           id="sound-library-panel"
           className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
-          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
+          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + timelineHeight }}
         >
-          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} />
+          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} placeAt={soundPlaceAt} />
         </div>
       )}
 
@@ -879,12 +978,13 @@ export function App() {
       {isDesktop && (
         <div
           ref={desktopSidePanelElRef}
+          id="desktop-side-panel"
           className="flex flex-col fixed top-14 right-0 z-40 w-[340px] bg-[var(--bg-sidebar)] border-l border-[var(--border-color)]"
-          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + TIMELINE_HEIGHT }}
+          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + timelineHeight }}
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
             <span className="text-xs font-bold uppercase tracking-wide text-[var(--text-secondary)]">
-              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : desktopSidePanel === 'image-layer' ? 'Image' : 'Video Inspector'}
+              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : desktopSidePanel === 'image-layer' ? 'Image' : desktopSidePanel === 'shape-layer' ? 'Shape' : desktopSidePanel === 'layers' ? 'Layers' : desktopSidePanel === 'canvas' ? 'Canvas' : desktopSidePanel === 'objects' ? 'Objects' : 'Video Inspector'}
             </span>
             {desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT && (
               <button
@@ -915,6 +1015,26 @@ export function App() {
           {desktopSidePanel === 'image-layer' && (
             <div className="overflow-y-auto flex-1 p-4">
               <ImageInspector />
+            </div>
+          )}
+          {desktopSidePanel === 'shape-layer' && (
+            <div className="overflow-y-auto flex-1 p-4">
+              <ShapeInspector />
+            </div>
+          )}
+          {desktopSidePanel === 'layers' && (
+            <div className="overflow-y-auto flex-1 p-4">
+              <LayersPanel />
+            </div>
+          )}
+          {desktopSidePanel === 'canvas' && (
+            <div className="overflow-y-auto flex-1 p-4">
+              <CanvasInspector />
+            </div>
+          )}
+          {desktopSidePanel === 'objects' && (
+            <div className="overflow-y-auto flex-1 p-4">
+              <ObjectsInspector />
             </div>
           )}
           {/* Not conditionally rendered — see relocatePrecisionFields() in
@@ -989,6 +1109,22 @@ export function App() {
               ) : tool.group === 'image' ? (
                 <div className="p-4">
                   <ImageInspector />
+                </div>
+              ) : tool.group === 'shape' ? (
+                <div className="p-4">
+                  <ShapeInspector />
+                </div>
+              ) : tool.group === 'layers' ? (
+                <div className="p-4">
+                  <LayersPanel />
+                </div>
+              ) : tool.group === 'canvas' ? (
+                <div className="p-4">
+                  <CanvasInspector />
+                </div>
+              ) : tool.group === 'objects' ? (
+                <div className="p-4">
+                  <ObjectsInspector />
                 </div>
               ) : tool.group === 'word' ? (
                 <div className="p-4">

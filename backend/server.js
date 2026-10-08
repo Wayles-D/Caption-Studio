@@ -46,8 +46,10 @@ app.use(cors({
   credentials: true
 }));
 
-// Request parsers
-app.use(express.json());
+// Request parsers. An export carries the tracks its object-aware effects
+// follow (a minute of tracking is ~30KB each) — well past express's 100KB
+// default with a few of them.
+app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Create necessary folders programmatically on startup (Render Linux directories)

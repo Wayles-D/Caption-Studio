@@ -17,6 +17,10 @@ import { useTransformStore, TRANSFORM_DEFAULTS } from '../store/transformStore.j
 import { useAudioStore, AUDIO_DEFAULTS, AUDIO_DOCUMENT_KEYS } from '../store/audioStore.js';
 import { useTextElementStore, TEXT_ELEMENT_DEFAULTS, TEXT_ELEMENT_DOCUMENT_KEYS } from '../store/textElementStore.js';
 import { useImageLayerStore, IMAGE_LAYER_DEFAULTS, IMAGE_LAYER_DOCUMENT_KEYS } from '../store/imageLayerStore.js';
+import { useShapeLayerStore, SHAPE_LAYER_DEFAULTS, SHAPE_LAYER_DOCUMENT_KEYS } from '../store/shapeLayerStore.js';
+import { useCompositionStore, COMPOSITION_STORE_DEFAULTS, COMPOSITION_DOCUMENT_KEYS } from '../store/compositionStore.js';
+import { useRhythmStore, RHYTHM_DEFAULTS, RHYTHM_DOCUMENT_KEYS, RHYTHM_PROJECT_KEYS } from '../store/rhythmStore.js';
+import { useObjectStore, OBJECT_DEFAULTS, OBJECT_DOCUMENT_KEYS, OBJECT_PROJECT_KEYS } from '../store/objectStore.js';
 
 export const MOCK_SUBTITLES = [
   { start: 0.0, end: 2.2, text: "WELCOME TO BHYND." },
@@ -43,6 +47,10 @@ const TRANSFORM_KEYS = new Set(Object.keys(TRANSFORM_DEFAULTS));
 const AUDIO_KEYS = new Set(Object.keys(AUDIO_DEFAULTS));
 const TEXT_ELEMENT_KEYS = new Set(Object.keys(TEXT_ELEMENT_DEFAULTS));
 const IMAGE_LAYER_KEYS = new Set(Object.keys(IMAGE_LAYER_DEFAULTS));
+const SHAPE_LAYER_KEYS = new Set(Object.keys(SHAPE_LAYER_DEFAULTS));
+const COMPOSITION_KEYS = new Set(Object.keys(COMPOSITION_STORE_DEFAULTS));
+const RHYTHM_KEYS = new Set(Object.keys(RHYTHM_DEFAULTS));
+const OBJECT_KEYS = new Set(Object.keys(OBJECT_DEFAULTS));
 
 /**
  * What undo/redo snapshots: every caption/transform style field, PLUS the
@@ -69,7 +77,15 @@ const UNDO_TRACKED_KEYS = [
   ...TEXT_ELEMENT_DOCUMENT_KEYS,
   // Image layers: content, like text elements — undoable, saved with the
   // project, never touched by "Reset Style".
-  ...IMAGE_LAYER_DOCUMENT_KEYS
+  ...IMAGE_LAYER_DOCUMENT_KEYS,
+  // Shapes and the layer stack's stored order — content too.
+  ...SHAPE_LAYER_DOCUMENT_KEYS,
+  // The canvas (shape, background) and the video's styling inside it.
+  ...COMPOSITION_DOCUMENT_KEYS,
+  // Which audio the rhythm is read from (the analysis itself is not undoable — see below).
+  ...RHYTHM_DOCUMENT_KEYS,
+  // The object the user picked as their target (the detections themselves are not undoable).
+  ...OBJECT_DOCUMENT_KEYS
 ];
 
 /**
@@ -79,7 +95,9 @@ const UNDO_TRACKED_KEYS = [
  * the selection, not processing flags, not history: those are the editor's
  * momentary state, not the project.
  */
-const PROJECT_SESSION_KEYS = ['words', 'phrases', 'baseName', 'renderedVideoPath', 'videoDuration'];
+// Saved with the project but not undoable: beat maps are analysis results
+// (src/store/rhythmStore.js), kept so reopening a project needn't re-analyse.
+const PROJECT_SESSION_KEYS = ['words', 'phrases', 'baseName', 'renderedVideoPath', 'videoDuration', ...RHYTHM_PROJECT_KEYS, ...OBJECT_PROJECT_KEYS];
 
 /** The current project as a plain, cloneable object. */
 export function getProjectSnapshot() {
@@ -113,6 +131,10 @@ function storeFor(key) {
   if (AUDIO_KEYS.has(key)) return useAudioStore;
   if (TEXT_ELEMENT_KEYS.has(key)) return useTextElementStore;
   if (IMAGE_LAYER_KEYS.has(key)) return useImageLayerStore;
+  if (SHAPE_LAYER_KEYS.has(key)) return useShapeLayerStore;
+  if (COMPOSITION_KEYS.has(key)) return useCompositionStore;
+  if (RHYTHM_KEYS.has(key)) return useRhythmStore;
+  if (OBJECT_KEYS.has(key)) return useObjectStore;
   return useEditorStore;
 }
 
@@ -138,7 +160,11 @@ export const appState = new Proxy({}, {
       || prop in useTransformStore.getState()
       || prop in useAudioStore.getState()
       || prop in useTextElementStore.getState()
-      || prop in useImageLayerStore.getState();
+      || prop in useImageLayerStore.getState()
+      || prop in useShapeLayerStore.getState()
+      || prop in useCompositionStore.getState()
+      || prop in useRhythmStore.getState()
+      || prop in useObjectStore.getState();
   }
 });
 
@@ -279,6 +305,22 @@ export function resetStyles() {
   updateState({ ...initialStyleState }, { recordHistory: true });
 }
 
+// Extra export fields from modules state.js must not import (they import it):
+// each returns fields to add, or {} — see objectEffects.js's payload, which
+// adds the object-aware effects and only the tracks they follow, and only
+// when there are any.
+const styleParamExtras = [];
+export function registerStyleParamsExtra(fn) {
+  if (typeof fn === 'function' && !styleParamExtras.includes(fn)) styleParamExtras.push(fn);
+}
+function styleExtras() {
+  const out = {};
+  styleParamExtras.forEach((fn) => {
+    try { Object.assign(out, fn() || {}); } catch (err) { console.warn('[state] a style-params extra failed:', err); }
+  });
+  return out;
+}
+
 /**
  * Single source of truth for resolved caption style parameters.
  * Every consumer (preview CSS, sidebar UI sync, upload/regenerate payloads)
@@ -361,10 +403,19 @@ export function getStyleParams() {
     // Image layers (shared/imageLayer.js) — drawn by the exporter from the
     // same records the preview draws them from.
     imageLayers: appState.imageLayers,
+    // Shape layers (shared/shapeLayer.js), and the one layer stack's stored
+    // order (shared/visualLayers.js) — the exporter composites in it.
+    shapeLayers: appState.shapeLayers,
+    layerOrder: appState.layerOrder,
+    // The composition (shared/composition.js): the canvas the exporter renders
+    // into, and the video's styling inside it.
+    composition: appState.composition,
+    videoStyle: appState.videoStyle,
     // The transcript's OWN captions, now that they are edited rather than
     // re-derived (see shared/captionEvent.js). The exporter renders these
     // instead of regrouping the word list, which is what makes a retimed,
     // split or merged caption survive an export at all.
-    captionEvents: appState.captionEvents
+    captionEvents: appState.captionEvents,
+    ...styleExtras()
   };
 }

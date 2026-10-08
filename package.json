@@ -27,6 +27,7 @@
     "@radix-ui/react-tabs": "^1.1.21",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
+    "onnxruntime-web": "^1.30.0",
     "react": "^19.2.8",
     "react-colorful": "^5.8.0",
     "react-dom": "^19.2.8",
