@@ -97,6 +97,49 @@ function routeFieldsThroughKeyframes(existing, fields, fieldToProperty, readCurr
 }
 
 let overlayEl, hitAreaEl, boxEl, rotateHandleEl, toolbarEl, scopeThisBtn, scopeAllBtn, resetBtn, rotationLabelEl;
+
+// Where the selection's options (scope buttons, animation, reset, rotation)
+// live. They used to float over the video above the selected text, which
+// covered the very thing being edited; on desktop they now sit in a card at
+// the top of the right-hand panel instead (see App.jsx). The SAME toolbar
+// element is moved there rather than rebuilt, because every button in it is
+// wired by id in this file — a second copy would be a second set of handlers
+// to keep in step. `toolbarHome` is where it goes back to when there is no
+// panel to host it (a phone-width layout), so nothing is lost there.
+let toolbarHost = null;
+let toolbarHome = null;
+
+/** Moves the toolbar into `host` (an element), or back over the canvas when `host` is null. */
+export function setSelectionOptionsHost(host) {
+  toolbarHost = host || null;
+  applyToolbarHost();
+}
+
+function applyToolbarHost() {
+  if (!toolbarEl || !toolbarHome) return; // not initialised yet — init applies it
+  if (toolbarHost) {
+    if (toolbarEl.parentElement !== toolbarHost) toolbarHost.appendChild(toolbarEl);
+    toolbarEl.classList.add('in-panel');
+    // The floating placement set an inline transform (and counter-rotated it
+    // against the box); none of that applies in a panel.
+    toolbarEl.style.transform = '';
+  } else {
+    if (toolbarEl.parentElement !== toolbarHome) toolbarHome.insertBefore(toolbarEl, toolbarHome.firstChild);
+    toolbarEl.classList.remove('in-panel');
+  }
+}
+
+/**
+ * Whether the current selection has options that belong in that card: a
+ * caption, a group or a word of one, or one word of a text element. A whole
+ * text element, an image or a shape have their own panels (Text & Cinematic,
+ * Image, Shape) and never used this toolbar.
+ */
+export function selectionNeedsOptionsPanel() {
+  if (selectedGraphicId) return false;
+  if (selectedTextElementId) return selectedTextWordIndex != null;
+  return !!selected;
+}
 let scopeThisKeywordBtn, scopeAllKeywordsBtn, scopeSelectKeywordsBtn, keywordMultiSelectDoneBtn, keywordMultiSelectLabelEl;
 let animationTypeSelect, animScopeThisBtn, animScopeSameTypeBtn, animScopeAllWordsBtn, animScopeThisCaptionBtn, animScopeAllCaptionsBtn, animationSectionLabelEl;
 let animTimingEachBtn, animTimingTogetherBtn;
@@ -355,9 +398,13 @@ function effectiveValue(phrase, field, globalValue) {
  * word, regardless of transformApplyScope (see this file's top doc comment),
  * so there is no "which scope" branch here.
  */
-function effectiveWordValue(wordIndex, field, fallback) {
+function effectiveWordValue(wordIndex, field, fallback, map = null) {
   if (wordIndex == null) return fallback;
-  const override = activeWordMap()[getWordTransformKey(wordIndex)];
+  // `map` lets a caller ask about a text element that is NOT the current
+  // selection (hit-testing has to know where every visible element's moved
+  // words are drawn, selected or not). Without it this reads the selection's
+  // own map, exactly as before.
+  const override = (map || activeWordMap())[getWordTransformKey(wordIndex)];
   return resolveEffectiveField(override, field, WORD_FIELD_TO_PROPERTY, fallback);
 }
 
@@ -458,21 +505,29 @@ function findWordAtPoint(px, py, box) {
  * TOP of the parent block's rotation, since that's how it's actually painted
  * (see shared/captionGraphics.js's per-word ctx.save/rotate).
  */
-function wordBoxFor(word, box) {
-  const scale = effectiveWordValue(word.wordIndex, 'fontScale', 1) || 1;
+function wordBoxFor(word, box, map = null) {
+  // A keyword's scale can already be in its laid-out WIDTH (see
+  // computeSentenceLines's layoutScale: the layout gives it a slot as wide as
+  // it is drawn so the line can wrap around it). Only the part of the scale the
+  // layout has not already given it is applied to the width — otherwise the
+  // box would be that many times too wide. The layout never changes a word's
+  // HEIGHT (a line is as tall as it was), so the height takes the whole scale.
+  const fullScale = effectiveWordValue(word.wordIndex, 'fontScale', 1, map) || 1;
+  const widthScale = fullScale / (word.layoutScale || 1);
+  const heightScale = fullScale;
   // Stored offsets are in the authored 330-box unit (see
   // shared/captionGraphics.js's wordOffsetToCanvasPx) — converted here into
   // the canvas backing-store px space word.x/word.y live in, so the
   // selection box lands exactly where the renderer paints the glyph.
   const canvasW = getCanvasBackingWidth();
-  const offsetX = wordOffsetToCanvasPx(effectiveWordValue(word.wordIndex, 'offsetXPx', 0) || 0, canvasW);
-  const offsetY = wordOffsetToCanvasPx(effectiveWordValue(word.wordIndex, 'offsetYPx', 0) || 0, canvasW);
-  const ownRotation = effectiveWordValue(word.wordIndex, 'rotationDeg', 0) || 0;
+  const offsetX = wordOffsetToCanvasPx(effectiveWordValue(word.wordIndex, 'offsetXPx', 0, map) || 0, canvasW);
+  const offsetY = wordOffsetToCanvasPx(effectiveWordValue(word.wordIndex, 'offsetYPx', 0, map) || 0, canvasW);
+  const ownRotation = effectiveWordValue(word.wordIndex, 'rotationDeg', 0, map) || 0;
 
   const centerX = word.x + word.width / 2 + offsetX;
   const centerY = word.y + word.height / 2 + offsetY;
-  const width = word.width * scale;
-  const height = word.height * scale;
+  const width = word.width * widthScale;
+  const height = word.height * heightScale;
 
   return {
     x: centerX - width / 2,
@@ -1295,7 +1350,8 @@ function positionBoxElement() {
   // the whole property, not just adds to it.
   const controlsBelow = shouldPlaceControlsBelow();
   boxEl.classList.toggle('controls-below', controlsBelow);
-  if (toolbarEl) {
+  // Not when hosted in the panel: that placement has no box to counter-rotate against.
+  if (toolbarEl && !toolbarHost) {
     const baseTranslate = controlsBelow ? 'translate(-50%, 8px)' : 'translate(-50%, -8px)';
     toolbarEl.style.transform = box.rotationDeg
       ? `${baseTranslate} rotate(${-box.rotationDeg}deg)`
@@ -1777,6 +1833,95 @@ function pointHitsCaption(clientX, clientY) {
   return pointInRotatedBox(x, y, { centerX: padded.centerX / s, centerY: padded.centerY / s, width: padded.width / s, height: padded.height / s, rotationDeg: padded.rotationDeg });
 }
 
+// Padding around a word that has been moved off its place in the text, in CSS
+// px. Smaller than the 16px the whole block gets: this is the grab area of ONE
+// word, and a generous one would let a moved word swallow clicks meant for the
+// words beside it. ensureMinimumGrabBox still keeps a tiny word grabbable.
+const MOVED_WORD_PADDING_CSS_PX = 8;
+
+/** Whether a text-element word has been moved, scaled or rotated away from its laid-out place. */
+function isTextWordMoved(wordIndex, map) {
+  return !!(effectiveWordValue(wordIndex, 'offsetXPx', 0, map)
+    || effectiveWordValue(wordIndex, 'offsetYPx', 0, map)
+    || effectiveWordValue(wordIndex, 'rotationDeg', 0, map)
+    || (effectiveWordValue(wordIndex, 'fontScale', 1, map) || 1) !== 1);
+}
+
+/**
+ * Whether a viewport point is on a text element's ACTUAL content — where its
+ * words are drawn now — and which moved word, if any, it is on.
+ * Returns null (a miss), { word: null } (the element's own text) or
+ * { word } (a word that has been moved away).
+ *
+ * WHY THIS IS NOT JUST THE ELEMENT'S BOX. The published box is the element's
+ * RESTING layout: where its words sit before any per-word edit. Once a word is
+ * dragged away the drawn text and that box no longer agree, and hit-testing
+ * the box gives two wrong answers at once — clicking the moved word hits
+ * nothing (so it could never be selected again), while the empty patch it left
+ * behind still hits the element and drags the whole thing. A word's moved
+ * position is already what findWordAtPoint tests for captions (see its doc
+ * comment); this gives text elements the same property.
+ *
+ * With no moved words this is exactly the old whole-box test, so an element
+ * nobody has edited word by word behaves as it always did.
+ */
+function textElementHitAt(entry, clientX, clientY) {
+  const { box } = entry;
+  const scale = box.cssPxScale || 1;
+  const map = getTextElement(entry.id)?.wordTransforms || {};
+  const candidates = getWordCandidates(box);
+  const moved = candidates.filter((w) => isTextWordMoved(w.wordIndex, map));
+
+  if (!moved.length) {
+    return pointInPublishedBox(clientX, clientY, ensureMinimumGrabBox(inflateBox(box, CAPTION_SELECTION_PADDING_CSS_PX)))
+      ? { word: null }
+      : null;
+  }
+
+  // The point in the block's own (un-rotated) frame, in the canvas px the
+  // word rects live in — the same space findWordAtPoint works in.
+  const { x: cssX, y: cssY } = clientToCssPoint(clientX, clientY);
+  const rad = (-(box.rotationDeg || 0) * Math.PI) / 180;
+  const dx = cssX * scale - box.centerX;
+  const dy = cssY * scale - box.centerY;
+  const localX = box.centerX + (dx * Math.cos(rad) - dy * Math.sin(rad));
+  const localY = box.centerY + (dx * Math.sin(rad) + dy * Math.cos(rad));
+
+  // 1. A moved word, where it is drawn now. Nearest centre wins if two overlap.
+  let hitWord = null;
+  let hitDist = Infinity;
+  for (const w of moved) {
+    const wb = ensureMinimumGrabBox(inflateBox(wordBoxFor(w, box, map), MOVED_WORD_PADDING_CSS_PX));
+    const ownRad = (-((wb.rotationDeg || 0) - (box.rotationDeg || 0)) * Math.PI) / 180;
+    const wdx = localX - wb.centerX;
+    const wdy = localY - wb.centerY;
+    const wx = wb.centerX + (wdx * Math.cos(ownRad) - wdy * Math.sin(ownRad));
+    const wy = wb.centerY + (wdx * Math.sin(ownRad) + wdy * Math.cos(ownRad));
+    if (wx >= wb.x && wx <= wb.x + wb.width && wy >= wb.y && wy <= wb.y + wb.height) {
+      const dist = Math.hypot(wdx, wdy);
+      if (dist < hitDist) { hitWord = w; hitDist = dist; }
+    }
+  }
+  if (hitWord) return { word: hitWord };
+
+  // 2. The words still in the layout — their bounds, NOT the original box,
+  // so the spot a moved word vacated is no longer part of the element.
+  // (A gap BETWEEN two words that stayed put is still inside, as before.)
+  const resting = candidates.filter((w) => !moved.includes(w));
+  if (!resting.length) return null;
+  const x0 = Math.min(...resting.map((w) => w.x));
+  const y0 = Math.min(...resting.map((w) => w.y));
+  const x1 = Math.max(...resting.map((w) => w.x + w.width));
+  const y1 = Math.max(...resting.map((w) => w.y + w.height));
+  const rest = ensureMinimumGrabBox(inflateBox(
+    { x: x0, y: y0, width: x1 - x0, height: y1 - y0, centerX: (x0 + x1) / 2, centerY: (y0 + y1) / 2, cssPxScale: scale },
+    CAPTION_SELECTION_PADDING_CSS_PX
+  ));
+  return localX >= rest.x && localX <= rest.x + rest.width && localY >= rest.y && localY <= rest.y + rest.height
+    ? { word: null }
+    : null;
+}
+
 /**
  * The TOPMOST object under a point, by the one layer stack
  * (shared/visualLayers.js), whatever its type — so a click picks what is
@@ -1799,7 +1944,10 @@ function topmostHitAt(clientX, clientY) {
     }
     if (entry.type === 'text') {
       const b = textElementBoxes.find((tb) => tb.id === entry.id);
-      if (b && pointInPublishedBox(clientX, clientY, ensureMinimumGrabBox(inflateBox(b.box, CAPTION_SELECTION_PADDING_CSS_PX)))) return { type: 'text', hit: b };
+      const textHit = b ? textElementHitAt(b, clientX, clientY) : null;
+      // `word` is set when the press landed on a word that has been moved off
+      // its place — the caller selects that word directly (see the press handler).
+      if (textHit) return { type: 'text', hit: b, word: textHit.word };
       continue;
     }
     const g = graphicBoxes.find((gb) => gb.id === entry.id);
@@ -2000,21 +2148,13 @@ export function isEditingTextElementInline() {
 /** Topmost visible text element under a viewport point, or null. */
 function findTextElementAtClient(clientX, clientY) {
   if (!textElementBoxes.length) return null;
-  const { x, y } = clientToCssPoint(clientX, clientY);
   // Reverse order: elements are drawn in list order, so the LAST one drawn
   // is the one visually on top and must win an overlapping hit.
   for (let i = textElementBoxes.length - 1; i >= 0; i--) {
-    const { id, box } = textElementBoxes[i];
-    const scale = box.cssPxScale || 1;
-    const padded = ensureMinimumGrabBox(inflateBox(box, CAPTION_SELECTION_PADDING_CSS_PX));
-    const cssBox = {
-      centerX: padded.centerX / scale,
-      centerY: padded.centerY / scale,
-      width: padded.width / scale,
-      height: padded.height / scale,
-      rotationDeg: padded.rotationDeg
-    };
-    if (pointInRotatedBox(x, y, cssBox)) return { id, box };
+    const entry = textElementBoxes[i];
+    // The same test a press uses, so double-clicking a word that has been
+    // moved away edits it, rather than missing it.
+    if (textElementHitAt(entry, clientX, clientY)) return { id: entry.id, box: entry.box };
   }
   return null;
 }
@@ -2642,6 +2782,10 @@ if (import.meta.env.DEV) {
     return { id, centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s };
   });
   window.__debugSelectedTextElementId = () => selectedTextElementId;
+  // What the right-hand "Selection options" card is keyed off.
+  window.__debugSelectionOptions = () => ({
+    needs: selectionNeedsOptionsPanel(), selected, selectedWordIndex, selectedGroupId, selectedTextElementId, selectedTextWordIndex
+  });
   // Image boxes (CSS px in the video frame) and the selected image.
   window.__debugImageRects = () => graphicBoxes.filter((g) => g.type !== 'shape').map(({ id, box }) => {
     const s = box.cssPxScale || 1;
@@ -2722,6 +2866,9 @@ export function initCanvasTransform() {
   boxEl = document.getElementById('caption-transform-box');
   rotateHandleEl = document.getElementById('caption-transform-handle-rotate');
   toolbarEl = document.getElementById('caption-transform-toolbar');
+  toolbarHome = toolbarEl ? toolbarEl.parentElement : null;
+  // The panel may have registered its host before this ran.
+  applyToolbarHost();
   scopeThisBtn = document.getElementById('btn-transform-scope-this');
   scopeAllBtn = document.getElementById('btn-transform-scope-all');
   resetBtn = document.getElementById('btn-transform-reset');
@@ -2801,7 +2948,10 @@ export function initCanvasTransform() {
   // Capture phase, so the origin is known before any handler starts a drag.
   overlayEl.addEventListener('pointerdown', (e) => { pressClient = { x: e.clientX, y: e.clientY }; }, true);
 
-  hitAreaEl.addEventListener('pointerdown', (e) => {
+  // A named function rather than an inline listener, because the selection box
+  // sits on top of this area and has to hand it presses that were not really
+  // on the thing the box outlines (see boxEl's handler below).
+  const onCanvasPointerDown = (e) => {
     // TEXT ELEMENTS FIRST, and before the currentBox guard. They render on
     // their own layer ABOVE the caption canvas, so a click that lands on
     // one must resolve to it rather than to whatever caption happens to be
@@ -2820,6 +2970,22 @@ export function initCanvasTransform() {
     const textHit = top && top.type === 'text' ? top.hit : null;
     if (textHit) {
       deselectVideoTarget();
+      // A word that has been moved off its place is its own piece of text now,
+      // so a press on it picks THAT word and drags just it — the same rule a
+      // caption follows for a detached word ("a first click selects it
+      // directly instead of forcing a redundant intermediate step"). The
+      // two-step select-the-whole-then-drill-in below is for words still
+      // sitting where the layout put them.
+      if (top.word) {
+        if (selectedTextElementId !== textHit.id) selectTextElementTarget(textHit.id);
+        textSelectedOnCanvas = true;
+        selectTextWord(top.word.wordIndex);
+        boxEl.hidden = false;
+        positionBoxElement();
+        updateScopeButtons();
+        beginTextWordDrag(e, 'move');
+        return;
+      }
       const wasSelected = selectedTextElementId === textHit.id && textSelectedOnCanvas;
       if (selectedTextElementId !== textHit.id) selectTextElementTarget(textHit.id);
       textSelectedOnCanvas = true;
@@ -2997,7 +3163,8 @@ export function initCanvasTransform() {
       resetKeywordScopeState();
       boxEl.hidden = true;
     }
-  });
+  };
+  hitAreaEl.addEventListener('pointerdown', onCanvasPointerDown);
 
   boxEl.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.caption-transform-handle') || e.target.closest('.caption-transform-toolbar')) return;
@@ -3008,6 +3175,18 @@ export function initCanvasTransform() {
     // one that picks a WORD inside it (decided on release: see endTextDrag).
     if (selectedTextElementId) {
       const entry = textElementBoxes.find((b) => b.id === selectedTextElementId);
+      // With the whole element selected this box outlines its RESTING layout,
+      // which is not where its text is once a word has been moved. A press
+      // inside the outline but not on anything drawn — the patch a moved word
+      // left behind — is not a press on the element, so it goes to the canvas
+      // handler like any other press on empty space (deselect, or whatever
+      // lies beneath) instead of dragging the whole text. A press on a moved
+      // word is handed over the same way, so that word is picked directly.
+      // (While a WORD is selected the box is that word's own, so it is skipped.)
+      if (entry && selectedTextWordIndex == null) {
+        const onText = textElementHitAt(entry, e.clientX, e.clientY);
+        if (!onText || onText.word) { onCanvasPointerDown(e); return; }
+      }
       let pendingWord = null;
       const drillIn = textSelectedOnCanvas;
       textSelectedOnCanvas = true;
@@ -3086,6 +3265,18 @@ export function initCanvasTransform() {
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', endDrag);
   window.addEventListener('pointercancel', endDrag);
+
+  // A selection changes on a press, a release or a key — but it was only
+  // ANNOUNCED from the per-frame redraw (updateCanvasTransformOverlay), and
+  // that does not run while the video is paused and nothing else is changing.
+  // Anything listening (the right-hand "Selection options" card) therefore
+  // lagged a click behind, or never caught up. Checking once after each of
+  // these events, once the handlers have finished, covers every way of
+  // changing the selection — a canvas click, Escape, the timeline's Video
+  // chip — without each of them having to remember to announce it. It only
+  // notifies when the selection actually differs from the last one announced.
+  const announceSelectionSoon = () => requestAnimationFrame(notifySelectionChangedIfNeeded);
+  ['pointerdown', 'pointerup', 'keydown'].forEach((type) => window.addEventListener(type, announceSelectionSoon, true));
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && (selected || isSelectingGroup)) {

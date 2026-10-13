@@ -329,7 +329,8 @@ body.light-theme {
   display: none;
 }
 
-.captions-canvas.active {
+.captions-canvas.active,
+#captions-keyword-canvas.active {
   display: block;
 }
 
@@ -2266,4 +2267,45 @@ body.light-theme {
   margin-top: 10px;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* --- Selection options in the right-hand panel ------------------------------
+   The caption/word toolbar (scope buttons, animation, reset, rotation) is the
+   same element that used to float over the video; canvasTransform.js moves it
+   into #selection-options-host on desktop (see setSelectionOptionsHost). The
+   rules above place it absolutely above the selection box, so in the panel it
+   is put back in normal flow and given the panel's width. */
+.selection-options-title {
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.caption-transform-toolbar.in-panel {
+  position: static;
+  transform: none;
+  max-width: none;
+  justify-content: flex-start;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  gap: 6px;
+}
+
+/* Bigger, easier-to-hit targets than the compact canvas version. */
+.caption-transform-toolbar.in-panel .caption-transform-scope-btn,
+.caption-transform-toolbar.in-panel .caption-transform-reset-btn {
+  padding: 5px 10px;
+  border-color: var(--border-color);
+}
+
+.caption-transform-toolbar.in-panel .caption-transform-scope-btn.active {
+  border-color: var(--accent-color);
+}
+
+.caption-transform-toolbar.in-panel select {
+  max-width: 100%;
 }

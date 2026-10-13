@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
 
+// The dropdowns are custom lists (so hovering an item can preview it): open, then choose.
+async function pickOption(page, selector, value) {
+  await page.locator(selector).click();
+  await page.locator(`[data-hover-option="${value}"]`).click();
+}
+
 // Full style parity for text overlays — the Overlay panel
 // (src/components/TextInspector.jsx) writing into an element's sparse `style`
 // bag, which the shared renderer merges over getStyleParams().
@@ -122,7 +128,7 @@ test('weight, italic and underline each change the rendered overlay', async ({ p
   expect(base.drawn).toBeGreaterThan(200);
 
   // --- WEIGHT: a heavier face lays down measurably more ink. ---
-  await page.locator('#textel-weight').selectOption('900');
+  await pickOption(page, '#textel-weight', '900');
   await page.waitForFunction(() => document.fonts.status === 'loaded', null, { timeout: 15000 });
   await page.waitForTimeout(700);
   const heavy = await textStats(page);
@@ -131,7 +137,7 @@ test('weight, italic and underline each change the rendered overlay', async ({ p
   expect(heavy.drawn).toBeGreaterThan(base.drawn * 1.05);
 
   // --- ITALIC: a slant widens the block without adding many glyph pixels. ---
-  await page.locator('#textel-weight').selectOption('');
+  await pickOption(page, '#textel-weight', '');
   await page.waitForTimeout(400);
   await page.locator('#textel-italic').click();
   await page.waitForTimeout(700);
@@ -195,7 +201,7 @@ test('size, colour, outline and shadow all reach the pixels', async ({ page }) =
   // --- SHADOW ---
   await setSlider(page, 'textel-outline-size', 0);
   const beforeShadow = await textStats(page);
-  await page.locator('#textel-shadow-mode').selectOption('individual');
+  await pickOption(page, '#textel-shadow-mode', 'individual');
   await page.waitForTimeout(300);
   await setSlider(page, 'textel-shadow-size', 60);
   await setSlider(page, 'textel-shadow-x', 40);

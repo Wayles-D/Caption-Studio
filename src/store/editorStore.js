@@ -22,7 +22,8 @@ import { create } from 'zustand';
 export const STYLE_DEFAULTS = {
   currentPreset: "bold-yellow",
   fontFamily: "Montserrat",
-  fontWeight: "700",
+  fontWeight: null,
+  blendScope: "all",
   fontSize: 14,
   wordSpacing: 4,
   lineHeight: 1.2,
@@ -64,6 +65,11 @@ export const STYLE_DEFAULTS = {
   captionAnimationEasing: "ease-out",
   captionAnimationIntensity: 1,
   textCase: "uppercase",
+  // What happens when SCALED text reaches the edge of the frame: 'stack' (the
+  // default) wraps it onto another line, 'keep' leaves it on one line to run
+  // past the edge. Covers a keyword's scale and the whole caption's scale —
+  // see computeSentenceLines in shared/captionGraphics.js.
+  scaleOverflow: "stack",
   position: "bottom",
   marginV: 300,
   customPosX: 50,

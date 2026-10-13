@@ -470,6 +470,9 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // layer, the FIRST pass — directly on the video, beneath every other
     // layer, where the preview's effects canvas sits.
     pushLayer(objectEffects?.overlay, 'normal', 'ofx', 'fxlayer', true);
+    // Keyword-only blend: the keywords are their own stream, composited right
+    // after the (unblended) caption track with the caption's blend mode.
+    pushLayer(videoTransformOpts.keywordSegments, captionBlendMode, 'kw', 'kwtrack');
     if (Array.isArray(layerRuns)) {
       // THE LAYER STACK's runs (shared/visualLayers.js), bottom to top: each
       // its own stream, composited in order — those beneath the captions
@@ -595,7 +598,9 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     });
     const passes = [
       ...extraLayers.filter((layer) => layer.beneathCaptions),
-      { label: 'captrack', blendMode: textBlendMode, prefix: 'ct' },
+      // With keyword-only blend the caption track itself stays plain; the blend
+      // moves to the keyword stream above (manual captions keep the real mode).
+      { label: 'captrack', blendMode: videoTransformOpts.keywordSegments?.length ? 'normal' : textBlendMode, prefix: 'ct' },
       ...extraLayers.filter((layer) => !layer.beneathCaptions)
     ];
     const chainLabelFor = (i) => (i === passes.length - 1 ? '[outv]' : `[after_layer_${i}]`);

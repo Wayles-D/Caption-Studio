@@ -52,6 +52,18 @@ import { CREATOR_PROFILES } from '../../shared/captionConfig.js';
 import { useEditorStore } from '../store/editorStore.js';
 import { updateState } from '../js/state.js';
 import { ToggleSwitch } from './ToggleSwitch.jsx';
+import { HoverSelect } from './HoverSelect.jsx';
+import { CaptionProfiles } from './CaptionProfiles.jsx';
+import { previewState } from '../js/hoverPreview.js';
+
+const WEIGHT_CHOICES = [
+  { value: '', label: 'Preset Default' },
+  { value: '400', label: 'Regular (400)' },
+  { value: '600', label: 'Semi-Bold (600)' },
+  { value: '700', label: 'Bold (700)' },
+  { value: '800', label: 'Extra-Bold (800)' },
+  { value: '900', label: 'Black (900)' }
+];
 import { ColorPickerField } from './ColorPickerField.jsx';
 
 // Which color fields have a genuine, pre-existing global opacity concept to
@@ -284,6 +296,9 @@ export function SidebarInspector({ sectionFilter } = {}) {
   // that pattern already caused once).
   const currentPreset = useEditorStore((s) => s.currentPreset);
   const captionMode = useEditorStore((s) => s.captionMode);
+  const scaleOverflow = useEditorStore((s) => s.scaleOverflow);
+  const fontWeight = useEditorStore((s) => s.fontWeight);
+  const blendScope = useEditorStore((s) => s.blendScope);
   const shadowMode = useEditorStore((s) => s.shadowMode || 'individual');
 
   const bare = sectionFilter != null;
@@ -358,7 +373,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
 
           <div className={SETTINGS_GROUP}>
             <label htmlFor="font-family-select" className={GROUP_LABEL}>Font Family</label>
-            <select id="font-family-select" className={SELECT} defaultValue="Montserrat">
+            <HoverSelect id="font-family-select" className={SELECT} defaultValue="Montserrat" preview={(v) => ({ fontFamily: v })}>
               <optgroup label="Modern Sans">
                 <option value="Inter">Inter</option>
                 <option value="Outfit">Outfit</option>
@@ -387,7 +402,22 @@ export function SidebarInspector({ sectionFilter } = {}) {
               <optgroup label="Editorial & Script">
                 <option value="PP Editorial New">PP Editorial New</option>
               </optgroup>
-            </select>
+            </HoverSelect>
+          </div>
+
+          <div className={SETTINGS_GROUP}>
+            <label htmlFor="select-font-weight" className={GROUP_LABEL}>Font Weight</label>
+            <HoverSelect
+              id="select-font-weight" className={SELECT}
+              value={fontWeight || ''}
+              options={WEIGHT_CHOICES}
+              onChange={(v) => updateState({ fontWeight: v || null })}
+              onPreview={(v) => previewState({ fontWeight: v || null })}
+            />
+          </div>
+
+          <div className={SETTINGS_GROUP}>
+            <CaptionProfiles />
           </div>
 
           <div className={SETTINGS_GROUP}>
@@ -504,15 +534,30 @@ export function SidebarInspector({ sectionFilter } = {}) {
 
           <div className={SETTINGS_GROUP}>
             <label className={GROUP_LABEL}>Text Blend Mode</label>
-            <select id="text-blend-mode-select" className={SELECT} defaultValue="normal">
+            <HoverSelect id="text-blend-mode-select" className={SELECT} defaultValue="normal" preview={(v) => ({ textBlendMode: v === 'normal' ? null : v })}>
               <option value="normal">Normal</option>
               <option value="screen">Screen</option>
               <option value="overlay">Overlay</option>
               <option value="lighten">Lighten</option>
               <option value="difference">Difference</option>
               <option value="multiply">Multiply</option>
-            </select>
+            </HoverSelect>
             <p className={FIELD_HINT}>Blends caption text with the video colors underneath it, like the "blend mode text" effect in CapCut/Premiere.</p>
+          </div>
+
+          <div className={SETTINGS_GROUP}>
+            <label className={GROUP_LABEL}>Blend Applies To</label>
+            <div className={RADIO_GRID}>
+              <label className={RADIO_TAB}>
+                <input type="radio" name="blend-scope" value="all" className={RADIO_TAB_INPUT} checked={blendScope !== 'keywords'} onChange={() => updateState({ blendScope: 'all' })} />
+                <span className={RADIO_TAB_SPAN}>All text</span>
+              </label>
+              <label className={RADIO_TAB}>
+                <input type="radio" name="blend-scope" value="keywords" className={RADIO_TAB_INPUT} checked={blendScope === 'keywords'} onChange={() => updateState({ blendScope: 'keywords' })} />
+                <span className={RADIO_TAB_SPAN}>Keywords only</span>
+              </label>
+            </div>
+            <p className={FIELD_HINT}>Keywords only: just the keywords blend with the video (e.g. Difference); the other words stay solid. Needs keyword highlighting on and a blend mode other than Normal.</p>
           </div>
 
           <div id="individual-shadow-controls" hidden={shadowMode !== 'individual'} className="flex flex-col gap-3.5">
@@ -650,7 +695,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
         >
           <div className={SETTINGS_GROUP}>
             <label htmlFor="caption-animation-type-select" className={GROUP_LABEL}>Entrance Animation</label>
-            <select id="caption-animation-type-select" className={SELECT} defaultValue="none">
+            <HoverSelect id="caption-animation-type-select" className={SELECT} defaultValue="none" preview={(v) => ({ captionAnimationType: v })}>
               <option value="none">None</option>
               <option value="fade">Fade</option>
               <option value="pop">Pop</option>
@@ -659,7 +704,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
               <option value="slide-down">Slide Down</option>
               <option value="slide-left">Slide Left</option>
               <option value="slide-right">Slide Right</option>
-            </select>
+            </HoverSelect>
             <p className={FIELD_HINT}>How each caption enters the frame. Applies to the whole caption block (text, keyword styling, shadow, outline together) — not an individual word.</p>
           </div>
 
@@ -674,12 +719,12 @@ export function SidebarInspector({ sectionFilter } = {}) {
 
           <div className={SETTINGS_GROUP} id="caption-animation-easing-group">
             <label htmlFor="caption-animation-easing-select" className={GROUP_LABEL}>Easing</label>
-            <select id="caption-animation-easing-select" className={SELECT} defaultValue="ease-out">
+            <HoverSelect id="caption-animation-easing-select" className={SELECT} defaultValue="ease-out" preview={(v) => ({ captionAnimationEasing: v })}>
               <option value="linear">Linear</option>
               <option value="ease-in">Ease In</option>
               <option value="ease-out">Ease Out</option>
               <option value="ease-in-out">Ease In Out</option>
-            </select>
+            </HoverSelect>
           </div>
         </AccordionSection>}
 
@@ -710,6 +755,23 @@ export function SidebarInspector({ sectionFilter } = {}) {
               </label>
             </div>
             <p className={FIELD_HINT} id="manual-pos-hint" hidden>Drag the caption directly in the preview to reposition it.</p>
+          </div>
+
+          <div className={SETTINGS_GROUP}>
+            <label className={GROUP_LABEL}>When Text Reaches the Edge</label>
+            <div className={RADIO_GRID}>
+              <label className={RADIO_TAB}>
+                <input type="radio" name="scale-overflow" value="stack" className={RADIO_TAB_INPUT} checked={scaleOverflow !== 'keep'} onChange={() => updateState({ scaleOverflow: 'stack' })} />
+                <span className={RADIO_TAB_SPAN}>Stack</span>
+              </label>
+              <label className={RADIO_TAB}>
+                <input type="radio" name="scale-overflow" value="keep" className={RADIO_TAB_INPUT} checked={scaleOverflow === 'keep'} onChange={() => updateState({ scaleOverflow: 'keep' })} />
+                <span className={RADIO_TAB_SPAN}>Keep on one line</span>
+              </label>
+            </div>
+            <p className={FIELD_HINT}>
+              When you make a keyword or a phrase bigger and it reaches the edge of the video: Stack wraps it onto another line, Keep leaves it on one line to run off the edge.
+            </p>
           </div>
 
           <div className={SETTINGS_GROUP}>
@@ -761,7 +823,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
 
           <div className={SETTINGS_GROUP}>
             <label htmlFor="select-keyword-font" className={GROUP_LABEL}>Keyword Font</label>
-            <select id="select-keyword-font" className={SELECT} defaultValue="">
+            <HoverSelect id="select-keyword-font" className={SELECT} defaultValue="" preview={(v) => ({ keywordFont: v || null })}>
               <option value="">Preset Default</option>
               <option value="Poppins">Poppins</option>
               <option value="PP Editorial New">PP Editorial New</option>
@@ -770,19 +832,19 @@ export function SidebarInspector({ sectionFilter } = {}) {
               <option value="Anton">Anton</option>
               <option value="Inter">Inter</option>
               <option value="Caveat">Caveat</option>
-            </select>
+            </HoverSelect>
           </div>
 
           <div className={SETTINGS_GROUP}>
             <label htmlFor="select-keyword-weight" className={GROUP_LABEL}>Keyword Weight</label>
-            <select id="select-keyword-weight" className={SELECT} defaultValue="">
+            <HoverSelect id="select-keyword-weight" className={SELECT} defaultValue="" preview={(v) => ({ keywordWeight: v || null })}>
               <option value="">Preset Default</option>
               <option value="400">Regular (400)</option>
               <option value="600">Semi-Bold (600)</option>
               <option value="700">Bold (700)</option>
               <option value="800">Extra-Bold (800)</option>
               <option value="900">Black (900)</option>
-            </select>
+            </HoverSelect>
           </div>
 
           <div className={SETTINGS_GROUP}>
@@ -795,10 +857,10 @@ export function SidebarInspector({ sectionFilter } = {}) {
 
           <div className={SETTINGS_GROUP}>
             <label htmlFor="select-keyword-animation" className={GROUP_LABEL}>Keyword Animation</label>
-            <select id="select-keyword-animation" className={SELECT} defaultValue="pop">
+            <HoverSelect id="select-keyword-animation" className={SELECT} defaultValue="pop" preview={(v) => ({ keywordAnimation: v || null })}>
               <option value="pop">Pop</option>
               <option value="none">None</option>
-            </select>
+            </HoverSelect>
           </div>
 
           <div className={SETTINGS_GROUP}>

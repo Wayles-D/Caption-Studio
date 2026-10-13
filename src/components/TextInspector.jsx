@@ -27,6 +27,8 @@ import { ColorPickerField } from './ColorPickerField.jsx';
 import { getSoundDefinition } from '../../shared/soundRegistry.js';
 import { INTERLUDE_DEFAULT_STYLE } from '../../shared/textElement.js';
 import { WordInspector } from './WordInspector.jsx';
+import { HoverSelect } from './HoverSelect.jsx';
+import { previewTextElement } from '../js/hoverPreview.js';
 import { LayerOrderControls } from './LayerControls.jsx';
 import { getSelectedWordStyleTarget, onSelectionChange, clearTextWordSelection } from '../js/components/canvasTransform.js';
 
@@ -148,19 +150,18 @@ function StyleSlider({ id, label, value, min, max, step = 1, unit = '', onChange
 }
 
 /** Dropdown whose empty option means "inherit". */
-function StyleSelect({ id, label, value, options, onChange }) {
+function StyleSelect({ id, label, value, options, onChange, onPreview }) {
   const meaning = useContext(ClearMeaning);
+  const all = [{ value: '', label: meaning.unset }, ...options];
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={id} className={GROUP_LABEL}>{label}</label>
-      <select
+      <HoverSelect
         id={id} className={SELECT}
-        value={value ?? ''}
-        onChange={(e) => onChange(e.target.value || null)}
-      >
-        <option value="">{meaning.unset}</option>
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
+        value={value ?? ''} options={all}
+        onChange={(v) => onChange(v || null)}
+        onPreview={onPreview ? (v) => onPreview(v || null) : undefined}
+      />
     </div>
   );
 }
@@ -491,6 +492,14 @@ function TextElementStyle({ element }) {
       : fields,
     opts
   );
+  // Hovering a dropdown item shows it on the canvas without committing; same
+  // clear-to-default mapping as apply, but never recorded in history.
+  const preview = (fields) => previewTextElement(
+    element.id,
+    isInterlude
+      ? Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v == null ? (INTERLUDE_DEFAULT_STYLE[k] ?? null) : v]))
+      : fields
+  );
   const hasAnyStyle = Object.keys(style).length > 0;
 
   /**
@@ -519,11 +528,13 @@ function TextElementStyle({ element }) {
           id="textel-font" label="Font" value={style.fontFamily}
           options={listFontOptions().map((f) => ({ value: f.value, label: f.label }))}
           onChange={(v) => apply({ fontFamily: v })}
+        onPreview={(v) => preview({ fontFamily: v })}
         />
         <StyleSelect
           id="textel-weight" label="Weight" value={style.fontWeight}
           options={WEIGHT_OPTIONS}
           onChange={(v) => apply({ fontWeight: v })}
+        onPreview={(v) => preview({ fontWeight: v })}
         />
         <StyleSlider
           id="textel-size" label="Size" value={style.fontSize}
@@ -557,6 +568,7 @@ function TextElementStyle({ element }) {
           id="textel-case" label="Letter case" value={style.textCase}
           options={CASE_OPTIONS}
           onChange={(v) => apply({ textCase: v })}
+        onPreview={(v) => preview({ textCase: v })}
         />
       </div>
 
@@ -623,6 +635,7 @@ function TextElementStyle({ element }) {
           id="textel-shadow-mode" label="Mode" value={style.shadowMode}
           options={SHADOW_MODE_OPTIONS}
           onChange={(v) => apply({ shadowMode: v })}
+        onPreview={(v) => preview({ shadowMode: v })}
         />
         {style.shadowMode === 'unified' ? (
           <>
@@ -695,6 +708,7 @@ function TextElementStyle({ element }) {
           id="textel-position" label="Anchor" value={style.position}
           options={POSITION_OPTIONS}
           onChange={(v) => apply({ position: v })}
+        onPreview={(v) => preview({ position: v })}
         />
         {style.position === 'manual' && (
           <>
@@ -730,6 +744,7 @@ function TextElementStyle({ element }) {
           id="textel-anim-type" label="Entrance" value={style.captionAnimationType}
           options={ANIMATION_TYPES.map((t) => ({ value: t, label: titleCase(t) }))}
           onChange={(v) => apply({ captionAnimationType: v })}
+        onPreview={(v) => preview({ captionAnimationType: v })}
         />
         <StyleSlider
           id="textel-anim-duration" label="Duration" value={style.captionAnimationDuration}

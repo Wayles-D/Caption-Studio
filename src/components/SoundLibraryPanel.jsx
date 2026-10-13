@@ -40,6 +40,7 @@ const ROW = `w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm
 
 export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTextElementId = null, placeAt = null }) {
   const rootRef = useRef(null);
+  const searchRef = useRef(null);
   const [query, setQuery] = useState('');
   const sections = useMemo(() => listSoundSections(), []);
   const visible = useMemo(() => sections
@@ -56,6 +57,22 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
   // would be the same list with a different verb, and would then have to be
   // kept in step with this one every time the library changed.
   const replacing = typeof replaceTargetId === 'string' && replaceTargetId;
+
+  // Typing starts straight away. The panel opens because you asked for a sound,
+  // and the first thing anyone does next is look one up — making them click the
+  // search box first is a step with no purpose.
+  //
+  // The dependencies matter: pressing Replace on a DIFFERENT capsule while the
+  // panel is already open does not remount it, it only changes the target, so
+  // focusing on mount alone would leave focus wherever that click put it.
+  useEffect(() => {
+    const input = searchRef.current;
+    if (!input) return;
+    input.focus();
+    // Select what is already typed, so a new search replaces the old one
+    // instead of being appended to it.
+    input.select();
+  }, [replaceTargetId, attachToTextElementId, placeAt]);
 
   useEffect(() => {
     // Closing on an outside press is registered on POINTERDOWN, matching how
@@ -101,6 +118,7 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
       <div className="px-3 pt-3 shrink-0">
         <input
           id="sound-library-search"
+          ref={searchRef}
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}

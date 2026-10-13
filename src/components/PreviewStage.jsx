@@ -134,6 +134,9 @@ export function PreviewStage({
               stacking order. */}
           <canvas className="images-under-canvas" id="images-under-canvas" />
           <canvas className="captions-canvas" id="captions-canvas" />
+          {/* Keywords alone, when the blend mode applies to keywords only —
+              see drawKeywordLayer in preview.js. */}
+          <canvas className="captions-canvas" id="captions-keyword-canvas" />
           {/* Manually placed captions + text overlays (see shared/textElement.js).
               Its own compositing layer rather than a second pass over the
               captions canvas: syncVideoSubtitles has several early-return

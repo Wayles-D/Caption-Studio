@@ -780,19 +780,36 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
     ? generateWordModePhraseFrames
     : generatePhraseCaptionFrames;
 
-  const segments = [];
-  let cursor = 0;
-
-  [...phrases].sort((a, b) => a.start - b.start).forEach((phrase) => {
-    pushGap(segments, cursor, phrase.start);
-    // RAW params passed through unmerged — each generator resolves its own
-    // phrase merge (once statically, once per slice) so phrase-level
-    // keyframes can vary correctly across the phrase's own slices; see
-    // generatePhraseCaptionFrames's doc comment for the full rationale.
-    segments.push(...generatePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir));
-    cursor = phrase.end;
-  });
-  pushGap(segments, cursor, videoDuration);
+  // One caption track: every phrase's frames, gaps filled blank. Keyword-only
+  // blend builds it twice over the SAME layout — normal words (plain) and
+  // keywords (blended, a layer of its own) — each into its own folder so the
+  // slice file names cannot collide.
+  const buildCaptionTrack = (trackParams, dir, blank) => {
+    const track = [];
+    const gap = (start, end) => { if (end - start >= 0.001) track.push({ start, end, file: blank }); };
+    let at = 0;
+    [...phrases].sort((a, b) => a.start - b.start).forEach((phrase) => {
+      gap(at, phrase.start);
+      // RAW params passed through unmerged — each generator resolves its own
+      // phrase merge (once statically, once per slice) so phrase-level
+      // keyframes can vary correctly across the phrase's own slices; see
+      // generatePhraseCaptionFrames's doc comment for the full rationale.
+      track.push(...generatePhraseFrames(phrase, trackParams, canvasWidth, canvasHeight, dir));
+      at = phrase.end;
+    });
+    gap(at, videoDuration);
+    return track;
+  };
+  let keywordCaptions = [];
+  let segments;
+  if (cssConfig.keywordOnlyBlend) {
+    const keywordDir = path.join(outDir, 'keywords');
+    fs.mkdirSync(keywordDir, { recursive: true });
+    segments = buildCaptionTrack({ ...params, captionWordLayer: 'normal' }, outDir, blankFile);
+    keywordCaptions = buildCaptionTrack({ ...params, captionWordLayer: 'keywords' }, keywordDir, generateBlankFrame(canvasWidth, canvasHeight, keywordDir));
+  } else {
+    segments = buildCaptionTrack(params, outDir, blankFile);
+  }
 
   // Manually placed captions + text overlays are a SECOND layer, composited
   // separately so the caption's Text Blend Mode can't bleed onto them — see
@@ -845,6 +862,7 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
 
   return {
     captions: segments,
+    keywordCaptions,
     runs,
     objectEffects,
     imagesUnder: firstRun((r) => r.beneathCaptions),

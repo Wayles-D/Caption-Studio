@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
 
+// The dropdowns are custom lists (so hovering an item can preview it): open, then choose.
+async function pickOption(page, selector, value) {
+  await page.locator(selector).click();
+  await page.locator(`[data-hover-option="${value}"]`).click();
+}
+
 // Regression test for per-word caption styling (the Word panel —
 // src/components/WordInspector.jsx), covering the two bugs that made the
 // feature look completely dead on first release:
@@ -95,7 +101,7 @@ test('a per-word font actually renders once its face loads', async ({ page }) =>
   await selectWordZero(page);
 
   const before = await canvasStats(page);
-  await page.locator('#word-font-select').selectOption('Pacifico');
+  await pickOption(page, '#word-font-select', 'Pacifico');
   // Deliberately does NOT touch the video: the point of the fix is that the
   // canvas redraws itself when the face finishes loading, with no playback.
   //

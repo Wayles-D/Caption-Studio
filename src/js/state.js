@@ -331,6 +331,7 @@ export function getStyleParams() {
   return {
     preset: appState.currentPreset,
     fontFamily: appState.fontFamily,
+    fontWeight: appState.fontWeight,
     fontSize: appState.fontSize,
     wordSpacing: appState.wordSpacing,
     popScale: appState.popScale,
@@ -355,6 +356,7 @@ export function getStyleParams() {
     rollingStackLayerCount: appState.rollingStackLayerCount,
     rollingStackAlignment: appState.rollingStackAlignment,
     textCase: appState.textCase,
+    scaleOverflow: appState.scaleOverflow,
     position: appState.position,
     customPosX: appState.customPosX,
     customPosY: appState.customPosY,
@@ -382,6 +384,7 @@ export function getStyleParams() {
     keywordOpacity: appState.keywordOpacity,
     enableActiveHighlight: appState.enableActiveHighlight,
     textBlendMode: appState.textBlendMode,
+    blendScope: appState.blendScope,
     // The audio timeline (sound effects + imported audio tracks — see
     // shared/audioTimeline.js). Carried in the SAME canonical snapshot the
     // live preview renders from and the export pipeline is driven by, exactly

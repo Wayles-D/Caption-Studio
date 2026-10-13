@@ -392,6 +392,22 @@ function syncTextElementsCanvas(currentTime, baseStyleParams) {
   setGraphicBoxes(graphicBoxes);
 }
 
+/**
+ * Keyword-only blend: the keywords are drawn, with the same layout, on a
+ * canvas of their own that carries the blend mode; the main captions canvas
+ * (drawn without keywords) stays unblended. The exporter composites the same
+ * two layers.
+ */
+function drawKeywordLayer(fontFamily, cssConfig, fontSizePx, drawOpts, draw) {
+  const canvas = document.getElementById('captions-keyword-canvas');
+  if (!canvas) return;
+  const prepped = prepareGraphicsCanvas(canvas, fontFamily, cssConfig.profile.fontWeight, fontSizePx);
+  if (!prepped) return;
+  canvas.style.mixBlendMode = cssConfig.textBlendMode;
+  draw(prepped.ctx, { ...drawOpts, params: { ...drawOpts.params, captionWordLayer: 'keywords' } });
+  canvas.classList.add('active');
+}
+
 function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, params) {
   const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
@@ -417,7 +433,11 @@ function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, p
       return off;
     }
   };
-  drawCaptionFrame(prepped.ctx, drawOpts);
+  const keywordLayer = canvas.id === 'captions-canvas' && cssConfig.keywordOnlyBlend;
+  drawCaptionFrame(prepped.ctx, keywordLayer ? { ...drawOpts, params: { ...params, captionWordLayer: 'normal' } } : drawOpts);
+  if (keywordLayer) {
+    drawKeywordLayer(fontFamily, cssConfig, fontSizePx, drawOpts, drawCaptionFrame);
+  }
   // Same ctx (fonts already loaded into it above) so measureText resolves
   // identically — see measureSentenceFrame's doc comment for the on-canvas
   // transform overlay this feeds (src/js/components/canvasTransform.js).
@@ -456,7 +476,11 @@ function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, currentTime, 
       return off;
     }
   };
-  drawRollingStackFrame(prepped.ctx, drawOpts);
+  const keywordLayer = canvas.id === 'captions-canvas' && cssConfig.keywordOnlyBlend;
+  drawRollingStackFrame(prepped.ctx, keywordLayer ? { ...drawOpts, params: { ...params, captionWordLayer: 'normal' } } : drawOpts);
+  if (keywordLayer) {
+    drawKeywordLayer(fontFamily, cssConfig, fontSizePx, drawOpts, drawRollingStackFrame);
+  }
   return measureRollingStackFrame(prepped.ctx, drawOpts);
 }
 
@@ -710,7 +734,7 @@ export function applyCSSPreviewStyles() {
   // legacy DOM text-layer fallback path via Object.assign.
   const captionsCanvasEl = document.getElementById('captions-canvas');
   if (captionsCanvasEl) {
-    captionsCanvasEl.style.mixBlendMode = cssConfig.textBlendMode && cssConfig.textBlendMode !== 'normal'
+    captionsCanvasEl.style.mixBlendMode = !cssConfig.keywordOnlyBlend && cssConfig.textBlendMode && cssConfig.textBlendMode !== 'normal'
       ? cssConfig.textBlendMode
       : '';
   }
@@ -732,6 +756,7 @@ export function syncVideoSubtitles() {
   // stale content from a previous mode.
   const captionsCanvas = document.getElementById('captions-canvas');
   if (captionsCanvas) captionsCanvas.classList.remove('active');
+  document.getElementById('captions-keyword-canvas')?.classList.remove('active');
   captionsText.style.visibility = '';
   // Re-shown only by the two graphics-renderer branches below — every other
   // path (demo fallback, Word Mode, non-graphics-renderer CSS fallback)

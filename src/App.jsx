@@ -51,6 +51,8 @@ import * as objectEffectsApi from './js/components/objectEffects.js';
 import * as segmentationApi from './js/components/objectSegmentation.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
+import { setSelectionOptionsHost, selectionNeedsOptionsPanel, onSelectionChange } from './js/components/canvasTransform.js';
+import { initHoverPreview } from './js/hoverPreview.js';
 import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
@@ -294,6 +296,33 @@ export function App() {
   // and closing either reverts to Video Inspector rather than hiding the
   // panel itself.
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT_QUERY);
+
+  // The selection's options (scope, animation, reset, rotation) used to float
+  // over the video above whatever was selected, covering the text being edited.
+  // On desktop they live in a card at the top of the right-hand panel instead:
+  // canvasTransform.js moves its toolbar element into this host, and the card
+  // is shown only while the current selection actually has such options.
+  // Below the desktop breakpoint there is no side panel, so the toolbar stays
+  // where it was.
+  // Hovering a style option (a casing, a preset, a mode) previews it on the
+  // video; see src/js/hoverPreview.js. Dropdowns do the same through
+  // HoverSelect, which draws its own list because a native one cannot be hovered.
+  useEffect(() => { initHoverPreview(); }, []);
+
+  const selectionOptionsHostRef = useRef(null);
+  const [selectionOptionsActive, setSelectionOptionsActive] = useState(false);
+  useEffect(() => {
+    if (!isDesktop) return undefined;
+    setSelectionOptionsHost(selectionOptionsHostRef.current);
+    const sync = () => setSelectionOptionsActive(selectionNeedsOptionsPanel());
+    sync();
+    const stop = onSelectionChange(sync);
+    return () => {
+      stop();
+      setSelectionOptionsHost(null);
+      setSelectionOptionsActive(false);
+    };
+  }, [isDesktop]);
   const [desktopSidePanel, setDesktopSidePanel] = useState(DESKTOP_SIDE_PANEL_DEFAULT);
 
   // The sound library (src/components/SoundLibraryPanel.jsx), opened from the
@@ -998,6 +1027,17 @@ export function App() {
                 </svg>
               </button>
             )}
+          </div>
+          {/* Where the selected word's options appear (see the effect above). Always
+              mounted, so the toolbar always has a home to be moved into; only
+              its visibility follows the selection. */}
+          <div
+            ref={selectionOptionsHostRef}
+            id="selection-options-host"
+            hidden={!selectionOptionsActive}
+            className="selection-options-host shrink-0 px-4 py-3 border-b border-[var(--border-color)]"
+          >
+            <div className="selection-options-title">Selection options</div>
           </div>
           <div className="overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'video-info' ? 'block' : 'none' }}>
             <RightInspector sectionFilter="video-info" onRegenerateCaptions={() => triggerRegeneration()} />

@@ -170,7 +170,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // second layer is added) for a project with no text elements.
     // Every picture the image layers use, decoded once for the whole render.
     const imageSources = await loadImageSources(normalizeImageLayerList(params.imageLayers));
-    const { captions: segments, runs: layerRuns, manualCaptions: manualCaptionSegments, text: textSegments, objectEffects } =
+    const { captions: segments, keywordCaptions, runs: layerRuns, manualCaptions: manualCaptionSegments, text: textSegments, objectEffects } =
       buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, {
         frameRate,
         imageSources,
@@ -196,6 +196,8 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       canvasHeight: height,
       composition,
       textBlendMode: getASSStyleFromConfig(params).textBlendMode,
+      // Keyword-only blend: the keywords' own stream (empty otherwise).
+      keywordSegments: keywordCaptions,
       // Manually placed CAPTIONS composite with the caption's own blend mode
       // (they are meant to look like the transcript's captions); text
       // OVERLAYS composite with a plain alpha-over, never that blend. Both

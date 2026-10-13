@@ -609,7 +609,8 @@ function layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndi
     // Letter spacing is also measured after a word's LAST glyph; that
     // trailing gap is not part of the word, so it is taken back out here
     // (and the paint step shifts by half of it — see paintSentenceComposite).
-    const measuredWidth = ctx.measureText(unit.text).width - letterSpacingPx;
+    // A word with a layoutScale is given a slot as wide as it will be drawn.
+    const measuredWidth = (ctx.measureText(unit.text).width - letterSpacingPx) * (unit.layoutScale || 1);
     const spacing = current.length ? wordSpacingPx : 0;
 
     if (current.length && currentWidth + spacing + measuredWidth > maxWidthPx) {
@@ -658,6 +659,31 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
 
   const breakAfterIndices = new Set(activePhrase.breakAfterIndices || []);
   const drawCtx = { currentTime, mode, keywordsEnabled, keywordColor, activeHighlight, inactiveColor, params, profile, blockFontWeight };
+
+  // WHEN SCALED TEXT REACHES THE EDGE: stack it, or keep it on one line.
+  //
+  // Two things scale text AFTER the layout has decided where lines break: a
+  // keyword's own scale (painted around that word's centre, see
+  // paintSentenceComposite) and the whole caption's scale (applied to the
+  // block). Neither used to be known to the line-breaker, so a caption that
+  // fit at 1x simply grew past the frame edge as the scale went up, instead
+  // of wrapping onto another line the way it does when its font size grows.
+  //
+  // 'stack' (the default) tells the layout about both, so the line breaks
+  // where the SCALED text meets the edge:
+  //   - a scaled keyword takes a slot as wide as it will be drawn, so the
+  //     words around it make room and the line wraps around it;
+  //   - a scaled-up block wraps at the frame width divided by its scale, so
+  //     it is exactly the frame width once scaled.
+  // 'keep' leaves the layout alone — the text keeps its line breaks and may
+  // run past the edge, which is a deliberate look some people want.
+  //
+  // Only GROWTH narrows the wrap width. A caption scaled down keeps the
+  // breaks it had; re-flowing it to use the extra room would rearrange text
+  // nobody asked to rearrange.
+  const stackOnScale = params.scaleOverflow !== 'keep';
+  const phraseScale = stackOnScale ? Math.max(1, Number(params.captionScaleMultiplier) || 1) : 1;
+  const wrapWidthPx = maxWidthPx / phraseScale;
 
   const resolvedFontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const wordUnits = activePhrase.words.map((w, idx) => {
@@ -755,10 +781,25 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
     }, styleOverride, geometry, fontSizePx);
   });
 
+  // A keyword's own scale, resolved at THIS moment (so a keyframed scale
+  // re-flows as it animates, exactly as it is drawn). Keywords only: scaling
+  // one ordinary word is a deliberate single-word edit that must not shove its
+  // neighbours about, which is what painting it around its own centre is for.
+  // The slot is recorded on the unit so the selection box can tell the width
+  // it was given from the scale it is drawn at (see wordBoxFor).
+  if (stackOnScale && keywordsEnabled) {
+    wordUnits.forEach((unit, idx) => {
+      const source = activePhrase.words[idx];
+      if (!source?.isKeyword) return;
+      const scale = Number(resolveWordOverrideAtTime(params, source.wordIndex, currentTime)?.fontScale);
+      if (Number.isFinite(scale) && scale > 0 && scale !== 1) unit.layoutScale = scale;
+    });
+  }
+
   ctx.textBaseline = 'alphabetic';
   ctx.lineJoin = 'round';
   applyLetterSpacing(ctx, letterSpacingPx);
-  const lines = layoutLines(ctx, wordUnits, { maxWidthPx, wordSpacingPx, breakAfterIndices, letterSpacingPx });
+  const lines = layoutLines(ctx, wordUnits, { maxWidthPx: wrapWidthPx, wordSpacingPx, breakAfterIndices, letterSpacingPx });
   if (!lines.length) return null;
 
   const totalHeight = lines.length * lineHeightPx;
@@ -833,6 +874,10 @@ function paintSentenceComposite(targetCtx, { lines, centerX, centerY, computed, 
       // Laid out but not yet revealed (typewriter) — its space is kept, it
       // isn't drawn. See layoutLines.
       if (word.visible === false) return;
+      // Keyword-only blend: this pass paints only one KIND of word (the other
+      // kind is on the other layer). Layout above already placed every word,
+      // so both layers line up exactly. See wordBelongsToLayer.
+      if (!wordBelongsToLayer(params, !!activePhrase.words[word.originalIndex]?.isKeyword)) return;
       // wordIndex is the word's position in the ENTIRE flat transcript (see
       // shared/captionTransform.js's getWordTransformKey doc comment) —
       // word.originalIndex is only its position within THIS phrase, so the
@@ -1044,6 +1089,10 @@ export function measureSentenceFrame(ctx, opts) {
       // src/js/components/canvasTransform.js) — read straight off the
       // source word, same indirection as wordIndex above.
       isKeyword: !!activePhrase.words[w.originalIndex]?.isKeyword,
+      // The scale already baked into this rect's width (1 when none). The
+      // selection overlay applies a word's scale on top of its rect, so it
+      // needs this to avoid counting the same scale twice.
+      layoutScale: w.layoutScale || 1,
       x: w.x,
       y: w.y,
       width: w.width,
@@ -1551,9 +1600,25 @@ function computeChunkWordRects(ctx, line, textAlign, lineX, lineTop) {
   });
 }
 
+/**
+ * Keyword-only blend splits the captions into two layers that are drawn with
+ * the SAME layout: params.captionWordLayer is 'keywords' for the layer that
+ * gets the blend mode and 'normal' for the one that does not. Unset (every
+ * caption today), every word is drawn.
+ */
+function wordBelongsToLayer(params, isKeyword) {
+  const layer = params.captionWordLayer;
+  if (layer === 'keywords') return isKeyword;
+  if (layer === 'normal') return !isKeyword;
+  return true;
+}
+
 function paintRollingStackLines(ctx, positionedLines, params, currentTime, canvasWidth, canvasHeight, { fontSizePx = 0, windowEnd } = {}) {
   positionedLines.forEach((line) => {
     const words = line.words || [];
+    // Keyword-only blend: a chunk is all keyword or all normal, so the whole
+    // line belongs to one layer (see wordBelongsToLayer).
+    if (!wordBelongsToLayer(params, words.some((w) => w.isKeyword))) return;
     // A word's entrance may run until the window it sits in moves on; words
     // set to enter together share their own line's start.
     const lineStarts = words.map((w) => w.start).filter((t) => t != null);

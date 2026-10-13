@@ -32,6 +32,8 @@ import {
 import { listFontOptions } from '../../shared/fontRegistry.js';
 import { ColorPickerField } from './ColorPickerField.jsx';
 import { ToggleSwitch } from './ToggleSwitch.jsx';
+import { HoverSelect } from './HoverSelect.jsx';
+import { previewWordStyle } from '../js/hoverPreview.js';
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
 const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
@@ -223,45 +225,38 @@ export function WordInspector() {
 
         <div className="flex flex-col gap-1.5">
           <label htmlFor="word-font-select" className={GROUP_LABEL}>Font</label>
-          <select
+          <HoverSelect
             id="word-font-select"
             className={SELECT}
             value={style.fontFamily || ''}
-            onChange={(e) => set({ fontFamily: e.target.value || null })}
-          >
-            <option value="">Same as caption</option>
-            {listFontOptions().map((f) => (
-              <option key={f.key} value={f.value}>{f.label}</option>
-            ))}
-          </select>
+            options={[{ value: '', label: 'Same as caption' }, ...listFontOptions().map((f) => ({ value: f.value, label: f.label }))]}
+            onChange={(v) => set({ fontFamily: v || null })}
+            onPreview={(v) => previewWordStyle(wordIndex, { fontFamily: v || null })}
+          />
         </div>
 
         <div className="flex flex-col gap-1.5">
           <label htmlFor="word-weight-select" className={GROUP_LABEL}>Weight</label>
-          <select
+          <HoverSelect
             id="word-weight-select"
             className={SELECT}
             value={style.fontWeight || ''}
-            onChange={(e) => set({ fontWeight: e.target.value || null })}
-          >
-            <option value="">Same as caption</option>
-            {WEIGHT_OPTIONS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
-          </select>
+            options={[{ value: '', label: 'Same as caption' }, ...WEIGHT_OPTIONS]}
+            onChange={(v) => set({ fontWeight: v || null })}
+            onPreview={(v) => previewWordStyle(wordIndex, { fontWeight: v || null })}
+          />
         </div>
 
         <div className="flex flex-col gap-1.5">
           <label htmlFor="word-case-select" className={GROUP_LABEL}>Case</label>
-          <select
+          <HoverSelect
             id="word-case-select"
             className={SELECT}
             value={style.textCase || ''}
-            onChange={(e) => set({ textCase: e.target.value || null })}
-          >
-            <option value="">Same as caption</option>
-            <option value="uppercase">UPPERCASE</option>
-            <option value="lowercase">lowercase</option>
-            <option value="capitalize">Capitalized</option>
-          </select>
+            options={[{ value: '', label: 'Same as caption' }, ...[{ value: 'uppercase', label: 'UPPERCASE' }, { value: 'lowercase', label: 'lowercase' }, { value: 'capitalize', label: 'Capitalized' }]]}
+            onChange={(v) => set({ textCase: v || null })}
+            onPreview={(v) => previewWordStyle(wordIndex, { textCase: v || null })}
+          />
         </div>
 
         {/* Italic/underline are plain on/off for this word — there is no
