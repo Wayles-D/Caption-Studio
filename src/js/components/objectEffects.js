@@ -20,7 +20,7 @@
 import { appState, updateState, registerStyleParamsExtra } from '../state.js';
 import {
   createObjectEffect, normalizeObjectEffect, OBJECT_EFFECT_TYPES, OBJECT_EFFECT_LABELS, MIN_EFFECT_DURATION,
-  resolveObjectEffects, drawObjectEffects, trackedRegionAt
+  resolveObjectEffects, drawObjectEffects, trackedRegionAt, effectUnit, MASK_EFFECT_TYPES
 } from '../../../shared/objects/effects.js';
 import { isTrackValidFor } from '../../../shared/objects/tracking.js';
 import { getCacheKey } from './objectDetection.js';
@@ -28,6 +28,19 @@ import { getSelectedTrack, getSelectedTrackKey } from './objectTracking.js';
 import { currentPlacement } from './objectOverlay.js';
 import { getPlayheadTime } from './textElements.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
+import * as subject from '../../../shared/objects/subject.js';
+import { getMaskAt, segmentationPayloadFor, awaitSegmentations } from './objectSegmentation.js';
+import { getImagePicture } from './imageLayers.js';
+
+/**
+ * The segmentation mask an effect's object has at `time` — what subject
+ * isolation needs and the box-shaped effects don't. Null (nothing drawn)
+ * where the object has no mask: see shared/objects/subject.js.
+ */
+function maskForEffect(effect, time) {
+  const track = getEffectTrack(effect);
+  return track ? getMaskAt(effect.trackKey, track, time) : null;
+}
 
 function videoDuration() {
   const d = document.getElementById('preview-video')?.duration;
@@ -175,7 +188,31 @@ export function objectEffectsPayload() {
   if (!effects.length) return {};
   const objectEffectTracks = {};
   effects.forEach((e) => { objectEffectTracks[e.trackKey] = appState.objectTracks[e.trackKey]; });
-  return { objectEffects: effects, objectEffectTracks };
+  // SUBJECT ISOLATION also needs the object's pixels: the segmentations of
+  // the tracks whose effects replace a background, and only those. Every
+  // other project's payload is exactly what it was.
+  const maskTracks = [...new Set(effects.filter((e) => MASK_EFFECT_TYPES.includes(e.type)).map((e) => e.trackKey))];
+  const objectSegmentations = maskTracks.length ? segmentationPayloadFor(maskTracks) : {};
+  return {
+    objectEffects: effects,
+    objectEffectTracks,
+    ...(Object.keys(objectSegmentations).length ? { objectSegmentations } : {})
+  };
+}
+
+/**
+ * The tracks whose effects need masks — what an export must have loaded
+ * before it reads the payload (objectSegmentation.js's awaitSegmentations).
+ */
+export function maskTrackKeys() {
+  return [...new Set(getObjectEffects()
+    .filter((e) => e.enabled !== false && isEffectLinked(e) && MASK_EFFECT_TYPES.includes(e.type))
+    .map((e) => e.trackKey))];
+}
+
+/** Loads whatever the next export will need, so it never goes out without its masks. */
+export function prepareObjectEffectsForExport() {
+  return awaitSegmentations(maskTrackKeys());
 }
 registerStyleParamsExtra(objectEffectsPayload);
 
@@ -239,6 +276,56 @@ function makePreviewBlur(video, placement, canvasWidth, canvasHeight) {
   };
 }
 
+let subjectScratch = null;
+
+/**
+ * SUBJECT ISOLATION in the preview (shared/objects/subject.js): the
+ * background over the video's rectangle, then the video's own pixels back on
+ * top through the mask. The same two draws the export makes, in the same
+ * order — here straight onto the effects canvas, which sits directly on the
+ * video.
+ *
+ * The subject is the VIDEO, placed exactly as the composition places it, cut
+ * out with the mask: drawn on a scratch canvas and cut with
+ * 'destination-in', because a canvas has no "draw this image through that
+ * alpha" in one call.
+ */
+function drawSubjects(ctx, subjects, { video, placement, canvasWidth, canvasHeight, canvasBackground, cornerRadiusPct }) {
+  if (!subjects.length || !(video?.videoWidth > 0) || video.readyState < 2) return;
+  const make = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  subjects.forEach(({ effect, state, mask, alpha }) => {
+    const image = effect.appearance.mode === 'image' && effect.appearance.imageAssetId
+      ? getImagePicture(effect.appearance.imageAssetId)
+      : null;
+    // An image that hasn't loaded yet: nothing is drawn rather than a wrong
+    // background flashing up — the next frame has it.
+    if (effect.appearance.mode === 'image' && !image) return;
+    if (!subjectScratch) subjectScratch = document.createElement('canvas');
+    if (subjectScratch.width !== canvasWidth) subjectScratch.width = canvasWidth;
+    if (subjectScratch.height !== canvasHeight) subjectScratch.height = canvasHeight;
+    const sc = subjectScratch.getContext('2d');
+    sc.setTransform(1, 0, 0, 1, 0, 0);
+    sc.globalCompositeOperation = 'source-over';
+    sc.clearRect(0, 0, canvasWidth, canvasHeight);
+    // The video where the composition puts it...
+    const t = subject.videoTransformFor(placement, canvasWidth, canvasHeight);
+    sc.setTransform(...t);
+    sc.drawImage(video, 0, 0, 1, 1);
+    sc.setTransform(1, 0, 0, 1, 0, 0);
+    // ...kept only where the mask is.
+    sc.globalCompositeOperation = 'destination-in';
+    subject.drawMaskAlpha(sc, mask, alpha, placement, canvasWidth, canvasHeight, make);
+    sc.globalCompositeOperation = 'source-over';
+
+    subject.drawSubjectBackground(ctx, {
+      appearance: effect.appearance, presence: state.presence, placement, canvasWidth, canvasHeight, image, canvasBackground, cornerRadiusPct
+    });
+    ctx.globalAlpha = Math.max(0, Math.min(1, state.presence));
+    ctx.drawImage(subjectScratch, 0, 0);
+    ctx.globalAlpha = 1;
+  });
+}
+
 let lastDrawn = false;
 
 /**
@@ -273,6 +360,19 @@ export function syncObjectEffectsCanvas(time) {
     lastDrawn = resolved.length > 0;
     if (!resolved.length) return;
     const placement = currentPlacement(time);
+    // Subject isolation FIRST: it replaces the video's own pixels, and every
+    // other effect belongs on top of the result (the same order the export
+    // composites in).
+    const subjects = subject.resolveSubjects(resolved, maskForEffect, time, placement, W, H, effectUnit(W, H));
+    drawSubjects(ctx, subjects, {
+      video: document.getElementById('preview-video'),
+      placement,
+      canvasWidth: W,
+      canvasHeight: H,
+      canvasBackground: appState.composition?.background?.color || '#000000',
+      // The video's own rounded corners: the new background stops where they do.
+      cornerRadiusPct: appState.videoStyle?.cornerRadius || 0
+    });
     drawObjectEffects(ctx, resolved, {
       canvasWidth: W,
       canvasHeight: H,

@@ -47,9 +47,15 @@
  */
 import { getTrackAtTime } from './tracking.js';
 import { videoBoxToComposition } from './coordinates.js';
+import { BACKGROUND_MODES } from './subject.js';
 
-export const OBJECT_EFFECT_TYPES = ['outline', 'glow', 'spotlight', 'blur'];
-export const OBJECT_EFFECT_LABELS = { outline: 'Outline', glow: 'Glow', spotlight: 'Spotlight', blur: 'Blur' };
+export const OBJECT_EFFECT_TYPES = ['outline', 'glow', 'spotlight', 'blur', 'background'];
+export const OBJECT_EFFECT_LABELS = { outline: 'Outline', glow: 'Glow', spotlight: 'Spotlight', blur: 'Blur', background: 'Background' };
+/**
+ * Types that need the object's exact PIXELS, not just its box — they do
+ * nothing without a segmentation of their track (shared/objects/subject.js).
+ */
+export const MASK_EFFECT_TYPES = ['background'];
 export const MIN_EFFECT_DURATION = 0.1;
 
 export const EFFECT_POLICY = {
@@ -63,9 +69,9 @@ export const EFFECT_POLICY = {
    * barely softens. A blur is privacy: when unsure is exactly when it must
    * not let go.
    */
-  uncertainPresence: { outline: 0.55, glow: 0.55, spotlight: 0.85, blur: 1 },
+  uncertainPresence: { outline: 0.55, glow: 0.55, spotlight: 0.85, blur: 1, background: 1 },
   /** Whether the held last sighting fades out (privacy blur holds at full, then stops). */
-  holdFades: { outline: true, glow: true, spotlight: true, blur: false },
+  holdFades: { outline: true, glow: true, spotlight: true, blur: false, background: false },
   /** Below this a tracked sample counts as low confidence. */
   lowConfidence: 0.5,
   lowConfidencePresence: 0.75
@@ -81,13 +87,21 @@ export const EFFECT_DEFAULTS = {
   outline: { color: '#10E9A0', thickness: 6, opacity: 1, padding: 0.06, cornerRadius: 0.12 },
   glow: { color: '#10E9A0', intensity: 0.7, radius: 28, opacity: 1, padding: 0.04, cornerRadius: 0.2 },
   spotlight: { color: '#000000', strength: 0.6, feather: 40, padding: 0.12, cornerRadius: 0.35 },
-  blur: { strength: 0.5, padding: 0.06, cornerRadius: 0.2 }
+  blur: { strength: 0.5, padding: 0.06, cornerRadius: 0.2 },
+  // Subject isolation (shared/objects/subject.js): what goes BEHIND the
+  // object once its own pixels are kept. No padding or corner radius — its
+  // region is the mask, not a rectangle.
+  background: { mode: 'transparent', color: '#000000', opacity: 1, imageAssetId: '', expand: 2, feather: 2 }
 };
 
 const RANGES = {
   thickness: [1, 40], opacity: [0, 1], padding: [0, 1], cornerRadius: [0, 0.5],
-  intensity: [0, 1], radius: [2, 120], strength: [0, 1], feather: [0, 200]
+  intensity: [0, 1], radius: [2, 120], strength: [0, 1], feather: [0, 200],
+  expand: [0, 40]
 };
+
+/** Appearance fields that are not numbers and not colours. */
+const CHOICES = { mode: BACKGROUND_MODES };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const finite = (v, d) => (Number.isFinite(+v) && v !== null && v !== '' ? +v : d);
@@ -110,6 +124,9 @@ export function normalizeObjectEffect(raw) {
   const appearance = {};
   Object.entries(defaults).forEach(([k, d]) => {
     if (k === 'color') appearance[k] = isColor(given[k]) ? given[k] : d;
+    else if (CHOICES[k]) appearance[k] = CHOICES[k].includes(given[k]) ? given[k] : d;
+    // An asset id is an opaque string (an image the project already holds).
+    else if (k === 'imageAssetId') appearance[k] = typeof given[k] === 'string' ? given[k].slice(0, 200) : d;
     else appearance[k] = clamp(finite(given[k], d), ...(RANGES[k] || [-Infinity, Infinity]));
   });
   return {

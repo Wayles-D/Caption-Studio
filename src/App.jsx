@@ -48,6 +48,7 @@ import * as rhythmApi from './js/components/rhythm.js';
 import * as objectsApi from './js/components/objectDetection.js';
 import * as trackingApi from './js/components/objectTracking.js';
 import * as objectEffectsApi from './js/components/objectEffects.js';
+import { prepareObjectEffectsForExport } from './js/components/objectEffects.js';
 import * as segmentationApi from './js/components/objectSegmentation.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
@@ -771,6 +772,9 @@ export function App() {
       // A reopened (or long-edited) project: the server may have purged its
       // copy of the video or of imported audio — send them back first.
       await ensureServerHasProjectFiles(API_BASE_URL);
+      // Subject isolation sends the object's MASKS with the style params —
+      // they live in IndexedDB and may not be in memory yet.
+      await prepareObjectEffectsForExport();
       const result = await fetchJson(`${API_BASE_URL}/api/upload/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -104,18 +104,29 @@ function readNaturalSize(file) {
  * and to re-send if the server purges it), and adds a layer sized to sit
  * comfortably inside the frame without being stretched. Selects it.
  */
-export async function importImageFile(file, { start = getPlayheadTime() } = {}) {
+/**
+ * A picture brought into the project WITHOUT placing it: uploaded, saved on
+ * this device, and decoded for drawing. An image LAYER is one use of it
+ * (importImageFile below); a replaced BACKGROUND (shared/objects/subject.js)
+ * is another — it wants the asset, not a layer.
+ * @returns {{assetId:string, width:number, height:number, name:string}}
+ */
+export async function importImageAsset(file) {
   if (!file) throw new Error('No file selected.');
   const { width, height } = await readNaturalSize(file);
-
   const form = new FormData();
   form.append('image', file);
   const res = await fetch(`${API_BASE_URL}/api/upload/image`, { method: 'POST', body: form });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok || !payload?.assetId) throw new Error(payload?.message || `Image upload failed (HTTP ${res.status}).`);
-
   rememberImageFile(payload.assetId, file);
   loadPicture(payload.assetId, file);
+  return { assetId: payload.assetId, width, height, name: file.name };
+}
+
+export async function importImageFile(file, { start = getPlayheadTime() } = {}) {
+  const { assetId, width, height } = await importImageAsset(file);
+  const payload = { assetId };
 
   // The CANVAS's shape (shared/composition.js), which is no longer always the video's.
   const comp = getComposition();

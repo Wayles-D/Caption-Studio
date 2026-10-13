@@ -21,6 +21,19 @@ import { normalizeImageLayerList } from '../../shared/imageLayer.js';
 import { normalizeShapeLayerList } from '../../shared/shapeLayer.js';
 import { loadImageSources } from './imageAssets.js';
 import { prepareVideoComposition, compositionNeedsRender } from './videoDecoration.js';
+
+/**
+ * Every picture this render needs: the image LAYERS, and any image used as a
+ * replaced BACKGROUND (shared/objects/subject.js). Both are the user's own
+ * files, and an export missing the background image would quietly lose it.
+ */
+function imageAssetsNeeded(params) {
+  const layers = normalizeImageLayerList(params.imageLayers);
+  const backgrounds = normalizeObjectEffectList(params.objectEffects)
+    .filter((e) => e.type === 'background' && e.enabled !== false && e.appearance?.mode === 'image' && e.appearance.imageAssetId)
+    .map((e) => ({ assetId: e.appearance.imageAssetId }));
+  return [...layers, ...backgrounds];
+}
 import { normalizeObjectEffectList } from '../../shared/objects/effects.js';
 
 /** Whether a project has anything only this pipeline can draw: text elements, image layers, shapes or object effects. */
@@ -81,7 +94,7 @@ export async function compositeTextElementsOnto(videoPath, styles, outputPath, f
   if (!hasVisualObjects(params)) return false;
   try {
     const { width, height, duration, frameRate } = await getVideoInfo(videoPath);
-    const imageSources = await loadImageSources(normalizeImageLayerList(params.imageLayers));
+    const imageSources = await loadImageSources(imageAssetsNeeded(params));
     const { captions, runs, objectEffects } = buildFullTimelineSegments([], params, width, height, duration, framesDir, { frameRate, imageSources });
     await compositeGraphicsCaptionTrack(videoPath, captions, outputPath, {
       frameRate,
@@ -169,7 +182,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // deliberately — see buildTextElementSegments. `text` is empty (and no
     // second layer is added) for a project with no text elements.
     // Every picture the image layers use, decoded once for the whole render.
-    const imageSources = await loadImageSources(normalizeImageLayerList(params.imageLayers));
+    const imageSources = await loadImageSources(imageAssetsNeeded(params));
     const { captions: segments, keywordCaptions, runs: layerRuns, manualCaptions: manualCaptionSegments, text: textSegments, objectEffects } =
       buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, {
         frameRate,

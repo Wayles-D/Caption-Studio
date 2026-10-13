@@ -697,6 +697,9 @@ export function createMaskReader(record, rleParts) {
   };
   const reader = {
     record,
+    // The run-length bytes themselves, kept so a consumer that must SEND the
+    // masks on (the export payload) hands over exactly what was read here.
+    parts: rleParts,
     mask: (i) => keep(cache, i, () => decodeRLE(rleParts[i], n)),
     sdf: (i) => keep(sdfs, i, () => signedDistance(reader.mask(i), record.grid))
   };

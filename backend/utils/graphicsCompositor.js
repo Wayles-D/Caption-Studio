@@ -502,13 +502,26 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       layer.concatListPath = writeConcatManifest(layer.timeline.entries);
       inputArgs.push('-f', 'concat', '-safe', '0', '-i', layer.concatListPath);
     });
+    // SUBJECT ISOLATION (shared/objects/subject.js): two streams read the
+    // same way but used by the stages below rather than overlaid — what goes
+    // BEHIND the object, and the object's own alpha matte. Both blank
+    // wherever there is no mask, which leaves the video untouched there.
+    const subjectStreams = {};
+    ['background', 'subjectMask'].forEach((name) => {
+      const segs = objectEffects?.[name];
+      const timeline = segs?.length ? buildLayerTimeline(segs) : null;
+      if (!timeline) return;
+      const inputIndex = 2 + extraLayers.length + Object.keys(subjectStreams).length;
+      inputArgs.push('-f', 'concat', '-safe', '0', '-i', writeConcatManifest(timeline.entries));
+      subjectStreams[name] = { timeline, inputIndex };
+    });
     // ...and the effects' blur MASKS: one stream per blur strength, read the
     // same way, used by the blur stages below rather than overlaid.
     const blurMasks = [];
     (objectEffects?.masks || []).forEach((mask) => {
       const timeline = mask.segments?.length ? buildLayerTimeline(mask.segments) : null;
       if (!timeline || !(mask.sigma > 0)) return;
-      const inputIndex = 2 + extraLayers.length + blurMasks.length;
+      const inputIndex = 2 + extraLayers.length + Object.keys(subjectStreams).length + blurMasks.length;
       const listPath = writeConcatManifest(timeline.entries);
       inputArgs.push('-f', 'concat', '-safe', '0', '-i', listPath);
       blurMasks.push({ timeline, sigma: mask.sigma, inputIndex, label: `fxmask${blurMasks.length}` });
@@ -520,7 +533,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // single frame on their own. Absent for an undecorated video.
     const composition = videoTransformOpts.composition || null;
     const decorationInputs = {};
-    let nextInputIndex = 2 + extraLayers.length + blurMasks.length;
+    let nextInputIndex = 2 + extraLayers.length + Object.keys(subjectStreams).length + blurMasks.length;
     const decorationFiles = composition?.files || {};
     if (decorationFiles.mask) {
       inputArgs.push('-loop', '1', '-t', String(Math.ceil((videoTransformOpts.duration || 1) + 1)), '-i', decorationFiles.mask);
@@ -581,6 +594,32 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // chain it always was (captions, then each extra layer).
     const compositeStages = [];
     let currentBase = baseVideoLabel;
+    // SUBJECT ISOLATION, before anything else goes on: the background over
+    // the video's own rectangle, then the video's pixels back on top through
+    // the object's matte — the two draws the preview makes, in that order
+    // (src/js/components/objectEffects.js's drawSubjects).
+    //
+    // Both streams are blank wherever the segmentation has no mask, and a
+    // blank background overlaid changes nothing while a blank matte puts
+    // nothing back: the video passes through those stretches untouched,
+    // which is exactly what "no mask, no claim" means.
+    if (subjectStreams.background && subjectStreams.subjectMask) {
+      const p = (name) => `[subj_${name}]`;
+      const track = (stream, label, extra = '') => (
+        `[${stream.inputIndex}:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${stream.timeline.total.toFixed(3)},setpts=PTS-STARTPTS${extra}${label}`
+      );
+      compositeStages.push(
+        track(subjectStreams.background, p('bg')),
+        track(subjectStreams.subjectMask, p('matte'), ',alphaextract'),
+        `${currentBase}split=2${p('under')}${p('src')}`,
+        // The subject: the placed video kept only where the matte is.
+        `${p('src')}${p('matte')}alphamerge${p('cut')}`,
+        // The background over the video, then the subject over that.
+        `${p('under')}${p('bg')}overlay=x=0:y=0:format=rgb:eof_action=pass${p('filled')}`,
+        `${p('filled')}${p('cut')}overlay=x=0:y=0:format=rgb:eof_action=pass${p('out')}`
+      );
+      currentBase = p('out');
+    }
     // BLUR effects, on the placed video itself, before any layer goes on: a
     // Gaussian-blurred copy (gblur's sigma = the preview's canvas
     // blur(sigma px)) laid over the video through the effect's mask, so only

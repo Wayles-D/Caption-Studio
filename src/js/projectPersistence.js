@@ -225,7 +225,14 @@ export async function ensureServerHasProjectFiles(apiBase) {
   const isRealUpload = !!appState.baseName && !appState.uploadedFile?.demo;
   const baseName = isRealUpload ? appState.baseName : null;
   const assetIds = isRealUpload ? (appState.audioTracks || []).map((t) => t?.assetId).filter(Boolean) : [];
-  const imageAssetIds = [...new Set((appState.imageLayers || []).map((img) => img?.assetId).filter(Boolean))];
+  // Image layers AND an image used as a replaced BACKGROUND (V2.1 subject
+  // isolation): both are the user's own pictures, purged alike, and an
+  // export without the background image would quietly lose it.
+  const backgroundAssetIds = (appState.objectEffects || [])
+    .filter((e) => e?.type === 'background' && e.enabled !== false && e.appearance?.mode === 'image')
+    .map((e) => e.appearance.imageAssetId)
+    .filter(Boolean);
+  const imageAssetIds = [...new Set([...(appState.imageLayers || []).map((img) => img?.assetId), ...backgroundAssetIds].filter(Boolean))];
   if (!baseName && !imageAssetIds.length) return;
   let status;
   try {

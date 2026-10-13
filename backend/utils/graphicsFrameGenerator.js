@@ -43,8 +43,12 @@ import { normalizeImageLayerList, getImageLayerBoundaryTimes, imageLayerMotionSp
 import { normalizeShapeLayerList, getShapeLayerBoundaryTimes, shapeLayerMotionSpans, drawShapeLayer } from '../../shared/shapeLayer.js';
 import { resolveLayerStack, layerRuns } from '../../shared/visualLayers.js';
 import {
-  normalizeObjectEffectList, resolveObjectEffects, drawObjectEffects, drawObjectEffectMasks, blurSigmas, objectEffectBoundaryTimes
+  normalizeObjectEffectList, resolveObjectEffects, drawObjectEffects, drawObjectEffectMasks, blurSigmas, objectEffectBoundaryTimes, effectUnit, MASK_EFFECT_TYPES
 } from '../../shared/objects/effects.js';
+import { resolveSubjects, drawSubjectBackground, drawMaskAlpha, hasBackgroundEffect } from '../../shared/objects/subject.js';
+import { createMaskReader, getMaskAtTime, normalizeSegmentation } from '../../shared/objects/segmentation.js';
+import { getTrackAtTime } from '../../shared/objects/tracking.js';
+import { normalizeVideoStyle } from '../../shared/composition.js';
 import { normalizeTrack } from '../../shared/objects/tracking.js';
 import { resolveVideoTransformAtTime } from '../../shared/videoTransform.js';
 
@@ -671,8 +675,31 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
  * @param {{boxWidth:number, boxHeight:number}} videoBox the video's resting box on the canvas (videoDecoration.js)
  * @returns {{overlay: object[], masks: {sigma:number, segments:object[]}[]}} empty lists for a project without effects
  */
-function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox) {
-  const none = { overlay: [], masks: [] };
+/**
+ * The SEGMENTATION masks that came with the effects (params.
+ * objectSegmentations: only the tracks whose effects need pixels), as mask
+ * readers — the very bytes the editor's preview reads, so the export cannot
+ * draw a different mask from the one the user saw.
+ * @returns {Map<string, {reader:object}>} trackKey → reader
+ */
+function buildMaskReaders(params) {
+  let raw = params.objectSegmentations;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { raw = null; }
+  }
+  const out = new Map();
+  Object.entries(raw && typeof raw === 'object' ? raw : {}).forEach(([trackKey, entry]) => {
+    const record = normalizeSegmentation(entry?.record);
+    if (!record || !entry?.masks) return;
+    const parts = String(entry.masks).split(' ').filter(Boolean).map((b64) => new Uint8Array(Buffer.from(b64, 'base64')));
+    if (parts.length !== record.keyframes.length) return;
+    out.set(trackKey, createMaskReader(record, parts));
+  });
+  return out;
+}
+
+function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox, imageSources) {
+  const none = { overlay: [], masks: [], background: [], subjectMask: [] };
   const effects = normalizeObjectEffectList(params.objectEffects).filter((e) => e.enabled !== false && e.start < videoDuration);
   if (!effects.length) return none;
   let rawTracks = params.objectEffectTracks;
@@ -710,6 +737,23 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
   const overlay = [];
   const masks = sigmas.map((sigma) => ({ sigma, segments: [] }));
   const offscreen = (w, h) => createCanvas(w, h);
+  // SUBJECT ISOLATION (shared/objects/subject.js): two more streams — what
+  // goes behind the object, and the object's own alpha matte. Both empty
+  // unless a 'background' effect is on, so nothing else changes.
+  const readers = hasBackgroundEffect(usable) ? buildMaskReaders(params) : new Map();
+  const maskAt = (effect, time) => {
+    const reader = readers.get(effect.trackKey);
+    const track = tracks.get(effect.trackKey);
+    return reader && track ? getMaskAtTime(reader, (t) => getTrackAtTime(track, t), time) : null;
+  };
+  const canvasBackground = params.composition?.background?.color || null;
+  // The video's own rounded corners (it may arrive as JSON, as every param may).
+  let rawStyle = params.videoStyle;
+  if (typeof rawStyle === 'string') { try { rawStyle = JSON.parse(rawStyle); } catch { rawStyle = null; } }
+  const videoCornerRadius = normalizeVideoStyle(rawStyle).cornerRadius;
+  const unit = effectUnit(canvasWidth, canvasHeight);
+  const background = [];
+  const subjectMask = [];
 
   for (let i = 0; i < boundaries.length - 1; i++) {
     const start = boundaries[i];
@@ -726,6 +770,43 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
     } else {
       overlay.push({ start, end, file: blankFile });
     }
+    // The background, then its matte — one pair of frames per slice.
+    const subjects = readers.size
+      ? resolveSubjects(resolved, maskAt, start, placementAt(start), canvasWidth, canvasHeight, unit)
+      : [];
+    if (subjects.length) {
+      const place = placementAt(start);
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      let drewBackground = false;
+      subjects.forEach(({ effect, state }) => {
+        const image = effect.appearance.mode === 'image' && effect.appearance.imageAssetId
+          ? imageSources?.get(effect.appearance.imageAssetId) || null
+          : null;
+        if (effect.appearance.mode === 'image' && !image) return;
+        drewBackground = drawSubjectBackground(ctx, {
+          appearance: effect.appearance, presence: state.presence, placement: place, canvasWidth, canvasHeight, image, canvasBackground,
+          cornerRadiusPct: videoCornerRadius
+        }) || drewBackground;
+      });
+      const bgFile = path.join(outDir, `ofxbg-${Math.round(start * 1000)}.png`);
+      if (drewBackground) {
+        fs.writeFileSync(bgFile, canvas.toBuffer('image/png'));
+        background.push({ start, end, file: bgFile });
+      } else {
+        background.push({ start, end, file: blankFile });
+      }
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      subjects.forEach(({ mask, alpha }) => drawMaskAlpha(ctx, mask, alpha, place, canvasWidth, canvasHeight, offscreen));
+      const mFile = path.join(outDir, `ofxsubj-${Math.round(start * 1000)}.png`);
+      fs.writeFileSync(mFile, canvas.toBuffer('image/png'));
+      subjectMask.push({ start, end, file: mFile });
+    } else if (readers.size) {
+      // No mask here: the video is left exactly as it is (an opaque
+      // background with no subject to put back would cut the subject out of
+      // its own film).
+      background.push({ start, end, file: blankFile });
+      subjectMask.push({ start, end, file: blankFile });
+    }
     masks.forEach((m, mi) => {
       if (!resolved.some((r) => r.effect.type === 'blur')) { m.segments.push({ start, end, file: blankFile }); return; }
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -736,9 +817,12 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
     });
   }
   // A stream that never draws anything is no stream at all.
+  const used = (list) => (list.some((x) => x.file !== blankFile) ? list : []);
   return {
-    overlay: overlay.some((s) => s.file !== blankFile) ? overlay : [],
-    masks: masks.filter((m) => m.segments.some((s) => s.file !== blankFile))
+    overlay: used(overlay),
+    masks: masks.filter((m) => m.segments.some((x) => x.file !== blankFile)),
+    background: used(background),
+    subjectMask: used(subjectMask)
   };
 }
 
@@ -852,9 +936,9 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
 
   // Object-aware effects: their own streams, under everything (see
   // buildObjectEffectSegments). Empty for a project without them.
-  let objectEffects = { overlay: [], masks: [] };
+  let objectEffects = { overlay: [], masks: [], background: [], subjectMask: [] };
   try {
-    objectEffects = buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox);
+    objectEffects = buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox, imageSources);
   } catch (err) {
     // An effect that cannot be drawn costs the effects, never the export.
     console.error(`[GraphicsExport] Object effects skipped: ${err.message}`, err.stack);
