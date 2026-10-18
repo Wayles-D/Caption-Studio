@@ -196,7 +196,40 @@ export const FONT_REGISTRY = {
   drukWide: {
     displayName: 'Druk Wide',
     category: FONT_CATEGORY.DISPLAY,
+    licence: 'trial cut — licence before shipping',
     faces: { regular: { file: 'DrukWide-Bold-Trial.otf', familyName: 'Druk Bold Trial' } }
+  },
+  // All three Avant Garde cuts register under ONE legacy family name,
+  // "AvantGarde Bk BT", and are told apart only by their subfamily (Book /
+  // Demi / Demi Oblique) — verified from each file's own name table, which is
+  // exactly the case the rule at the top of this file warns about. So the
+  // faces share a familyName and differ by the bold/italic flags, which is
+  // what both CSS and ASS select on.
+  avantGarde: {
+    displayName: 'Avant Garde',
+    category: FONT_CATEGORY.SANS,
+    licence: 'commercial face — licence before shipping',
+    faces: {
+      regular: { file: 'AvantGardeBkBT-Book.ttf', familyName: 'AvantGarde Bk BT' },
+      bold: { file: 'AvantGardeBkBT-Demi.ttf', familyName: 'AvantGarde Bk BT', bold: true },
+      italic: { file: 'AvantGardeBkBT-DemiOblique.ttf', familyName: 'AvantGarde Bk BT', bold: true, italic: true }
+    }
+  },
+  // LICENCE: a DEMO cut. Fine to design with; check the full licence before
+  // shipping work that uses it commercially.
+  ketchupManis: {
+    displayName: 'Ketchup Manis',
+    category: FONT_CATEGORY.DISPLAY,
+    licence: 'demo — personal use; no digits or punctuation',
+    faces: { regular: { file: 'KetchupManisDemo-Regular.ttf', familyName: 'Ketchup Manis Demo' } }
+  },
+  // LICENCE: the downloaded file is marked PERSONAL USE ONLY. Same caveat,
+  // more strongly — a commercial licence is needed before shipping with it.
+  tempting: {
+    displayName: 'Tempting',
+    category: FONT_CATEGORY.SCRIPT,
+    licence: 'personal use only',
+    faces: { regular: { file: 'Tempting-Regular.ttf', familyName: 'Tempting' } }
   }
 };
 
@@ -287,5 +320,13 @@ export function resolveCssFontFamily(requestedName, face = 'regular') {
 export function listFontOptions(category) {
   return Object.entries(FONT_REGISTRY)
     .filter(([, entry]) => !category || entry.category === category)
-    .map(([key, entry]) => ({ value: entry.displayName, label: entry.displayName, key }));
+    .map(([key, entry]) => ({
+      value: entry.displayName,
+      // A restricted font says so where it is CHOSEN, not in a file nobody
+      // reads: a demo or personal-use face is fine to design with and a
+      // problem to ship, and that is worth knowing at the moment of picking.
+      label: entry.licence ? `${entry.displayName} · ${entry.licence}` : entry.displayName,
+      licence: entry.licence || null,
+      key
+    }));
 }

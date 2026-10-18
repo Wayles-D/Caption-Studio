@@ -35,6 +35,31 @@ import { applyEasing, EASING_TYPES } from './motion/easing.js';
 
 export const KEYFRAME_PROPERTIES = ['positionX', 'positionY', 'scale', 'rotation', 'opacity'];
 
+/**
+ * STYLE properties that can be keyframed but NOT interpolated.
+ *
+ * There is no half-way between Montserrat and Anton, between bold and
+ * regular, or between UPPERCASE and lowercase. So these HOLD: the value set
+ * at a keyframe stays until the next one, and then changes outright. That is
+ * what makes "this word is beautiful until 2.5s, then it is ugly" possible,
+ * and it is the only sensible reading of a keyframed font.
+ *
+ * Colour is here too, deliberately. It COULD be blended, and one day might
+ * be; stepping it now means a colour keyframe does exactly what a font
+ * keyframe does, which is easier to predict than two rules.
+ */
+export const STYLE_KEYFRAME_PROPERTIES = ['fontFamily', 'fontWeight', 'textCase', 'textColor'];
+
+/**
+ * Whether a property changes outright at its keyframes rather than easing
+ * between them. The five TRANSFORM properties are numbers and interpolate;
+ * anything else keyframed — a font, a weight, a casing, a colour — is a
+ * value with no in-between, so it holds.
+ */
+export function isSteppedProperty(property) {
+  return !KEYFRAME_PROPERTIES.includes(property);
+}
+
 export const DEFAULT_KEYFRAME_EASING = 'ease-out';
 
 // Two keyframes closer together than this are treated as "the same instant"
@@ -245,6 +270,9 @@ export function evaluatePropertyAtTime(keyframeList, property, time) {
     if (time >= a.t && time <= b.t) {
       const span = b.t - a.t;
       const progress = span > 0 ? (time - a.t) / span : 1;
+      // A stepped property has no in-between: it is whatever the last
+      // keyframe said until the next one arrives.
+      if (isSteppedProperty(property)) return a.v;
       const eased = applyEasing(progress, b.e || DEFAULT_KEYFRAME_EASING);
       if (property === 'rotation') return a.v + shortestAngleDelta(a.v, b.v) * eased;
       return a.v + (b.v - a.v) * eased;

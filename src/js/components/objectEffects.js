@@ -20,7 +20,7 @@
 import { appState, updateState, registerStyleParamsExtra } from '../state.js';
 import {
   createObjectEffect, normalizeObjectEffect, OBJECT_EFFECT_TYPES, OBJECT_EFFECT_LABELS, MIN_EFFECT_DURATION,
-  resolveObjectEffects, drawObjectEffects, trackedRegionAt, effectUnit, MASK_EFFECT_TYPES
+  resolveObjectEffects, drawObjectEffects, trackedRegionAt, effectUnit, MASK_EFFECT_TYPES, effectMaskTrackKeys
 } from '../../../shared/objects/effects.js';
 import { isTrackValidFor } from '../../../shared/objects/tracking.js';
 import { getCacheKey } from './objectDetection.js';
@@ -191,7 +191,7 @@ export function objectEffectsPayload() {
   // SUBJECT ISOLATION also needs the object's pixels: the segmentations of
   // the tracks whose effects replace a background, and only those. Every
   // other project's payload is exactly what it was.
-  const maskTracks = [...new Set(effects.filter((e) => MASK_EFFECT_TYPES.includes(e.type)).map((e) => e.trackKey))];
+  const maskTracks = effectMaskTrackKeys(effects);
   const objectSegmentations = maskTracks.length ? segmentationPayloadFor(maskTracks) : {};
   return {
     objectEffects: effects,
@@ -205,9 +205,7 @@ export function objectEffectsPayload() {
  * before it reads the payload (objectSegmentation.js's awaitSegmentations).
  */
 export function maskTrackKeys() {
-  return [...new Set(getObjectEffects()
-    .filter((e) => e.enabled !== false && isEffectLinked(e) && MASK_EFFECT_TYPES.includes(e.type))
-    .map((e) => e.trackKey))];
+  return effectMaskTrackKeys(getObjectEffects().filter((e) => e.enabled !== false && isEffectLinked(e)));
 }
 
 /** Loads whatever the next export will need, so it never goes out without its masks. */
@@ -242,7 +240,7 @@ let blurScratch = null;
  * frame of playback is what makes a preview stutter).
  */
 function makePreviewBlur(video, placement, canvasWidth, canvasHeight) {
-  return (ctx, traceClip, sigma, alpha) => {
+  return (ctx, traceClip, sigma, alpha, shapedLayer = null) => {
     if (!(video?.videoWidth > 0) || video.readyState < 2) return;
     const k = canvasWidth / placement.canvasWidth;
     const t = placement.transform;
@@ -268,10 +266,24 @@ function makePreviewBlur(video, placement, canvasWidth, canvasHeight) {
     sc.drawImage(video, -bw / 2, -bh / 2, bw, bh);
     sc.filter = 'none';
     ctx.save();
-    traceClip();
-    ctx.clip();
-    ctx.globalAlpha = alpha;
-    ctx.drawImage(blurScratch, 0, 0, sw, sh, 0, 0, canvasWidth, canvasHeight);
+    if (shapedLayer) {
+      // The object's own shape: the blurred copy kept only where the mask is.
+      const cut = document.createElement('canvas');
+      cut.width = canvasWidth;
+      cut.height = canvasHeight;
+      const cc = cut.getContext('2d');
+      cc.drawImage(blurScratch, 0, 0, sw, sh, 0, 0, canvasWidth, canvasHeight);
+      cc.globalCompositeOperation = 'destination-in';
+      cc.drawImage(shapedLayer, 0, 0);
+      cc.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(cut, 0, 0);
+    } else {
+      traceClip();
+      ctx.clip();
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(blurScratch, 0, 0, sw, sh, 0, 0, canvasWidth, canvasHeight);
+    }
     ctx.restore();
   };
 }
@@ -356,7 +368,7 @@ export function syncObjectEffectsCanvas(time) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
     canvas.classList.add('active');
-    const resolved = resolveObjectEffects(effects, tracks, time, currentPlacement, W, H);
+    const resolved = resolveObjectEffects(effects, tracks, time, currentPlacement, W, H, undefined, maskForEffect);
     lastDrawn = resolved.length > 0;
     if (!resolved.length) return;
     const placement = currentPlacement(time);
@@ -391,7 +403,7 @@ export function debugEffectRegions(time) {
   const canvas = document.getElementById('object-effects-canvas');
   const { effects, tracks } = linkedEffects();
   if (!canvas) return [];
-  return resolveObjectEffects(effects, tracks, time, currentPlacement, canvas.width, canvas.height)
+  return resolveObjectEffects(effects, tracks, time, currentPlacement, canvas.width, canvas.height, undefined, maskForEffect)
     .map(({ effect, state, geometry }) => ({ id: effect.id, type: effect.type, presence: state.presence, state: state.state, geometry }));
 }
 

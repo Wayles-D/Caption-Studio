@@ -27,7 +27,10 @@ import {
   getSelectedWordStyleTarget,
   applyWordStyleFields,
   resetWordStyle,
-  onSelectionChange
+  onSelectionChange,
+  setWordStyleKeyframe,
+  getWordStyleKeyframeTimes,
+  clearWordStyleKeyframes
 } from '../js/components/canvasTransform.js';
 import { listFontOptions } from '../../shared/fontRegistry.js';
 import { ColorPickerField } from './ColorPickerField.jsx';
@@ -82,6 +85,41 @@ const WEIGHT_OPTIONS = [
  * clearer than a revert that depends on how the popover happened to be
  * dismissed.
  */
+/**
+ * KEYFRAMING ONE WORD'S FONT — "from here on, this word looks like that".
+ *
+ * A font cannot be interpolated, so these keyframes HOLD: the font set at
+ * one stays until the next and then changes outright. The first one also
+ * pins the font the word appeared with, so the change happens where the
+ * playhead is rather than reaching back over the whole caption.
+ */
+function WordStyleKeyframeRow({ wordIndex, property, label, value }) {
+  const times = getWordStyleKeyframeTimes(wordIndex, property);
+  const on = times.length > 0;
+  return (
+    <div className="flex items-center gap-2 flex-wrap" id={`word-${property}-kf`}>
+      <button
+        type="button" id={`word-${property}-kf-add`}
+        className={`h-6 px-2 rounded-[3px] border text-[10px] font-bold cursor-pointer ${on ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+        title={`Change this word's ${label} from the playhead onwards`}
+        onClick={() => setWordStyleKeyframe(wordIndex, property, value ?? null)}
+      >◆ Change {label} here</button>
+      {on && (
+        <>
+          <span className="text-[10px] text-[var(--text-muted)]" id={`word-${property}-kf-times`}>
+            {times.map((t) => `${t.toFixed(2)}s`).join(', ')}
+          </span>
+          <button
+            type="button" id={`word-${property}-kf-clear`}
+            className="h-6 px-2 rounded-[3px] border border-[var(--border-color)] text-[10px] text-[var(--text-muted)] cursor-pointer"
+            onClick={() => clearWordStyleKeyframes(wordIndex, property)}
+          >Clear</button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function WordColorField({ wordIndex, field, label, fallback, value, openField, setOpenField }) {
   const pickedRef = useRef(null);
 
@@ -233,6 +271,7 @@ export function WordInspector() {
             onChange={(v) => set({ fontFamily: v || null })}
             onPreview={(v) => previewWordStyle(wordIndex, { fontFamily: v || null })}
           />
+          <WordStyleKeyframeRow wordIndex={wordIndex} property="fontFamily" label="font" value={style.fontFamily} />
         </div>
 
         <div className="flex flex-col gap-1.5">

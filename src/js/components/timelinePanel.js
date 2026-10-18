@@ -39,6 +39,12 @@ import * as captionEvents from './captionEvents.js';
 import * as rhythm from './rhythm.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 import { toggleShortcutsDialog } from './keyboardShortcuts.js';
+import { soundEventDuration, isSoundEventTrimmed } from '../../../shared/audioTimeline.js';
+import { resolveSoundUrl } from '../../../shared/soundRegistry.js';
+
+// Where the sound files are served from — the same base the audio engine uses.
+const SFX_SOUNDS_BASE_URL = import.meta.env.VITE_SOUNDS_BASE_URL || '/sounds';
+import { splitSelectedAtPlayhead, canSplitSelected } from './splitClip.js';
 
 const LANES = [
   { key: 'position', label: 'Position', properties: [
@@ -419,7 +425,7 @@ function buildDom(container, options) {
   redoBtn.type = 'button';
   redoBtn.className = 'timeline-history-btn';
   redoBtn.id = 'timeline-redo-btn';
-  redoBtn.title = 'Redo (Ctrl+Y or Ctrl+Shift+Z)';
+  redoBtn.title = 'Redo (Ctrl+Y)';
   redoBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6" /><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7" /></svg>';
   redoBtn.addEventListener('click', () => redo());
   playbackRow.appendChild(redoBtn);
@@ -434,6 +440,17 @@ function buildDom(container, options) {
   keysBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></svg>';
   keysBtn.addEventListener('click', () => toggleShortcutsDialog());
   playbackRow.appendChild(keysBtn);
+
+  // SPLIT the selected clip where the playhead stands (splitClip.js).
+  const splitBtn = document.createElement('button');
+  splitBtn.type = 'button';
+  splitBtn.className = 'timeline-history-btn';
+  splitBtn.id = 'timeline-split-btn';
+  splitBtn.title = 'Split the selected clip at the playhead (S)';
+  splitBtn.setAttribute('aria-label', 'Split at playhead');
+  splitBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18" stroke-dasharray="3 3" /><path d="M5 7h4v10H5zM15 7h4v10h-4z" /></svg>';
+  splitBtn.addEventListener('click', () => splitSelectedAtPlayhead((getVideo()?.currentTime ?? 0)));
+  playbackRow.appendChild(splitBtn);
 
   header.appendChild(playbackRow);
 
@@ -842,7 +859,7 @@ function buildDom(container, options) {
   container.appendChild(scroll);
 
   return {
-    header, playbackRow, playBtn, undoBtn, redoBtn, videoChip, targetLabel, targetTooltip,
+    header, playbackRow, playBtn, undoBtn, redoBtn, splitBtn, videoChip, targetLabel, targetTooltip,
     addBtn, advancedBtn, timeReadout, ruler, beatLayer, rhythmControls, snapBtn, scroll, playhead, keyframeTrack, filmstripTrack,
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
     captionsTrack: captionsLane.track, interludeTrack: interludeLane.track, interludeRow: interludeLane.row, addInterludeBtn: interludeLane.addBtn,
@@ -1556,7 +1573,9 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
     if (!dragClip || dragClip.id !== clip.id) return;
     if (!dragClip.moved && Math.abs(e.clientX - dragClip.startClientX) < CLIP_DRAG_THRESHOLD_PX) return;
     dragClip.moved = true;
+    el.classList.add('is-dragging');
     applyClipDrag(e.clientX, el, { recordHistory: false });
+    positionDraggedClip(el, dragClip.kind, dragClip.id);
   });
 
   const endDrag = (e) => {
@@ -1585,6 +1604,7 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
       }
       applyClipDrag(e.clientX, el, { recordHistory: true });
     }
+    clearDragDecoration(el);
     dragClip = null;
   };
   el.addEventListener('pointerup', endDrag);
@@ -1635,6 +1655,66 @@ function clipShownTime(kind, clip, start) {
 const SNAP_KINDS = new Set(['text', 'image', 'shape', 'effect']);
 /** How close, on screen, a beat must be to catch an edge. */
 const SNAP_PX = 8;
+
+/**
+ * The clip's span right now, whatever kind it is — what the live drag reads
+ * back after the model has clamped the move.
+ */
+function clipSpan(kind, id) {
+  if (kind === 'sound') {
+    const e = (appState.soundEvents || []).find((x) => x.id === id);
+    if (!e) return null;
+    return { start: e.startTime, end: e.startTime + (soundEventDuration(e) ?? 0.4) };
+  }
+  if (kind === 'audio') {
+    const t = (appState.audioTracks || []).find((x) => x.id === id);
+    return t ? { start: t.start, end: t.start + (t.duration || 0) } : null;
+  }
+  if (kind === 'caption') {
+    const c = (appState.captionEvents || []).find((x) => x.id === id);
+    return c ? { start: c.start, end: c.end } : null;
+  }
+  const list = kind === 'text' ? appState.textElements : kind === 'image' ? appState.imageLayers
+    : kind === 'shape' ? appState.shapeLayers : kind === 'effect' ? appState.objectEffects : null;
+  const item = (list || []).find((x) => x.id === id);
+  return item ? { start: item.start, end: item.end } : null;
+}
+
+/**
+ * THE CLIP FOLLOWS THE POINTER. The lanes do not rebuild during a drag (a
+ * rebuild would destroy the very element being held — see the refresh
+ * guards), which used to mean a clip sat still until the gesture ended and
+ * then jumped to its new place: you could not see what you were doing.
+ *
+ * So the dragged element is moved DIRECTLY instead, from the span the model
+ * has already clamped — the same left/width the lane would give it on the
+ * next rebuild, so nothing shifts when the drag ends. A small readout shows
+ * the time, as the playhead does.
+ */
+function positionDraggedClip(el, kind, id) {
+  const duration = getVideo()?.duration || 0;
+  const span = clipSpan(kind, id);
+  if (!span || duration <= 0) return;
+  const left = timeToPercent(span.start, duration);
+  const width = Math.max(1, timeToPercent(span.end, duration) - left);
+  el.style.left = `${left}%`;
+  el.style.width = `${width}%`;
+  el.dataset.dragTime = span.start.toFixed(2);
+  let badge = el.querySelector('.timeline-clip-dragtime');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'timeline-clip-dragtime';
+    el.appendChild(badge);
+  }
+  badge.textContent = `${span.start.toFixed(2)}s → ${span.end.toFixed(2)}s`;
+}
+
+/** Takes the live drag decoration off a clip once the gesture is over. */
+function clearDragDecoration(el) {
+  el.querySelector('.timeline-clip-dragtime')?.remove();
+  delete el.dataset.dragTime;
+  el.classList.remove('is-dragging');
+}
 
 function clipLength(kind, id) {
   const list = kind === 'text' ? appState.textElements : kind === 'image' ? appState.imageLayers : kind === 'shape' ? appState.shapeLayers
@@ -1704,12 +1784,43 @@ function applyClipDrag(clientX, el, options) {
   // A caption's words stay where they are when its edges move — trimming
   // changes how long it is on screen, not when it was spoken (see
   // shared/captionEvent.js's trimCaptionEvent).
+  if (dragClip.kind === 'sound') {
+    audioTimeline.trimSoundEvent(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
+    return;
+  }
   if (dragClip.kind === 'caption') {
     captionEvents.trimCaptionEventEdge(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
     return;
   }
 
   audioTimeline.trimAudioTrack(dragClip.id, dragClip.mode === 'trim-start' ? 'start' : 'end', pointerTime, options);
+}
+
+/**
+ * The SOUND's own waveform inside its clip, so a cut can be made where the
+ * sound actually is rather than by guesswork. Drawn as fractions of the
+ * source file (see drawWaveform), so trimming slides the trace with it.
+ */
+function paintSoundWaveform(el, event) {
+  const source = getSoundDefinition(event.soundId)?.duration;
+  if (!(source > 0)) return;
+  const canvas = document.createElement('canvas');
+  canvas.className = 'timeline-sfx-clip-wave';
+  el.appendChild(canvas);
+  const rate = event.playbackRate || 1;
+  const from = Math.min(1, (event.trimStart || 0) / source);
+  const heard = (soundEventDuration(event) ?? 0) * rate;
+  const to = Math.min(1, ((event.trimStart || 0) + heard) / source);
+  const draw = (peaks) => {
+    if (!peaks || !canvas.isConnected) return;
+    drawWaveform(canvas, peaks, { startFraction: from, endFraction: Math.max(from + 1e-6, to), color: 'rgba(255, 255, 255, 0.5)' });
+  };
+  getWaveformPeaks(resolveSoundUrl(event.soundId, SFX_SOUNDS_BASE_URL)).then((peaks) => {
+    if (!peaks) return;
+    draw(peaks);
+    const observer = new ResizeObserver(() => draw(peaks));
+    observer.observe(canvas);
+  });
 }
 
 function buildSoundClip(event, duration, isSelected) {
@@ -1760,6 +1871,40 @@ function buildSoundClip(event, duration, isSelected) {
   el.appendChild(replaceBtn);
 
   attachClipPointerHandlers(el, event, 'sound', 'move');
+
+  // A sound effect is a REAL CLIP, always: as long as the sound it plays,
+  // showing that sound's waveform, with a trim handle at each end. It used
+  // to be a fixed capsule, which meant there was nothing to take hold of and
+  // no way to see where the sound actually was inside it — so a riser could
+  // not be made to land where it had to.
+  const played = soundEventDuration(event);
+  if (played > 0) {
+    el.classList.add('is-trimming');
+    el.style.width = `${Math.max(0.6, timeToPercent(event.startTime + played, duration) - timeToPercent(event.startTime, duration))}%`;
+    paintSoundWaveform(el, event);
+    ['start', 'end'].forEach((edge) => {
+      const handle = document.createElement('span');
+      handle.className = `timeline-audio-clip-handle ${edge}`;
+      handle.dataset.sfxHandle = edge;
+      handle.title = edge === 'start'
+        ? 'Trim the start — the sound keeps its place and plays from further in, so its tail stays put'
+        : 'Trim the end';
+      attachClipPointerHandlers(handle, event, 'sound', edge === 'start' ? 'trim-start' : 'trim-end');
+      el.appendChild(handle);
+    });
+    if (isSoundEventTrimmed(event)) {
+      const full = document.createElement('button');
+      full.type = 'button';
+      full.className = 'timeline-sfx-clip-full';
+      full.dataset.sfxFull = event.id;
+      full.title = 'Back to its full length';
+      full.textContent = '⤢';
+      full.addEventListener('pointerdown', (e) => e.stopPropagation());
+      full.addEventListener('click', (e) => { e.stopPropagation(); audioTimeline.resetSoundEventTrim(event.id); });
+      el.appendChild(full);
+    }
+  }
+
   el.addEventListener('dblclick', (e) => {
     e.stopPropagation();
     previewSound(event.soundId, event.volume);
@@ -2566,6 +2711,7 @@ function tick() {
   }
 
   const { canUndo, canRedo } = getHistoryState();
+  if (els.splitBtn) els.splitBtn.disabled = !canSplitSelected((getVideo()?.currentTime ?? 0));
   if (els.undoBtn) els.undoBtn.disabled = !canUndo;
   if (els.redoBtn) els.redoBtn.disabled = !canRedo;
 

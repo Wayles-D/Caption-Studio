@@ -150,6 +150,44 @@ function StyleSlider({ id, label, value, min, max, step = 1, unit = '', onChange
 }
 
 /** Dropdown whose empty option means "inherit". */
+/**
+ * KEYFRAMING A STYLE PROPERTY — "from here on, this font".
+ *
+ * A font cannot be interpolated, so a style keyframe HOLDS until the next one
+ * (shared/keyframes.js): set one at 1s and another at 2.5s and the text is
+ * the first font until 2.5s, then the second. Once a property has keyframes,
+ * changing it in the control above lands at the playhead rather than
+ * rewriting the whole clip.
+ */
+function StyleKeyframeRow({ id, property, label, elementId }) {
+  const times = textElements.getTextElementStyleKeyframeTimes(property, elementId);
+  const on = times.length > 0;
+  const current = textElements.getTextElement(elementId)?.style?.[property];
+  return (
+    <div className="flex items-center gap-2" id={id}>
+      <button
+        type="button" id={`${id}-add`}
+        className={`h-6 px-2 rounded-[3px] border text-[10px] font-bold cursor-pointer ${on ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+        title={`Change the ${label} from the playhead onwards`}
+        onClick={() => textElements.setTextElementStyleKeyframe(property, current ?? null, elementId)}
+      >◆ Change {label} here</button>
+      {on && (
+        <>
+          <span className="text-[10px] text-[var(--text-muted)]" id={`${id}-times`}>
+            {times.map((t) => `${t.toFixed(2)}s`).join(', ')}
+          </span>
+          <button
+            type="button" id={`${id}-clear`}
+            className="h-6 px-2 rounded-[3px] border border-[var(--border-color)] text-[10px] text-[var(--text-muted)] cursor-pointer"
+            title={`Keep one ${label} for the whole clip`}
+            onClick={() => textElements.clearTextElementStyleKeyframes(property, elementId)}
+          >Clear</button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function StyleSelect({ id, label, value, options, onChange, onPreview }) {
   const meaning = useContext(ClearMeaning);
   const all = [{ value: '', label: meaning.unset }, ...options];
@@ -530,6 +568,7 @@ function TextElementStyle({ element }) {
           onChange={(v) => apply({ fontFamily: v })}
         onPreview={(v) => preview({ fontFamily: v })}
         />
+        <StyleKeyframeRow id="textel-font-kf" property="fontFamily" label="font" elementId={element.id} />
         <StyleSelect
           id="textel-weight" label="Weight" value={style.fontWeight}
           options={WEIGHT_OPTIONS}

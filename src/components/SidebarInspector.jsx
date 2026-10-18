@@ -401,6 +401,14 @@ export function SidebarInspector({ sectionFilter } = {}) {
               </optgroup>
               <optgroup label="Editorial & Script">
                 <option value="PP Editorial New">PP Editorial New</option>
+                <option value="Tempting">Tempting · personal use only</option>
+              </optgroup>
+              {/* Restricted faces say so here, where they are chosen: fine to
+                  design with, a licensing problem to ship. Ketchup Manis is a
+                  demo cut with no digits or punctuation at all. */}
+              <optgroup label="Retro & Display">
+                <option value="Avant Garde">Avant Garde · licence before shipping</option>
+                <option value="Ketchup Manis">Ketchup Manis · demo, letters only</option>
               </optgroup>
             </HoverSelect>
           </div>

@@ -49,6 +49,8 @@ import * as objectsApi from './js/components/objectDetection.js';
 import * as trackingApi from './js/components/objectTracking.js';
 import * as objectEffectsApi from './js/components/objectEffects.js';
 import { prepareObjectEffectsForExport } from './js/components/objectEffects.js';
+import * as occlusionApi from './js/components/occlusion.js';
+import { prepareOcclusionsForExport } from './js/components/occlusion.js';
 import * as segmentationApi from './js/components/objectSegmentation.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
@@ -350,11 +352,16 @@ export function App() {
   // start), or null for "at the playhead". Pinned rather than read from the
   // playhead at pick time, so auditioning by scrubbing can't move it.
   const [soundPlaceAt, setSoundPlaceAt] = useState(null);
+  // The whole WORD the ♪ was pressed on, so the library can offer to place
+  // one sound per syllable of it (shared/syllables.js). Null when adding at
+  // the playhead or to an interlude.
+  const [soundPlaceWord, setSoundPlaceWord] = useState(null);
   const closeSoundLibrary = useCallback(() => {
     setSoundLibraryOpen(false);
     setSoundReplaceTargetId(null);
     setSoundAttachTargetId(null);
     setSoundPlaceAt(null);
+    setSoundPlaceWord(null);
   }, []);
   const toggleSoundLibrary = useCallback(() => {
     // The "+" always means "add", so re-pressing it while a replace is open
@@ -377,6 +384,7 @@ export function App() {
       setSoundReplaceTargetId(null);
       setSoundAttachTargetId(null);
       setSoundPlaceAt(word.start);
+      setSoundPlaceWord(word);
       setSoundLibraryOpen(true);
     };
     window.addEventListener('bhynd:add-sound-at', onAddSoundAt);
@@ -391,6 +399,7 @@ export function App() {
     setSoundReplaceTargetId(null);
     setSoundAttachTargetId(attachToTextElementId);
     setSoundPlaceAt(null);
+    setSoundPlaceWord(null);
     setSoundLibraryOpen(true);
   }, []);
   const openSoundReplace = useCallback((clipId) => {
@@ -461,8 +470,12 @@ export function App() {
       const id = appState.selectedTextElementId;
       if (id === lastId) return;
       lastId = id;
-      const selected = (appState.textElements || []).find((el) => el.id === id);
-      if (selected?.kind === 'interlude' && isDesktopRef.current) setDesktopSidePanel('text-overlay');
+      // ANY text element, not just a cinematic card: selecting a plain
+      // overlay used to open nothing, so its own panel — and with it the
+      // layer controls and "Behind a subject" — were unreachable without
+      // going hunting, while an image or a shape brought its panel up at
+      // once. Same rule for all three now.
+      if (id && isDesktopRef.current && desktopSidePanelRef.current !== 'layers') setDesktopSidePanel('text-overlay');
     });
   }, []);
 
@@ -547,6 +560,7 @@ export function App() {
       window.__objects = objectsApi;
       window.__tracking = trackingApi;
       window.__objectEffects = objectEffectsApi;
+      window.__occlusion = occlusionApi;
       window.__segmentation = segmentationApi;
       window.__captionEvents = captionEventsApi;
     }
@@ -775,6 +789,7 @@ export function App() {
       // Subject isolation sends the object's MASKS with the style params —
       // they live in IndexedDB and may not be in memory yet.
       await prepareObjectEffectsForExport();
+      await prepareOcclusionsForExport();
       const result = await fetchJson(`${API_BASE_URL}/api/upload/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -989,7 +1004,7 @@ export function App() {
           className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
           style={{ bottom: MOBILE_TOOLBAR_HEIGHT + timelineHeight }}
         >
-          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} placeAt={soundPlaceAt} />
+          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} placeAt={soundPlaceAt} placeWord={soundPlaceWord} />
         </div>
       )}
 

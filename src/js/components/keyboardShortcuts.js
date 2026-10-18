@@ -6,6 +6,7 @@
  *   Space               play / pause
  *   ← / →               one frame back / forward (Shift: one second)
  *   Home / End          the start / the end
+ *   S                   split the selected clip at the playhead
  *   Ctrl/⌘+D            duplicate the selected image or shape
  *   Esc                 deselect
  *   ?                   this list
@@ -23,6 +24,7 @@
 import { appState, updateState, undo, redo } from '../state.js';
 import { duplicateImageLayer } from './imageLayers.js';
 import { duplicateShapeLayer } from './shapeLayers.js';
+import { splitSelectedAtPlayhead } from './splitClip.js';
 
 /** One frame at the rate the editor steps by (the preview has no reliable frame rate to read). */
 const FRAME = 1 / 30;
@@ -34,6 +36,7 @@ export const SHORTCUTS = [
   ['←  →', 'Step one frame'],
   ['Shift+←  →', 'Step one second'],
   ['Home  ·  End', 'Go to the start / end'],
+  ['S', 'Split the selected clip at the playhead'],
   ['Ctrl+D', 'Duplicate the selected image or shape'],
   ['Delete  ·  Backspace', 'Delete the selection'],
   ['Esc', 'Deselect'],
@@ -146,6 +149,7 @@ export function shortcutFor(e) {
   if (key === 'Home') return 'start';
   if (key === 'End') return 'end';
   if (key === 'Escape') return 'escape';
+  if (key === 's') return 'split';
   if (key === '?') return 'help';
   return null;
 }
@@ -179,6 +183,8 @@ export function initKeyboardShortcuts() {
       case 'duplicate': if (duplicateSelection()) e.preventDefault(); break;
       // Esc stays everyone's too (menus and dialogs close on it): this only adds deselecting.
       case 'escape': deselect(); break;
+      // Only taken when there is something to cut, so 's' stays free otherwise.
+      case 'split': if (splitSelectedAtPlayhead(video()?.currentTime ?? 0)) e.preventDefault(); break;
       case 'help': e.preventDefault(); toggleShortcutsDialog(true); break;
       default: break;
     }

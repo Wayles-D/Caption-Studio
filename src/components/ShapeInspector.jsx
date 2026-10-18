@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { appState, subscribe } from '../js/state.js';
 import * as shapeLayers from '../js/components/shapeLayers.js';
 import { SHAPE_KINDS, SHAPE_LABELS } from '../../shared/shapeLayer.js';
+import { isAnnotationKind, DRAW_DIRECTIONS, DRAW_DIRECTION_LABELS } from '../../shared/annotationStrokes.js';
 import { ANIMATION_TYPES, EASING_TYPES } from '../../shared/captionAnimation.js';
 import { LayerOrderControls } from './LayerControls.jsx';
 import { CARD, SECTION_TITLE, HINT, GROUP_LABEL, SELECT, SECONDARY_BTN, ROW_BASE, titleCase, Slider as SharedSlider, Toggle, ColorRow, TimeField } from './LayerInspectorControls.jsx';
@@ -73,6 +74,31 @@ function ShapeEditor({ shape }) {
           <ColorRow id="shape-fill-color" label="Colour" value={a.fill.color} openField={openField} setOpenField={setOpenField} apply={(hex, o) => setFill({ color: hex }, o)} />
         )}
       </div>
+
+      {isAnnotationKind(shape.kind) && (
+        <div className={CARD} id="shape-drawn">
+          <span className={SECTION_TITLE}>Drawn on</span>
+          <Slider
+            id="shape-draw-seconds" layerId={id} label="Time to draw" value={a.drawSeconds}
+            min={0} max={3} step={0.05} format={(v) => `${v.toFixed(2)}s`}
+            onLive={(v, o) => setAppearance({ drawSeconds: v }, o)}
+          />
+          <div className="flex gap-1" id="shape-draw-direction">
+            {DRAW_DIRECTIONS.map((d) => (
+              <button
+                type="button" key={d} id={`shape-draw-direction-${d}`} data-direction={d}
+                className={`h-7 flex-1 rounded-[3px] border text-[11px] font-bold cursor-pointer ${a.drawDirection === d ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+                onClick={() => setAppearance({ drawDirection: d })}
+              >{DRAW_DIRECTION_LABELS[shape.kind]?.[d] || d}</button>
+            ))}
+          </div>
+          <p className={HINT}>
+            {shape.kind === 'circle-annotation'
+              ? 'Which way the loop goes, and where its ends cross.'
+              : 'Which end the stroke starts from.'}
+          </p>
+        </div>
+      )}
 
       {shape.kind === 'rounded' && (
         <div className={CARD}>

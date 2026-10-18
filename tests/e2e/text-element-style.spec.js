@@ -51,9 +51,15 @@ async function setup(page) {
     const el = window.__appState.textElements[0];
     window.__textElements.updateTextElement(el.id, { text: 'HELLO' });
   });
-  // Open the Overlay panel — the real toolbar route to these controls.
-  await page.getByRole('button', { name: 'Overlay', exact: true }).click();
+  // Open the Overlay panel - the real toolbar route to these controls.
+  // Selecting a text element ALREADY opens it (App.jsx's selection effect),
+  // and the tool button toggles, so clicking it unconditionally would shut
+  // the panel again and every control below would be absent.
+  if (!(await page.locator('#textel-font').count())) {
+    await page.getByRole('button', { name: 'Overlay', exact: true }).click();
+  }
   await page.waitForTimeout(500);
+  await page.locator('#textel-font').waitFor();
 }
 
 /**

@@ -303,7 +303,10 @@ function reschedule() {
       // a position the user has already left.
       if (!ready(buffer)) return;
 
-      const naturalDuration = buffer.duration / (event.playbackRate || 1);
+      // Anything trimmed off the HEAD is skipped, so what is left is what
+      // plays — the same offset the exporter's atrim uses.
+      const offset = Math.max(0, Math.min(event.trimStart || 0, Math.max(0, buffer.duration - 0.01)));
+      const naturalDuration = (buffer.duration - offset) / (event.playbackRate || 1);
       const clipDuration = event.duration != null
         ? Math.min(event.duration, naturalDuration)
         : naturalDuration;
@@ -312,7 +315,7 @@ function reschedule() {
       // footprint on the timeline the same way it compresses everything else.
       const playDuration = clipDuration / rate;
       if (when + playDuration <= context.currentTime) return; // already over
-      scheduleBuffer(buffer, when, 0, playDuration, {
+      scheduleBuffer(buffer, when, offset, playDuration, {
         volume: event.volume,
         fadeIn: event.fadeIn,
         fadeOut: event.fadeOut,

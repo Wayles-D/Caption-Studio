@@ -459,11 +459,11 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // destructuring happens further down, after the video-transform chain.
     const { textElementSegments, manualCaptionSegments, imageUnderSegments, layerRuns, textBlendMode: captionBlendMode, objectEffects } = videoTransformOpts;
     const extraLayers = [];
-    const pushLayer = (segs, blendMode, prefix, label, beneathCaptions = false) => {
+    const pushLayer = (segs, blendMode, prefix, label, beneathCaptions = false, isSubject = false) => {
       if (!segs || !segs.length) return;
       const timeline = buildLayerTimeline(segs);
       if (!timeline) return;
-      extraLayers.push({ timeline, blendMode, prefix, label, beneathCaptions });
+      extraLayers.push({ timeline, blendMode, prefix, label, beneathCaptions, isSubject });
     };
     // OBJECT-AWARE EFFECTS (graphicsFrameGenerator.js's
     // buildObjectEffectSegments). Spotlights, glows and outlines are one plain
@@ -483,7 +483,12 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
         run.kind === 'caption-blend' ? captionBlendMode : 'normal',
         `lr${i}_`,
         `layer${i}`,
-        !!run.beneathCaptions
+        !!run.beneathCaptions,
+        // A SUBJECT pass (V2.2 dynamic occlusion) is not a picture to lay
+        // over what is beneath it: it is a MATTE that cuts the subject out of
+        // the video and puts those pixels back on top, so the layers already
+        // composited below it end up BEHIND the subject.
+        run.kind === 'subject'
       ));
     } else {
       // The V1.3 names: image layers placed UNDER the captions (a plain
@@ -635,6 +640,17 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       );
       currentBase = p('out');
     });
+    // V2.2 DYNAMIC OCCLUSION: a subject pass needs the PLACED VIDEO's own
+    // pixels, and an ffmpeg label can only be consumed once — so the video is
+    // split here, one copy for each subject pass plus one for the chain.
+    const subjectPasses = extraLayers.filter((layer) => layer.isSubject);
+    const subjectSources = new Map();
+    if (subjectPasses.length) {
+      const labels = subjectPasses.map((_, i) => `[subjsrc${i}]`);
+      compositeStages.push(`${currentBase}split=${subjectPasses.length + 1}[subjchain]${labels.join('')}`);
+      subjectPasses.forEach((layer, i) => subjectSources.set(layer, labels[i]));
+      currentBase = '[subjchain]';
+    }
     const passes = [
       ...extraLayers.filter((layer) => layer.beneathCaptions),
       // With keyword-only blend the caption track itself stays plain; the blend
@@ -645,6 +661,20 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     const chainLabelFor = (i) => (i === passes.length - 1 ? '[outv]' : `[after_layer_${i}]`);
     passes.forEach((pass, idx) => {
       const outLabel = chainLabelFor(idx);
+      if (pass.isSubject) {
+        // The subject, cut out of the placed video by this pass's matte and
+        // laid over everything composited so far — which is exactly what puts
+        // those layers behind them. Where the matte is blank nothing is put
+        // back, and the layers simply show.
+        const p = (name) => `[${pass.prefix}${name}]`;
+        compositeStages.push(
+          `[${pass.label}]alphaextract${p('matte')}`,
+          `${subjectSources.get(pass)}${p('matte')}alphamerge${p('cut')}`,
+          `${currentBase}${p('cut')}overlay=x=0:y=0:format=${idx === passes.length - 1 ? 'yuv420' : 'rgb'}:eof_action=pass${outLabel}`
+        );
+        currentBase = outLabel;
+        return;
+      }
       compositeStages.push(...buildCaptionCompositeStages(currentBase, pass.blendMode, {
         trackLabel: `[${pass.label}]`,
         outLabel,

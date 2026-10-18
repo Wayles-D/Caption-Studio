@@ -52,7 +52,7 @@
  * this — they still always go through the plain applyWordTransformFields
  * exactly as before this feature existed. See applyKeywordScopedTransformFields.
  */
-import { appState, updateState } from '../state.js';
+import { appState, updateState, getStyleParams } from '../state.js';
 import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
 import { setWordKeyword } from './transcriptEditorState.js';
 import { deselectVideoTarget } from './videoTransform.js';
@@ -80,6 +80,8 @@ import {
   KEYFRAME_PROPERTIES,
   findKeyframeEntryNear,
   upsertKeyframeEntry,
+  getPropertyTrack,
+  isSteppedProperty,
   removeKeyframeEntry,
   moveKeyframeEntry,
   evaluatePropertyAtTime,
@@ -3503,18 +3505,39 @@ export function getSelectedWordStyleTarget() {
       wordIndex: selectedTextWordIndex,
       text: word ? (word.word || word.text || '') : '',
       isKeyword: !!word?.isKeyword,
-      style: (activeWordMap()[getWordTransformKey(selectedTextWordIndex)] || {}).style || {},
+      style: styleAtPlayhead(activeWordMap()[getWordTransformKey(selectedTextWordIndex)] || {}),
       textElementId: selectedTextElementId
     };
   }
   if (!selected || selectedWordIndex == null) return null;
   const sourceWord = (appState.words || [])[selectedWordIndex];
+  const entry = appState.captionTransforms[getWordTransformKey(selectedWordIndex)] || {};
   return {
     wordIndex: selectedWordIndex,
     text: sourceWord ? (sourceWord.word || sourceWord.text || '') : '',
     isKeyword: isKeywordIndex(selectedWordIndex),
-    style: (appState.captionTransforms[getWordTransformKey(selectedWordIndex)] || {}).style || {}
+    // The style AT THE PLAYHEAD, not the static one. Once a property is
+    // keyframed the keyframes are what gets drawn, so a control still showing
+    // the static value would be showing something the viewer never sees — and
+    // would read as "nothing happened" right after a keyframe was set.
+    style: styleAtPlayhead(entry)
   };
+}
+
+/** A word entry's style with its stepped (font/weight/casing) keyframes resolved at the playhead. */
+function styleAtPlayhead(entry) {
+  const style = { ...(entry.style || {}) };
+  const keyframes = entry.keyframes;
+  if (!Array.isArray(keyframes) || !keyframes.length) return style;
+  const at = getPlayheadTime();
+  keyframes.forEach((k) => {
+    Object.keys(k?.values || {}).forEach((property) => {
+      if (!isSteppedProperty(property)) return;
+      const value = evaluatePropertyAtTime(keyframes, property, at);
+      if (value !== undefined) style[property] = value;
+    });
+  });
+  return style;
 }
 
 /**
@@ -3530,6 +3553,18 @@ export function getSelectedWordStyleTarget() {
  */
 export function applyWordStyleFields(wordIndex, styleFields, { recordHistory = true } = {}) {
   if (wordIndex == null) return;
+  // A property that is already KEYFRAMED is edited at the playhead, not
+  // globally - a static value would simply be overruled by the keyframes, so
+  // the control would look dead. Same rule on both stores.
+  const keyedNow = Object.keys(styleFields).filter((field) => isSteppedProperty(field)
+    && getPropertyTrack(activeWordMap()[getWordTransformKey(wordIndex)]?.keyframes, field).length > 0);
+  if (keyedNow.length) {
+    keyedNow.forEach((field) => setWordStyleKeyframe(wordIndex, field, styleFields[field]));
+    const rest = { ...styleFields };
+    keyedNow.forEach((field) => delete rest[field]);
+    if (!Object.keys(rest).length) return;
+    styleFields = rest;
+  }
   if (selectedTextElementId && selectedTextWordIndex != null) {
     writeTextWordEntries([wordIndex], (entry) => {
       const style = { ...(entry.style || {}) };
@@ -3548,7 +3583,7 @@ export function applyWordStyleFields(wordIndex, styleFields, { recordHistory = t
     if (value == null) delete nextStyle[field];
     else nextStyle[field] = value;
   });
-  const nextEntry = { ...existing, style: nextStyle };
+  const nextEntry = { ...(appState.captionTransforms[key] || {}), style: nextStyle };
   updateState({ captionTransforms: { ...appState.captionTransforms, [key]: nextEntry } }, { recordHistory });
 }
 
@@ -3836,4 +3871,115 @@ export function deselectCanvasSelection() {
   resetKeywordScopeState();
   if (isSelectingGroup) finishGroupSelection(false);
   if (boxEl) boxEl.hidden = true;
+}
+
+/**
+ * STYLE KEYFRAMES ON ONE WORD — "this word is this font from here on".
+ *
+ * A word's style (font, weight, casing, colour) was deliberately never
+ * keyframed, because a font has no half-way point between two values. It
+ * still has none: these keyframes STEP (shared/keyframes.js's
+ * isSteppedProperty), so the value set at one holds until the next and then
+ * changes outright. That is exactly what "beautiful until 2.5s, then ugly"
+ * needs.
+ *
+ * They are stored in the SAME keyframes list the word's transform keyframes
+ * already use, so one word has one timeline covering where it is AND what it
+ * looks like.
+ */
+export function setWordStyleKeyframe(wordIndex, property, value) {
+  if (wordIndex == null || !isSteppedProperty(property)) return null;
+  // A TEXT ELEMENT's word is not a transcript word: its override lives on the
+  // element (wordTransforms), keyed by its position within that element, and
+  // its times are the element's. Writing it to appState.captionTransforms
+  // instead puts the keyframe on whatever transcript word happens to share
+  // that index - a different word, at a different time, on a different clip -
+  // so the cinematic word never changes and the panel lists times from
+  // somewhere else entirely.
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    const element = getTextElement(selectedTextElementId);
+    if (!element) return null;
+    const at = getPlayheadTime();
+    const existing = (element.wordTransforms || {})[getWordTransformKey(wordIndex)] || {};
+    // What the word is ACTUALLY wearing: its own override, else the element's
+    // style, else the caption style the element inherits.
+    const effective = existing.style?.[property]
+      ?? element.style?.[property]
+      ?? getStyleParams()?.[property]
+      ?? null;
+    const target = value ?? effective;
+    if (target == null) return null;
+    writeTextWordEntries([wordIndex], (entry) => {
+      let keyframes = entry.keyframes;
+      // Pinned at the ELEMENT's start, which is when this word first appears.
+      if (!getPropertyTrack(keyframes, property).length
+        && effective != null && at > element.start + 1e-3) {
+        keyframes = upsertKeyframeEntry(keyframes, element.start, { [property]: effective });
+      }
+      return { ...entry, keyframes: upsertKeyframeEntry(keyframes, at, { [property]: target }) };
+    }, { recordHistory: true });
+    return (getTextElement(selectedTextElementId)?.wordTransforms || {})[getWordTransformKey(wordIndex)] || null;
+  }
+  const key = getWordTransformKey(wordIndex);
+  const existing = appState.captionTransforms[key] || {};
+  const at = getPlayheadTime();
+  // What this word is ACTUALLY wearing right now: its own override if it has
+  // one, otherwise the caption's style, which is what it inherits and what
+  // the renderer draws. A word that has never been styled has no override —
+  // and a keyframe holding `null` is not a keyframe at all (getPropertyTrack
+  // drops it), so taking the inherited value is what makes the FIRST ever
+  // click on an untouched word do anything.
+  const effective = existing.style?.[property] ?? getStyleParams()?.[property] ?? null;
+  const target = value ?? effective;
+  if (target == null) return null;
+  let keyframes = existing.keyframes;
+  // The first keyframe for this property also pins what the word looks like
+  // NOW at the word's own start, so the change happens where it was asked for
+  // rather than reaching backwards over the whole caption.
+  if (!getPropertyTrack(keyframes, property).length) {
+    const from = (appState.words || [])[wordIndex]?.start;
+    if (effective != null && from != null && at > from + 1e-3) {
+      keyframes = upsertKeyframeEntry(keyframes, from, { [property]: effective });
+    }
+  }
+  keyframes = upsertKeyframeEntry(keyframes, at, { [property]: target });
+  const nextMap = { ...appState.captionTransforms, [key]: { ...existing, keyframes } };
+  updateState({ captionTransforms: nextMap }, { recordHistory: true });
+  return nextMap[key];
+}
+
+/** Every instant this word's property changes. */
+export function getWordStyleKeyframeTimes(wordIndex, property) {
+  if (wordIndex == null) return [];
+  const existing = activeWordMap()[getWordTransformKey(wordIndex)];
+  return getPropertyTrack(existing?.keyframes, property).map((k) => k.t);
+}
+
+/** Drops this word's keyframes for one style property, leaving its static style. */
+export function clearWordStyleKeyframes(wordIndex, property) {
+  if (wordIndex == null) return null;
+  if (selectedTextElementId && selectedTextWordIndex != null) {
+    writeTextWordEntries([wordIndex], (entry) => ({
+      ...entry, keyframes: withoutProperty(entry.keyframes, property)
+    }), { recordHistory: true });
+    return null;
+  }
+  const key = getWordTransformKey(wordIndex);
+  const existing = appState.captionTransforms[key];
+  if (!existing?.keyframes?.length) return null;
+  const nextMap = { ...appState.captionTransforms, [key]: { ...existing, keyframes: withoutProperty(existing.keyframes, property) } };
+  updateState({ captionTransforms: nextMap }, { recordHistory: true });
+  return nextMap[key];
+}
+
+/** A keyframe list with one property removed, dropping entries left empty. */
+function withoutProperty(keyframes, property) {
+  return (keyframes || [])
+    .map((k) => {
+      if (!k.values || k.values[property] == null) return k;
+      const values = { ...k.values };
+      delete values[property];
+      return Object.keys(values).length ? { ...k, values } : null;
+    })
+    .filter(Boolean);
 }

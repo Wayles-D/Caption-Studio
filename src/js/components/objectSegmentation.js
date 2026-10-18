@@ -145,7 +145,8 @@ function runModel(input) {
     // afterwards (the mask's colour identity — segmentation.js's
     // maskAppearance), and a transferred buffer is gone from this side.
     const image = input.image.slice();
-    w.postMessage({ id, encoderUrl: '/models/mobilesam-encoder.onnx', decoderUrl: '/models/mobilesam-decoder.onnx', ...input, image }, [image.buffer]);
+    w.postMessage({
+      refine: true, id, encoderUrl: '/models/mobilesam-encoder.onnx', decoderUrl: '/models/mobilesam-decoder.onnx', ...input, image }, [image.buffer]);
   });
 }
 

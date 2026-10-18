@@ -1,3 +1,4 @@
+import { ANNOTATION_KINDS, ANNOTATION_LABELS, DEFAULT_DRAW_SECONDS, DRAW_DIRECTIONS, isAnnotationKind, drawAnnotation, drawProgress } from './annotationStrokes.js';
 /**
  * SHAPE LAYERS — a generated shape (no file behind it) placed over the video
  * for a span of the timeline. The model, its geometry, and the ONE function
@@ -23,8 +24,8 @@
 import { createClipId } from './audioTimeline.js';
 import { normalizeMotionList, evaluateMotions, motionActiveSpans } from './motion/motion.js';
 
-export const SHAPE_KINDS = ['rectangle', 'rounded', 'ellipse', 'line', 'arrow', 'pill'];
-export const SHAPE_LABELS = { rectangle: 'Rectangle', rounded: 'Rounded rectangle', ellipse: 'Ellipse', line: 'Line', arrow: 'Arrow', pill: 'Pill' };
+export const SHAPE_KINDS = ['rectangle', 'rounded', 'ellipse', 'line', 'arrow', 'pill', ...ANNOTATION_KINDS];
+export const SHAPE_LABELS = { rectangle: 'Rectangle', rounded: 'Rounded rectangle', ellipse: 'Ellipse', line: 'Line', arrow: 'Arrow', pill: 'Pill', ...ANNOTATION_LABELS };
 export const DEFAULT_SHAPE_DURATION = 3;
 const MIN_SHAPE_DURATION = 0.1;
 const AUTHORED_FRAME_WIDTH = 330;
@@ -41,7 +42,12 @@ const DEFAULT_SIZE = {
   ellipse: { width: 40, height: 40 },
   line: { width: 50, height: 2 },
   arrow: { width: 45, height: 12 },
-  pill: { width: 50, height: 14 }
+  pill: { width: 50, height: 14 },
+  // Hand-drawn annotations: a circle round something, a line under it, an
+  // arrow at it (shared/annotationStrokes.js).
+  'circle-annotation': { width: 34, height: 26 },
+  'underline-annotation': { width: 40, height: 8 },
+  'arrow-annotation': { width: 30, height: 24 }
 };
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -58,8 +64,10 @@ export function normalizeShapeLayer(raw) {
   const size = DEFAULT_SIZE[kind];
   const t = raw.transform || {};
   const a = raw.appearance || {};
-  const fill = { enabled: true, color: '#FFFFFF', ...(a.fill || {}) };
-  const border = { enabled: false, width: 4, color: '#000000', ...(a.border || {}) };
+  // An annotation IS its stroke: the pen on, nothing filled behind it.
+  const pen = isAnnotationKind(kind);
+  const fill = { enabled: !pen, color: '#FFFFFF', ...(a.fill || {}) };
+  const border = { enabled: pen, width: pen ? 8 : 4, color: pen ? '#FF3B30' : '#000000', ...(a.border || {}) };
   const shadow = { enabled: false, blur: 12, offsetX: 0, offsetY: 6, color: '#000000', opacity: 50, ...(a.shadow || {}) };
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : createClipId('shp'),
@@ -79,6 +87,11 @@ export function normalizeShapeLayer(raw) {
     appearance: {
       fill: { enabled: fill.enabled !== false, color: color(fill.color, '#FFFFFF') },
       border: { enabled: !!border.enabled, width: clamp(finite(border.width, 4), 0, 60), color: color(border.color, '#000000') },
+      // How long a hand-drawn annotation takes to draw itself on, and which
+      // way round the hand goes (clockwise / anticlockwise, or which end a
+      // line starts from).
+      drawSeconds: clamp(finite(a.drawSeconds, DEFAULT_DRAW_SECONDS), 0, 5),
+      drawDirection: DRAW_DIRECTIONS.includes(a.drawDirection) ? a.drawDirection : 'forward',
       cornerRadius: clamp(finite(a.cornerRadius, kind === 'rounded' ? 20 : 0), 0, 50),
       shadow: {
         enabled: !!shadow.enabled,
@@ -119,7 +132,16 @@ export function getShapeLayerBoundaryTimes(shapes) {
 
 /** Where the shape's motions move it — what the exporter samples densely. */
 export function shapeLayerMotionSpans(shape) {
-  return motionActiveSpans(shape.motions, shape);
+  const spans = motionActiveSpans(shape.motions, shape);
+  // A HAND-DRAWN ANNOTATION animates without a motion: it draws itself on
+  // over its first moments. The exporter samples densely only where a shape
+  // MOVES, so without this its whole clip would be one frozen frame taken at
+  // its start — where none of the stroke exists yet, i.e. nothing at all.
+  if (isAnnotationKind(shape.kind)) {
+    const seconds = shape.appearance?.drawSeconds ?? DEFAULT_DRAW_SECONDS;
+    if (seconds > 0) spans.push({ start: shape.start, end: Math.min(shape.end, shape.start + seconds) });
+  }
+  return spans;
 }
 
 /** The shape AT REST on a canvas of this size, in canvas px (also the box the selection handles wrap). */
@@ -202,6 +224,27 @@ export function drawShapeLayer(ctx, shape, { canvasWidth, canvasHeight, time, cr
   const { appearance, kind } = shape;
   const off = createOffscreenCanvas(Math.max(1, Math.ceil(g.width)), Math.max(1, Math.ceil(g.height)));
   const o = off.getContext('2d');
+  // A HAND-DRAWN ANNOTATION is a stroke that draws itself on, not a filled
+  // outline: no clip, no fill, and only as much of it as exists yet
+  // (shared/annotationStrokes.js).
+  if (isAnnotationKind(kind)) {
+    const progress = drawProgress(shape, time, appearance.drawSeconds);
+    if (progress > 0) {
+      drawAnnotation(o, {
+        kind,
+        width: g.width,
+        height: g.height,
+        seed: shape.id,
+        progress,
+        direction: appearance.drawDirection,
+        // The stroke is the thing here, so it takes the border's colour and
+        // width when the border is on, and the fill's colour when it is not —
+        // whichever the user has been setting.
+        colour: appearance.border.enabled ? appearance.border.color : appearance.fill.color,
+        lineWidth: Math.max(1, (appearance.border.enabled ? appearance.border.width : 6) * g.pxScale * shape.transform.scale)
+      });
+    }
+  } else {
   o.save();
   shapePath(o, kind, g.width, g.height, appearance.cornerRadius);
   o.clip();
@@ -218,6 +261,7 @@ export function drawShapeLayer(ctx, shape, { canvasWidth, canvasHeight, time, cr
     o.stroke();
   }
   o.restore();
+  }
 
   const unit = Math.max(Math.min(g.width, g.height), canvasWidth / 40) * SHAPE_MOTION_UNIT;
   ctx.save();

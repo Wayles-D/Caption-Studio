@@ -159,9 +159,15 @@ export function buildAudioMixGraph(audioTimeline, { duration, hasSourceAudio, fi
     if (event.playbackRate && Math.abs(event.playbackRate - 1) > 1e-3) {
       chain.push(`atempo=${event.playbackRate.toFixed(4)}`);
     }
+    // Anything trimmed off the HEAD first: `atrim=start` keeps the source's
+    // original timestamps, so `asetpts` rebases them to zero and the
+    // `adelay` below then places the trimmed head at the clip's own start.
+    if (event.trimStart > 0) {
+      chain.push(`atrim=start=${event.trimStart.toFixed(3)}`, 'asetpts=PTS-STARTPTS');
+    }
     // Truncating to an explicit duration happens BEFORE the delay, so the
     // length is measured from the clip's own head, not from zero.
-    if (event.duration != null) chain.push(`atrim=duration=${event.duration.toFixed(3)}`);
+    if (event.duration != null) chain.push(`atrim=duration=${event.duration.toFixed(3)}`, 'asetpts=PTS-STARTPTS');
     if (event.fadeIn > 0) chain.push(`afade=t=in:st=0:d=${event.fadeIn.toFixed(3)}`);
     if (event.fadeOut > 0 && event.duration != null) {
       chain.push(`afade=t=out:st=${Math.max(0, event.duration - event.fadeOut).toFixed(3)}:d=${event.fadeOut.toFixed(3)}`);

@@ -90,7 +90,7 @@ function applyMotionTransform(ctx, d, pivotX, pivotY, unitPx, extraScale = 1) {
     ctx.translate(-pivotX, -pivotY);
   }
 }
-import { resolveWordOverride, resolveWordOverrideAtTime, resolveWordStyleOverride, hasWordOverride } from './captionTransform.js';
+import { resolveWordOverride, resolveWordOverrideAtTime, resolveWordStyleOverride, resolveCaptionTransformsAtTime, hasWordOverride } from './captionTransform.js';
 
 /**
  * Whether the graphics engine currently knows how to render this resolved
@@ -976,6 +976,15 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   // existing single-block caller behaves exactly as it always has.
   if (clearCanvas) ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   if (!activePhrase || !activePhrase.words || !activePhrase.words.length) return;
+
+  // STYLE KEYFRAMES on individual words (a font that changes part way
+  // through a caption) are resolved ONCE here, for this instant, and baked
+  // into the params every path below already reads. Doing it at the single
+  // point both renderers funnel through is what makes it work everywhere —
+  // sentence mode, word mode and Rolling Stack — without threading a time
+  // argument through every layout function. A project with no style
+  // keyframes gets the very same params object back.
+  params = resolveCaptionTransformsAtTime(params, currentTime);
 
   const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
   if (!computed) return;

@@ -34,7 +34,7 @@
  * is shared.
  */
 import { createClipId } from './audioTimeline.js';
-import { resolveAnimatableField } from './keyframes.js';
+import { STYLE_KEYFRAME_PROPERTIES, resolveAnimatableField } from './keyframes.js';
 
 export const TEXT_ELEMENT_KINDS = ['caption', 'overlay', 'interlude'];
 
@@ -491,6 +491,15 @@ export function resolveTextElementParams(baseParams, element, currentTime) {
   merged.opacity = resolveAnimatableField(
     override, 'opacity', currentTime, merged.opacity != null ? merged.opacity : 100
   );
+  // STYLE keyframes: the font, weight, casing or colour this element has AT
+  // THIS INSTANT. They hold rather than interpolate (see
+  // STYLE_KEYFRAME_PROPERTIES), so the text simply changes at the keyframe
+  // — which is what a font change has to do. Untouched properties keep the
+  // element's own static style exactly as before.
+  STYLE_KEYFRAME_PROPERTIES.forEach((property) => {
+    const value = resolveAnimatableField(override, property, currentTime, undefined);
+    if (value !== undefined) merged[property] = value;
+  });
   return merged;
 }
 

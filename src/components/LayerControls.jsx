@@ -9,6 +9,8 @@
 import { useEffect, useState } from 'react';
 import { appState, subscribe } from '../js/state.js';
 import * as layerStack from '../js/components/layerStack.js';
+import * as occlusion from '../js/components/occlusion.js';
+import { SELECT, TimeField } from './LayerInspectorControls.jsx';
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
 const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
@@ -44,6 +46,56 @@ export function LayerOrderControls({ id, idPrefix = 'layer' }) {
         <button type="button" id={`${idPrefix}-to-back`} className={SECONDARY_BTN} disabled={atBottom} onClick={() => layerStack.moveLayer(id, 'back')}>Send to Back</button>
       </div>
       <p className={HINT}>One stack for captions, text, images and shapes. The video is always at the bottom.</p>
+      <BehindSubjectControl id={id} idPrefix={idPrefix} />
+    </div>
+  );
+}
+
+/**
+ * DYNAMIC OCCLUSION (shared/objects/occlusion.js) for one layer: send it
+ * BEHIND a tracked subject, so the subject passes in front of it as they move
+ * — no keyframes, no mask painting.
+ *
+ * Only subjects that can actually do it are offered: tracked for THIS video
+ * and segmented. Without a segmentation there are no pixels to hide behind,
+ * and the control says so rather than offering something that would do
+ * nothing.
+ */
+function BehindSubjectControl({ id, idPrefix }) {
+  const subjects = occlusion.availableSubjects();
+  const relation = occlusion.occlusionForLayer(id);
+  const current = relation && relation.mode === 'behind' ? relation.trackKey : '';
+  if (!subjects.length && !relation) {
+    return (
+      <p className={HINT} id={`${idPrefix}-behind-none`}>
+        To put this behind a person or object: select it in the Objects panel, track it, then segment it.
+      </p>
+    );
+  }
+  return (
+    <div className={`flex flex-col gap-2 ${idPrefix === 'layers' ? '' : 'border-t border-[var(--border-color)] pt-3'}`} id={`${idPrefix}-behind`}>
+      {idPrefix !== 'layers' && <span className={SECTION_TITLE}>Behind a subject</span>}
+      <select
+        id={`${idPrefix}-behind-select`}
+        className={SELECT}
+        value={current}
+        onChange={(e) => occlusion.setLayerBehind(id, e.target.value || null)}
+      >
+        <option value="">In front of everything (normal)</option>
+        {subjects.map((s) => <option key={s.trackKey} value={s.trackKey}>Behind {s.label}</option>)}
+      </select>
+      {relation && relation.mode === 'behind' && (
+        <>
+          <p className={HINT} id={`${idPrefix}-behind-note`}>
+            {relation.label} passes in front of this between {relation.start.toFixed(1)}s and {relation.end.toFixed(1)}s.
+            Where they can’t be found — hidden, or out of shot — this stays fully visible.
+          </p>
+          <div className="flex gap-2">
+            <TimeField id={`${idPrefix}-behind-start`} label="From" value={relation.start} onCommit={(v) => occlusion.updateOcclusion(relation.id, { start: Math.min(v, relation.end - 0.1) })} />
+            <TimeField id={`${idPrefix}-behind-end`} label="To" value={relation.end} onCommit={(v) => occlusion.updateOcclusion(relation.id, { end: Math.max(v, relation.start + 0.1) })} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -93,6 +145,15 @@ export function LayersPanel() {
         </ol>
         {appState.layerOrder && <p className={HINT}>Order saved with the project.</p>}
       </div>
+      {/* Sending the SELECTED layer behind a subject, in the one place that
+          lists every layer — so a word, a picture and a shape all go behind a
+          person the same way, without hunting through each kind's own panel. */}
+      {selectedId && (
+        <div className={CARD} id="layers-behind">
+          <span className={SECTION_TITLE}>Behind a subject</span>
+          <BehindSubjectControl id={selectedId} idPrefix="layers" />
+        </div>
+      )}
     </div>
   );
 }

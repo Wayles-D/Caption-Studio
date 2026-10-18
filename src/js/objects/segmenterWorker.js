@@ -55,7 +55,7 @@ async function load(encoderUrl, decoderUrl) {
 }
 
 self.onmessage = async (e) => {
-  const { id, encoderUrl, decoderUrl, image, width, height, coords, labels, maskInput, origWidth, origHeight } = e.data || {};
+  const { id, encoderUrl, decoderUrl, image, width, height, coords, labels, maskInput, origWidth, origHeight, refine } = e.data || {};
   try {
     const { encoder, decoder } = await load(encoderUrl, decoderUrl);
     const t0 = performance.now();
@@ -64,14 +64,30 @@ self.onmessage = async (e) => {
     const embeddings = image_embeddings.location && image_embeddings.location !== 'cpu'
       ? new ort.Tensor('float32', await image_embeddings.getData(true), image_embeddings.dims)
       : image_embeddings;
-    const out = await decoder.run({
+    const decode = (mask, has) => decoder.run({
       image_embeddings: embeddings,
       point_coords: new ort.Tensor('float32', Float32Array.from(coords), [1, coords.length / 2, 2]),
       point_labels: new ort.Tensor('float32', Float32Array.from(labels), [1, labels.length]),
-      mask_input: new ort.Tensor('float32', maskInput || new Float32Array(256 * 256), [1, 1, 256, 256]),
-      has_mask_input: new ort.Tensor('float32', new Float32Array([maskInput ? 1 : 0]), [1]),
+      mask_input: new ort.Tensor('float32', mask || new Float32Array(256 * 256), [1, 1, 256, 256]),
+      has_mask_input: new ort.Tensor('float32', new Float32Array([has ? 1 : 0]), [1]),
       orig_im_size: new ort.Tensor('float32', new Float32Array([origHeight, origWidth]), [2])
     });
+/**
+ * SAM REFINEMENT. The encoder is the expensive part and has already run for
+ * this crop; the decoder is nearly free. Feeding the first mask BACK to the
+ * decoder as its mask_input — the standard SAM refinement step — lets it
+ * reconsider with a shape to work from, and is what recovers thin
+ * extremities: an outstretched arm, fingers, a carried bag, which a single
+ * box-prompted pass routinely leaves out (measured on real footage).
+ *
+ * The better of the two is kept, by the model's OWN predicted IoU, so a
+ * refinement that made things worse is simply not used.
+ */
+    let out = await decode(maskInput, !!maskInput);
+    if (refine) {
+      const again = await decode(out.low_res_masks.data, true);
+      if (again.iou_predictions.data[0] >= out.iou_predictions.data[0]) out = again;
+    }
     // Copies: an output may be a view into the runtime's own memory, which must not be transferred away.
     const logits = new Float32Array(out.masks.data);
     const lowRes = new Float32Array(out.low_res_masks.data);
