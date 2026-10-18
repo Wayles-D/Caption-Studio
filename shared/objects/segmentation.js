@@ -69,13 +69,41 @@ export const DEFAULT_SEGMENTATION_CONFIG = {
    */
   step: 0.4,
   /** The mask grid's long side (cells). */
-  gridLongSide: 192,
-  /** The mask frame: the tracked box widened by this much of its size on every side (limbs, hair, a raised arm). */
+  gridLongSide: 256,
+  /**
+   * The mask frame: the tracked box widened by this much of its size on every
+   * side. 0.35 (matching cropPad, so nothing the model saw is discarded) was
+   * tried and REVERTED: masks never reached the 0.2 frame edge on real
+   * footage (measured: 0.0% of mask cells on the edge), so it bought nothing,
+   * and the wider frame let a mask reach the person crossing in front —
+   * spill onto them went 11% → 41% against ground truth.
+   */
   margin: 0.2,
   /** The crop the model looks at: the box widened by this much of its size (context helps the model). */
   cropPad: 0.35,
   /** Whether the previous keyframe's mask prompts the next (temporal stability). */
-  usePreviousMask: true
+  usePreviousMask: true,
+  /**
+   * EXTRA KEYFRAMES WHERE THE SHAPE MOVES (the "in-between" pass).
+   *
+   * The fixed grid above is the identity authority and must not be disturbed
+   * — measured three times now, moving WHICH moments get judged breaks
+   * identity at a crossing (spill onto the other person 11% → 41%). But a
+   * hand travels a long way in 0.4s, and the morph between two keyframes
+   * matches neither position: a layer behind the subject then shows through
+   * the real hand, and the hand looks cut off.
+   *
+   * So a SECOND pass adds keyframes half way between grid points whose masks
+   * disagree (the shape moved). They may only ADD DETAIL: an extra keyframe
+   * is kept only if it is confident and clean, and it can never hide the
+   * subject or change where a gap is. Every visibility decision still belongs
+   * to the grid, so identity behaves exactly as it was validated.
+   */
+  refineMotion: true,
+  /** Neighbouring masks less alike than this moved enough to be worth a keyframe between them. */
+  refineBelowIoU: 0.82,
+  /** Never more than this many extra keyframes per grid step (keeps the cost bounded). */
+  refineMaxPerStep: 1
 };
 
 export const MASK_LEVELS = { high: 0.75, medium: 0.5 };
@@ -105,7 +133,8 @@ export function segmentationCacheKey(trackKey, track, config = DEFAULT_SEGMENTAT
   if (!trackKey || !track) return null;
   const c = { ...DEFAULT_SEGMENTATION_CONFIG, ...config };
   return `${trackKey}|seg:${SEGMENTER.id}@${SEGMENTER.version}|v${SEGMENTATION_ANALYSIS_VERSION}`
-    + `|s${c.step}g${c.gridLongSide}m${c.margin}p${c.cropPad}${c.usePreviousMask ? 'M' : ''}|t${trackSignature(track)}`;
+    + `|s${c.step}g${c.gridLongSide}m${c.margin}p${c.cropPad}${c.usePreviousMask ? 'M' : ''}`
+    + `${c.refineMotion ? `r${c.refineBelowIoU}-${c.refineMaxPerStep}` : ''}|t${trackSignature(track)}`;
 }
 
 /** Whether a stored segmentation is authoritative for this track and settings. */
@@ -474,6 +503,9 @@ export async function segmentTrack(opts) {
   const grid = gridFor(firstBox?.box || track.samples[0].box, W, H, config.gridLongSide);
   const keyframes = [];
   const masks = [];
+  // Per keyframe, what the model needs to prompt the NEXT one from it. Kept
+  // only for the length of the job (the in-between pass reads it), never stored.
+  const chain = [];
   let previous = null;
   let cancelled = false;
   let runs = 0;
@@ -508,6 +540,7 @@ export async function segmentTrack(opts) {
     const mask = r.judged.hidden ? new Uint8Array(grid.width * grid.height) : r.alpha;
     keyframes.push(keyframe);
     masks.push(mask);
+    chain.push(r.judged.hidden ? null : { alpha: r.alpha, lowRes: r.out.lowRes, crop: r.crop, box: r.at.box });
     opts.onKeyframe?.({
       time: r.time, box: r.at.box, state: r.at.state, negatives: r.negatives, predictedIoU: r.out.iou, agreement: boxAgreement(r.alpha, grid, config.margin),
       spill: r.spill, overlap: r.overlap, temporal: r.consistency, hidden: r.judged.hidden, confidence: r.judged.confidence,
@@ -545,6 +578,58 @@ export async function segmentTrack(opts) {
     t = cand;
     opts.onProgress?.(keyframes.length, estimate());
   }
+  // --- The in-between pass: detail where the shape moved -------------------
+  //
+  // Only between two VISIBLE neighbours on the grid, never across a gap, and
+  // only where their masks actually disagree. An extra keyframe that comes
+  // back hidden, unconfident or leaking onto someone else is DISCARDED — the
+  // morph between the two grid keyframes is used there, exactly as before.
+  if (config.refineMotion && !cancelled && keyframes.length > 1) {
+    const extra = [];
+    for (let i = 0; i + 1 < keyframes.length; i++) {
+      if (opts.isCancelled?.()) { cancelled = true; break; }
+      const a = keyframes[i];
+      const b = keyframes[i + 1];
+      if (a.hidden || b.hidden) continue;
+      const span = b.time - a.time;
+      if (span <= config.step * 0.6 || span > config.step * 1.6) continue;
+      if (inGap((a.time + b.time) / 2)) continue;
+      if (gridIoU(masks[i], masks[i + 1]) >= config.refineBelowIoU) continue;
+      for (let k = 1; k <= config.refineMaxPerStep; k++) {
+        const mid = a.time + (span * k) / (config.refineMaxPerStep + 1);
+        // Prompted by its left neighbour, exactly as the chain prompts itself —
+        // an in-between keyframe with no mask to start from came out worse than
+        // the morph it replaced (measured: clear-view IoU 0.893 → 0.883).
+        previous = chain[i];
+        const r = await segmentAt(mid);
+        if (!r || r.judged.hidden) continue;
+        // It must agree with the neighbours it sits between — an extra
+        // keyframe is detail, never a new opinion about what the object is.
+        const agrees = Math.max(gridIoU(r.alpha, masks[i]), gridIoU(r.alpha, masks[i + 1]));
+        if (agrees < 0.5 || r.spill > MAX_SPILL) continue;
+        extra.push({
+          keyframe: { time: mid, confidence: +r.judged.confidence.toFixed(3), level: maskLevel(r.judged.confidence), state: r.at.state },
+          mask: r.alpha
+        });
+        opts.onKeyframe?.({
+          time: mid, box: r.at.box, state: r.at.state, negatives: r.negatives, predictedIoU: r.out.iou,
+          agreement: boxAgreement(r.alpha, grid, config.margin), spill: r.spill, overlap: r.overlap,
+          temporal: agrees, hidden: false, confidence: r.judged.confidence, refined: true,
+          keyframe: extra[extra.length - 1].keyframe, mask: r.alpha, grid, config
+        });
+      }
+      opts.onProgress?.(keyframes.length + extra.length, keyframes.length + extra.length + 1);
+    }
+    // Merged back in time order, so everything downstream sees one list.
+    extra.forEach(({ keyframe, mask }) => {
+      let at = keyframes.findIndex((k) => k.time > keyframe.time);
+      if (at === -1) at = keyframes.length;
+      keyframes.splice(at, 0, keyframe);
+      masks.splice(at, 0, mask);
+      chain.splice(at, 0, null);
+    });
+  }
+
   const record = buildSegmentation({ track, trackKey: opts.trackKey, config, grid, keyframes, cancelled });
   record.modelRuns = runs;
   return { record, masks };
@@ -697,6 +782,9 @@ export function createMaskReader(record, rleParts) {
   };
   const reader = {
     record,
+    // The run-length bytes themselves, kept so a consumer that must SEND the
+    // masks on (the export payload) hands over exactly what was read here.
+    parts: rleParts,
     mask: (i) => keep(cache, i, () => decodeRLE(rleParts[i], n)),
     sdf: (i) => keep(sdfs, i, () => signedDistance(reader.mask(i), record.grid))
   };

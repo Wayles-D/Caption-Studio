@@ -15,11 +15,105 @@ import * as effects from '../js/components/objectEffects.js';
 import * as segmentation from '../js/components/objectSegmentation.js';
 import { DETECTION_MODELS, DEFAULT_MODEL_ID } from '../../shared/objects/detections.js';
 import { OBJECT_EFFECT_TYPES, OBJECT_EFFECT_LABELS } from '../../shared/objects/effects.js';
+import { BACKGROUND_MODES, BACKGROUND_MODE_LABELS, MAX_EXPAND, MAX_FEATHER } from '../../shared/objects/subject.js';
+import * as imageLayers from '../js/components/imageLayers.js';
 import { SELECT, Slider as SharedSlider, Toggle, ColorRow, TimeField } from './LayerInspectorControls.jsx';
 
 const EFFECT_API = { get: effects.getObjectEffect, update: effects.updateObjectEffect };
 const Slider = (props) => <SharedSlider api={EFFECT_API} {...props} />;
 const pct = (v) => `${Math.round(v * 100)}%`;
+
+/**
+ * SUBJECT ISOLATION (shared/objects/subject.js): what goes behind the object
+ * once its own pixels are kept. It needs a SEGMENTATION of its track — the
+ * mask is where the object ends and the background begins — so when there
+ * isn't one it says so instead of silently drawing nothing.
+ */
+function BackgroundEditor({ effect, colour }) {
+  const id = effect.id;
+  const a = effect.appearance;
+  const look = (fields, opts) => effects.patchObjectEffectAppearance(id, fields, opts);
+  const track = effects.getEffectTrack(effect);
+  const record = track ? segmentation.getSegmentationFor(effect.trackKey, track) : null;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const pick = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const asset = await imageLayers.importImageAsset(file);
+      look({ imageAssetId: asset.assetId, mode: 'image' });
+    } catch (err) {
+      setError(err?.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      {!record && (
+        <p className={HINT} id="object-effect-needs-mask">
+          This needs the object’s exact pixels. Press “Segment object” above first — until then the video is left as it is.
+        </p>
+      )}
+      <div className="flex gap-1" id="object-background-modes">
+        {BACKGROUND_MODES.map((m) => (
+          <button
+            type="button" key={m} id={`object-background-mode-${m}`} data-mode={m}
+            className={`h-7 flex-1 rounded-[3px] border text-[11px] font-bold cursor-pointer ${a.mode === m ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+            onClick={() => look({ mode: m })}
+          >{BACKGROUND_MODE_LABELS[m]}</button>
+        ))}
+      </div>
+      {a.mode === 'transparent' && <p className={HINT}>The canvas shows through where the object isn’t. A video file has no transparency, so the exported frame carries the canvas’s own background.</p>}
+      {a.mode === 'color' && colour('Background')}
+      {a.mode === 'image' && (
+        <div className="flex flex-col gap-2" id="object-background-image">
+          <label className={`${BTN} flex items-center justify-center`}>
+            {busy ? 'Adding…' : a.imageAssetId ? 'Change image' : 'Choose image'}
+            <input type="file" accept="image/*" className="hidden" id="object-background-file" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
+          {error && <span className="text-[11px] text-[var(--text-primary)]">{error}</span>}
+          {!a.imageAssetId && !error && <p className={HINT}>No image yet — the video is left as it is until you choose one.</p>}
+        </div>
+      )}
+      <Slider id="object-effect-opacity" layerId={id} label="Opacity" value={a.opacity} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ opacity: v }, o)} />
+      <Slider id="object-effect-expand" layerId={id} label="Grow edge" value={a.expand} min={0} max={MAX_EXPAND} step={1} unit="px" onLive={(v, o) => look({ expand: v }, o)} />
+      <Slider id="object-effect-feather" layerId={id} label="Soften edge" value={a.feather} min={0} max={MAX_FEATHER} step={1} unit="px" onLive={(v, o) => look({ feather: v }, o)} />
+    </>
+  );
+}
+
+/**
+ * THE SHAPE an effect takes: the object's own (its segmentation mask —
+ * shared/objects/effectShapes.js) or its tracked box. The object's shape is
+ * the default, and needs a segmentation; without one the effect falls back to
+ * the box on its own and the control says so.
+ */
+function ShapeChoice({ effect }) {
+  const track = effects.getEffectTrack(effect);
+  const record = track ? segmentation.getSegmentationFor(effect.trackKey, track) : null;
+  const shape = effect.appearance.shape === 'box' ? 'box' : 'object';
+  return (
+    <div className="flex flex-col gap-1.5" id="object-effect-shape">
+      <div className="flex gap-1">
+        {[['object', 'Object’s shape'], ['box', 'Box']].map(([value, label]) => (
+          <button
+            type="button" key={value} id={`object-effect-shape-${value}`} data-shape={value}
+            className={`h-7 flex-1 rounded-[3px] border text-[11px] font-bold cursor-pointer ${shape === value ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+            onClick={() => effects.patchObjectEffectAppearance(effect.id, { shape: value })}
+          >{label}</button>
+        ))}
+      </div>
+      {shape === 'object' && !record && (
+        <p className={HINT} id="object-effect-shape-note">
+          Needs the object’s exact pixels — press “Segment object” above. Until then this follows its box.
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** The selected effect's settings — what each type has, and nothing it doesn't. */
 function EffectEditor({ effect }) {
@@ -32,7 +126,8 @@ function EffectEditor({ effect }) {
     <ColorRow id="object-effect-color" label={label} value={a.color} openField={openField} setOpenField={setOpenField} apply={(hex, o) => look({ color: hex }, o)} />
   );
   const padding = <Slider id="object-effect-padding" layerId={id} label="Padding" value={a.padding} min={0} max={0.6} step={0.01} format={pct} onLive={(v, o) => look({ padding: v }, o)} />;
-  const roundness = <Slider id="object-effect-roundness" layerId={id} label="Roundness" value={a.cornerRadius} min={0} max={0.5} step={0.01} format={pct} onLive={(v, o) => look({ cornerRadius: v }, o)} />;
+  const onBox = a.shape === 'box';
+  const roundness = !onBox ? null : <Slider id="object-effect-roundness" layerId={id} label="Roundness" value={a.cornerRadius} min={0} max={0.5} step={0.01} format={pct} onLive={(v, o) => look({ cornerRadius: v }, o)} />;
   return (
     <div className="flex flex-col gap-3 border-t border-[var(--border-color)] pt-3" id="object-effect-editor" data-type={effect.type} data-linked={linked ? 'yes' : 'no'}>
       <div className="flex items-center justify-between gap-2">
@@ -47,6 +142,7 @@ function EffectEditor({ effect }) {
         </p>
       )}
       <Toggle id="object-effect-enabled" label="Show" on={effect.enabled} onChange={(on) => effects.updateObjectEffect(id, { enabled: on })} />
+      {effect.type !== 'background' && <ShapeChoice effect={effect} />}
       <div className="flex gap-2">
         <TimeField id="object-effect-start" label="Start" value={effect.start} onCommit={(v) => effects.trimObjectEffect(id, 'start', v)} />
         <TimeField id="object-effect-end" label="End" value={effect.end} onCommit={(v) => effects.trimObjectEffect(id, 'end', v)} />
@@ -78,6 +174,19 @@ function EffectEditor({ effect }) {
           {roundness}
         </>
       )}
+      {effect.type === 'flicker' && (
+        <>
+          {colour('Flash colour')}
+          <Slider id="object-effect-rate" layerId={id} label="Speed" value={a.rate} min={1} max={30} step={1} format={(v) => `${v}/s`} onLive={(v, o) => look({ rate: v }, o)} />
+          <Slider id="object-effect-intensity" layerId={id} label="Harshness" value={a.intensity} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ intensity: v }, o)} />
+          <Slider id="object-effect-opacity" layerId={id} label="Opacity" value={a.opacity} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ opacity: v }, o)} />
+          {padding}
+          <p className={HINT}>
+            Pairs with the flicker sounds in the library — “Flicker (1)”, “Flicker (2)” or “Light Flicker”.
+          </p>
+        </>
+      )}
+      {effect.type === 'background' && <BackgroundEditor effect={effect} colour={colour} />}
       {effect.type === 'blur' && (
         <>
           <Slider id="object-effect-strength" layerId={id} label="Strength" value={a.strength} min={0} max={1} step={0.01} format={pct} onLive={(v, o) => look({ strength: v }, o)} />
@@ -114,7 +223,7 @@ function EffectsSection() {
               </button>
             ))}
           </div>
-          <p className={HINT}>Outline, glow, spotlight and blur follow the object’s box — not yet its exact shape.</p>
+          <p className={HINT}>Once the object is segmented, outline, glow, spotlight and blur take its exact shape. Until then they follow its box.</p>
         </>
       ) : (
         <p className={HINT}>Select a tracked object to add an effect to it.</p>

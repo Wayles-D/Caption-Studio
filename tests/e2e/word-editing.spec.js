@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
 
+// The dropdowns are custom lists (so hovering an item can preview it): open, then choose.
+async function pickOption(page, selector, value) {
+  await page.locator(selector).click();
+  await page.locator(`[data-hover-option="${value}"]`).click();
+}
+
 // Editing single words, driven through the real UI:
 //  - a word typed in the transcript reaches the video, and stays there when
 //    the captions are rebuilt from the transcript;
@@ -128,8 +134,8 @@ test('one word of a cinematic card takes its own case and font, from the card\'s
   await expect(page.locator('#textel-word-editing')).toBeVisible();
   await expect(page.locator('#textel-word-editing')).toContainText('OFFICE');
 
-  await page.locator('#word-case-select').selectOption('lowercase');
-  await page.locator('#word-font-select').selectOption('Pacifico');
+  await pickOption(page, '#word-case-select', 'lowercase');
+  await pickOption(page, '#word-font-select', 'Pacifico');
   const el = await card(page);
   expect(el.wordTransforms).toEqual({ w1: { style: { textCase: 'lowercase', fontFamily: 'Pacifico' } } });
   expect(el.style.textCase).toBe('uppercase');

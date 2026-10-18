@@ -25,7 +25,10 @@ import {
   createAudioTrack,
   normalizeSoundEvent,
   normalizeAudioTrack,
-  getAudioTrackDuration
+  getAudioTrackDuration,
+  soundEventNaturalDuration,
+  soundEventDuration,
+  isSoundEventTrimmed
 } from '../../../shared/audioTimeline.js';
 import {
   resolveSoundMapping,
@@ -36,6 +39,7 @@ import {
 } from '../../../shared/soundProfiles.js';
 import { selectDirectedMoments, resolveDirectedPlacement, resolveRunDurations } from '../../../shared/sfxDirection.js';
 import { getSoundDefinition, isKnownSoundId } from '../../../shared/soundRegistry.js';
+import { countSyllables, syllableTimes } from '../../../shared/syllables.js';
 
 /** The playhead — the same `#preview-video` element every other part of the editor treats as the single source of time. */
 export function getPlayheadTime() {
@@ -158,6 +162,71 @@ export function applySoundEventVolumeToAll(sourceId, targetIds = null) {
 
 export function moveSoundEvent(id, startTime, options) {
   return updateSoundEvent(id, { startTime: clampToTimeline(startTime) }, options);
+}
+
+/**
+ * ONE SOUND PER SYLLABLE of a spoken word (shared/syllables.js).
+ *
+ * The transcript gives the word its stretch of time; the syllables are
+ * spread across it and a copy of the sound is placed on each. They are
+ * ORDINARY sound effects afterwards — each can be moved, trimmed or deleted
+ * on its own — because a word's syllables are rarely evenly spaced in real
+ * speech and the last word on that belongs to the person listening.
+ *
+ * One history entry for the lot, so Undo removes the whole set.
+ *
+ * @returns {object[]} the events placed
+ */
+export function addSyllableSounds(soundId, word, count) {
+  const times = syllableTimes(word, count ?? countSyllables(word?.text ?? word?.word));
+  if (!times.length) return [];
+  const made = times.map((t) => createSoundEvent(soundId, clampToTimeline(t)));
+  writeSoundEvents([...getSoundEvents(), ...made], true);
+  return made;
+}
+
+/** The shortest a trimmed sound effect may get — below this it is inaudible anyway. */
+export const MIN_SOUND_DURATION = 0.05;
+
+/**
+ * TRIMS a sound effect at one edge, to a TIMELINE time.
+ *
+ *   start edge  the clip keeps its place on the timeline and plays from
+ *               further INTO the asset, so its tail still lands where it did
+ *               — which is the point: a riser whose tail must hit a beat is
+ *               trimmed from the head, not moved.
+ *   end edge    the clip simply stops sooner.
+ */
+export function trimSoundEvent(id, edge, time, options) {
+  const event = getSoundEvent(id);
+  if (!event) return null;
+  const natural = soundEventNaturalDuration({ ...event, trimStart: 0 });
+  const played = soundEventDuration(event);
+  const rate = event.playbackRate || 1;
+  if (edge === 'start') {
+    const end = event.startTime + (played ?? 0);
+    const nextStart = Math.max(0, Math.min(time, end - MIN_SOUND_DURATION));
+    // Moving the head along the timeline means skipping that much of the
+     // asset, so what is heard at any later instant does not change.
+    const extra = (nextStart - event.startTime) * rate;
+    const trimStart = Math.max(0, (event.trimStart || 0) + extra);
+    if (natural != null && trimStart >= natural - MIN_SOUND_DURATION) return event;
+    return updateSoundEvent(id, {
+      startTime: nextStart,
+      trimStart,
+      duration: Math.max(MIN_SOUND_DURATION, end - nextStart)
+    }, options);
+  }
+  const maxEnd = event.startTime + (soundEventNaturalDuration(event) ?? Infinity);
+  const end = Math.min(Math.max(time, event.startTime + MIN_SOUND_DURATION), maxEnd);
+  return updateSoundEvent(id, { duration: end - event.startTime }, options);
+}
+
+/** Puts a trimmed sound effect back to the whole asset, from its current place. */
+export function resetSoundEventTrim(id) {
+  const event = getSoundEvent(id);
+  if (!event || !isSoundEventTrimmed(event)) return null;
+  return updateSoundEvent(id, { trimStart: 0, duration: null }, { recordHistory: true });
 }
 
 /**

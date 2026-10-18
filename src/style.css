@@ -329,7 +329,8 @@ body.light-theme {
   display: none;
 }
 
-.captions-canvas.active {
+.captions-canvas.active,
+#captions-keyword-canvas.active {
   display: block;
 }
 
@@ -2266,4 +2267,122 @@ body.light-theme {
   margin-top: 10px;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* --- Selection options in the right-hand panel ------------------------------
+   The caption/word toolbar (scope buttons, animation, reset, rotation) is the
+   same element that used to float over the video; canvasTransform.js moves it
+   into #selection-options-host on desktop (see setSelectionOptionsHost). The
+   rules above place it absolutely above the selection box, so in the panel it
+   is put back in normal flow and given the panel's width. */
+.selection-options-title {
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.caption-transform-toolbar.in-panel {
+  position: static;
+  transform: none;
+  max-width: none;
+  justify-content: flex-start;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  gap: 6px;
+}
+
+/* Bigger, easier-to-hit targets than the compact canvas version. */
+.caption-transform-toolbar.in-panel .caption-transform-scope-btn,
+.caption-transform-toolbar.in-panel .caption-transform-reset-btn {
+  padding: 5px 10px;
+  border-color: var(--border-color);
+}
+
+.caption-transform-toolbar.in-panel .caption-transform-scope-btn.active {
+  border-color: var(--accent-color);
+}
+
+.caption-transform-toolbar.in-panel select {
+  max-width: 100%;
+}
+
+/* A clip while it is being dragged (timelinePanel.js): lifted, and showing
+   where it will land — the lanes cannot rebuild mid-drag, so the element
+   itself moves. */
+.timeline-text-clip.is-dragging,
+.timeline-audio-clip.is-dragging,
+.timeline-caption-clip.is-dragging {
+  z-index: 5;
+  opacity: 0.92;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  outline: 1px solid var(--accent-color);
+}
+
+.timeline-clip-dragtime {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--accent-color);
+  color: #071318;
+  font: 700 10px/1.4 ui-monospace, monospace;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* A sound effect is a REAL CLIP (timelinePanel.js): as long as the sound it
+   plays, showing that sound's waveform, trimmable at both ends. */
+.timeline-sfx-clip.is-trimming {
+  border-radius: var(--radius-sm);
+  margin-left: 0;
+  padding-right: 18px;
+  overflow: hidden;
+  min-width: 14px;
+}
+
+.timeline-sfx-clip-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+/* The dot and label sit above the trace. */
+.timeline-sfx-clip.is-trimming .timeline-sfx-clip-dot,
+.timeline-sfx-clip.is-trimming .timeline-sfx-clip-label {
+  position: relative;
+  z-index: 1;
+}
+
+.timeline-sfx-clip.is-trimming .timeline-sfx-clip-label {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.timeline-sfx-clip-full {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.timeline-sfx-clip-full:hover {
+  background: var(--accent-color);
+  color: #071318;
 }

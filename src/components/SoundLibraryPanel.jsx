@@ -17,6 +17,7 @@
  * what lets "underline" find the pencil, pen and marker underlines at once.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { countSyllables } from '../../shared/syllables.js';
 import { listSoundSections } from '../../shared/soundRegistry.js';
 import { previewSound } from '../js/components/audioEngine.js';
 import * as audioTimeline from '../js/components/audioTimeline.js';
@@ -38,9 +39,22 @@ const ROW = `w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm
   text-left cursor-pointer transition-colors duration-150
   hover:border-[var(--accent-color)] hover:bg-[rgba(0,246,172,0.06)]`;
 
-export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTextElementId = null, placeAt = null }) {
+const STEP_BTN = `h-6 w-6 rounded-[3px] border border-[var(--border-color)] bg-transparent text-[var(--text-secondary)]
+  text-[12px] leading-none cursor-pointer hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]`;
+
+export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTextElementId = null, placeAt = null, placeWord = null }) {
   const rootRef = useRef(null);
+  const searchRef = useRef(null);
   const [query, setQuery] = useState('');
+  // ONE SOUND PER SYLLABLE of the word a ♪ came from (shared/syllables.js).
+  // The count is read from the word's SPELLING, which English supports
+  // poorly — "rhythm" counts 1, "business" counts 3 — so it is shown and can
+  // be corrected before anything is placed.
+  const wordText = placeWord?.text ?? placeWord?.word ?? '';
+  const guessed = wordText ? countSyllables(wordText) : 0;
+  const [syllables, setSyllables] = useState(guessed);
+  const [perSyllable, setPerSyllable] = useState(false);
+  useEffect(() => { setSyllables(guessed); setPerSyllable(false); }, [guessed, wordText]);
   const sections = useMemo(() => listSoundSections(), []);
   const visible = useMemo(() => sections
     .map((section) => ({
@@ -56,6 +70,22 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
   // would be the same list with a different verb, and would then have to be
   // kept in step with this one every time the library changed.
   const replacing = typeof replaceTargetId === 'string' && replaceTargetId;
+
+  // Typing starts straight away. The panel opens because you asked for a sound,
+  // and the first thing anyone does next is look one up — making them click the
+  // search box first is a step with no purpose.
+  //
+  // The dependencies matter: pressing Replace on a DIFFERENT capsule while the
+  // panel is already open does not remount it, it only changes the target, so
+  // focusing on mount alone would leave focus wherever that click put it.
+  useEffect(() => {
+    const input = searchRef.current;
+    if (!input) return;
+    input.focus();
+    // Select what is already typed, so a new search replaces the old one
+    // instead of being appended to it.
+    input.select();
+  }, [replaceTargetId, attachToTextElementId, placeAt]);
 
   useEffect(() => {
     // Closing on an outside press is registered on POINTERDOWN, matching how
@@ -101,6 +131,7 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
       <div className="px-3 pt-3 shrink-0">
         <input
           id="sound-library-search"
+          ref={searchRef}
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -117,6 +148,26 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
             ? 'Swaps the sound on the selected effect. Its timing, volume and fades stay as they are.'
             : 'Plays at the playhead. ▶ auditions it without adding anything.'}
         </p>
+
+        {placeWord && guessed > 0 && (
+          <div className="flex flex-col gap-2 py-2 border-b border-[var(--border-color)]" id="sfx-syllable-mode">
+            <label className="flex items-center gap-2 text-[12px] text-[var(--text-primary)] cursor-pointer">
+              <input
+                type="checkbox" id="sfx-syllable-toggle" checked={perSyllable}
+                onChange={(e) => setPerSyllable(e.target.checked)}
+              />
+              <span>One per syllable of “{wordText}”</span>
+            </label>
+            {perSyllable && (
+              <div className="flex items-center gap-2">
+                <button type="button" id="sfx-syllable-less" className={STEP_BTN} onClick={() => setSyllables((n) => Math.max(1, n - 1))}>−</button>
+                <span className="text-[12px] font-bold text-[var(--accent-color)]" id="sfx-syllable-count">{syllables}</span>
+                <button type="button" id="sfx-syllable-more" className={STEP_BTN} onClick={() => setSyllables((n) => Math.min(12, n + 1))}>+</button>
+                <span className="text-[11px] text-[var(--text-muted)]">syllable{syllables === 1 ? '' : 's'} — pick a short, dry sound below</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {visible.length === 0 && (
           <p id="sound-library-empty" className="text-[12px] text-[var(--text-muted)] m-0 pt-4">No sound matches “{query}”.</p>
@@ -162,6 +213,9 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
                           // its first frame and linked, so it moves with it.
                           else if (attachToTextElementId) textElements.addLinkedSound(attachToTextElementId, sound.id);
                           // From a transcript word's ♪: on that word's start.
+                          // One per syllable of the word the ♪ came from: a
+                          // copy on each, spread across the word's own time.
+                          else if (perSyllable && placeWord) audioTimeline.addSyllableSounds(sound.id, placeWord, syllables);
                           else if (Number.isFinite(placeAt)) audioTimeline.addSoundEvent(sound.id, placeAt);
                           else audioTimeline.addSoundEvent(sound.id);
                           onClose();

@@ -44,8 +44,14 @@ async function setup(page, { count = 1 } = {}) {
     window.__textElements.selectTextElement(window.__appState.textElements[0].id);
   }, count);
 
-  await page.getByRole('button', { name: 'Overlay', exact: true }).click();
+  // Selecting a text element already opens this panel (App.jsx's selection
+  // effect) and the tool button toggles, so an unconditional click would
+  // shut it again and leave every control below missing.
+  if (!(await page.locator('#textel-content').count())) {
+    await page.getByRole('button', { name: 'Overlay', exact: true }).click();
+  }
   await page.waitForTimeout(500);
+  await page.locator('#textel-content').waitFor();
 }
 
 const elements = (page) => page.evaluate(() => window.__appState.textElements);

@@ -22,6 +22,8 @@ import { syncObjectEffectsCanvas } from './objectEffects.js';
 import { initAudioEngine } from './audioEngine.js';
 import { initKeyboardShortcuts } from './keyboardShortcuts.js';
 import { getCanvasContentRect } from '../utils/canvasGeometry.js';
+import { normalizeOcclusionList, occludedLayersAt, stackWithSubjects } from '../../../shared/objects/occlusion.js';
+import { paintSubjectRun, canOcclude } from './occlusion.js';
 
 // Self-hosted local font loader: fonts are bundled with the project (see
 // backend/fonts/ + shared/fontRegistry.js) and served statically by the
@@ -103,20 +105,40 @@ function ensureWordStyleFontsReady(fontSizePx) {
   const maps = [appState.captionTransforms, ...(appState.textElements || []).map((el) => el?.wordTransforms)];
   maps.filter(Boolean).forEach((overrides) => Object.keys(overrides).forEach((key) => {
     if (!key.startsWith('w')) return;
-    const style = overrides[key]?.style;
-    if (!style) return;
-    const family = style.fontFamily || appState.fontFamily;
-    if (!family) return;
-    // A word asking for italic needs the italic FILE when its family ships
-    // one; for a family that doesn't, resolveFontFace returns the regular
-    // face and paintText draws the synthetic slant instead, so requesting
-    // 'italic' here is correct either way.
-    const faceKey = style.italic ? 'italic' : 'regular';
-    const resolved = resolveFontFace(family, faceKey);
-    loadLocalFontFace(family, faceKey);
-    ensureCanvasFontReady(resolved.familyName, style.fontWeight || '400', fontSizePx, resolved.italic)
-      .then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
+    const entry = overrides[key];
+    if (!entry) return;
+    // EVERY font this word will ever wear, not just the one it wears now: a
+    // KEYFRAMED font lives in entry.keyframes and never touches entry.style,
+    // so loading only the static style would leave the keyframed face
+    // unloaded. The canvas paints synchronously with ctx.font and silently
+    // falls back on a face the browser hasn't got, so the word would simply
+    // render in the wrong font with nothing reported — the same trap the
+    // static per-word font fell into once already.
+    const variants = [];
+    if (entry.style) variants.push(entry.style);
+    (Array.isArray(entry.keyframes) ? entry.keyframes : []).forEach((k) => {
+      const values = k?.values;
+      if (values && (values.fontFamily || values.fontWeight != null)) {
+        variants.push({ ...(entry.style || {}), ...values });
+      }
+    });
+    variants.forEach((style) => loadWordStyleFont(style, fontSizePx));
   }));
+}
+
+/** Loads the one face a word style asks for, redrawing once it lands. */
+function loadWordStyleFont(style, fontSizePx) {
+  const family = style.fontFamily || appState.fontFamily;
+  if (!family) return;
+  // A word asking for italic needs the italic FILE when its family ships
+  // one; for a family that doesn't, resolveFontFace returns the regular
+  // face and paintText draws the synthetic slant instead, so requesting
+  // 'italic' here is correct either way.
+  const faceKey = style.italic ? 'italic' : 'regular';
+  const resolved = resolveFontFace(family, faceKey);
+  loadLocalFontFace(family, faceKey);
+  ensureCanvasFontReady(resolved.familyName, style.fontWeight || '400', fontSizePx, resolved.italic)
+    .then((justLoaded) => { if (justLoaded) syncVideoSubtitles(); });
 }
 
 /**
@@ -307,8 +329,10 @@ function previewRuns(stack, captionBlend) {
   layerRuns(stack).forEach((run) => {
     if (run.kind === 'captions') { merged.push(run); return; }
     const last = merged[merged.length - 1];
-    if (last && last.kind !== 'captions') last.entries.push(...run.entries);
-    else merged.push({ ...run, kind: 'plain', entries: run.entries.slice() });
+    // A SUBJECT run is never merged into its neighbours: the whole point of it
+    // is that it stands between them (shared/objects/occlusion.js).
+    if (last && last.kind !== 'captions' && last.kind !== 'subject' && run.kind !== 'subject') last.entries.push(...run.entries);
+    else merged.push({ ...run, kind: run.kind === 'subject' ? 'subject' : 'plain', entries: run.entries.slice() });
   });
   return merged.filter((run) => run.kind !== 'captions');
 }
@@ -349,16 +373,34 @@ function syncTextElementsCanvas(currentTime, baseStyleParams) {
     imageLayers: appState.imageLayers || [],
     shapeLayers: appState.shapeLayers || []
   });
+  // The SUBJECTS take their places in the stack (V2.2 dynamic occlusion):
+  // everything beneath one is behind it. Nothing is inserted when no
+  // relationship is on, so every other project's stack is what it was.
+  const withSubjects = stackWithSubjects(stack, occludedLayersAt(
+    normalizeOcclusionList(appState.occlusions), currentTime, canOcclude
+  ));
   const captionBlend = getCSSPreviewFromConfig(baseStyleParams).textBlendMode;
-  const runs = previewRuns(stack, captionBlend);
+  const runs = previewRuns(withSubjects, captionBlend);
 
   const textBoxes = [];
   const graphicBoxes = [];
   const used = new Set();
   const slots = { beneath: 0, above: 0 };
   runs.forEach((run) => {
-    const visible = run.entries.filter((entry) => isOnScreen(entry, currentTime));
     const beneath = run.beneathCaptions;
+    if (run.kind === 'subject') {
+      // The video's own pixels, through this subject's mask, on a canvas of
+      // its own — so the layers below it are behind it and those above are in
+      // front. Nothing drawn where there is no mask: the layer beneath simply
+      // shows, as it would without the relationship (see occlusion.js).
+      const canvas = runCanvas(beneath ? slots.beneath++ : slots.above++, beneath);
+      if (!canvas) return;
+      used.add(canvas);
+      if (!paintSubjectRun(canvas, run.entries[0], currentTime)) canvas.classList.remove('active');
+      else canvas.classList.add('active');
+      return;
+    }
+    const visible = run.entries.filter((entry) => isOnScreen(entry, currentTime));
     const canvas = runCanvas(beneath ? slots.beneath++ : slots.above++, beneath);
     if (!canvas) return;
     used.add(canvas);
@@ -392,6 +434,22 @@ function syncTextElementsCanvas(currentTime, baseStyleParams) {
   setGraphicBoxes(graphicBoxes);
 }
 
+/**
+ * Keyword-only blend: the keywords are drawn, with the same layout, on a
+ * canvas of their own that carries the blend mode; the main captions canvas
+ * (drawn without keywords) stays unblended. The exporter composites the same
+ * two layers.
+ */
+function drawKeywordLayer(fontFamily, cssConfig, fontSizePx, drawOpts, draw) {
+  const canvas = document.getElementById('captions-keyword-canvas');
+  if (!canvas) return;
+  const prepped = prepareGraphicsCanvas(canvas, fontFamily, cssConfig.profile.fontWeight, fontSizePx);
+  if (!prepped) return;
+  canvas.style.mixBlendMode = cssConfig.textBlendMode;
+  draw(prepped.ctx, { ...drawOpts, params: { ...drawOpts.params, captionWordLayer: 'keywords' } });
+  canvas.classList.add('active');
+}
+
 function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, params) {
   const fontFamily = cssConfig.text.fontFamily.replace(/'/g, '');
   const fontSizePx = parseFloat(cssConfig.text.fontSize) || 14;
@@ -417,7 +475,11 @@ function drawGraphicsCanvasFrame(canvas, activePhrase, currentTime, cssConfig, p
       return off;
     }
   };
-  drawCaptionFrame(prepped.ctx, drawOpts);
+  const keywordLayer = canvas.id === 'captions-canvas' && cssConfig.keywordOnlyBlend;
+  drawCaptionFrame(prepped.ctx, keywordLayer ? { ...drawOpts, params: { ...params, captionWordLayer: 'normal' } } : drawOpts);
+  if (keywordLayer) {
+    drawKeywordLayer(fontFamily, cssConfig, fontSizePx, drawOpts, drawCaptionFrame);
+  }
   // Same ctx (fonts already loaded into it above) so measureText resolves
   // identically — see measureSentenceFrame's doc comment for the on-canvas
   // transform overlay this feeds (src/js/components/canvasTransform.js).
@@ -456,7 +518,11 @@ function drawGraphicsRollingStackCanvasFrame(canvas, windowChunks, currentTime, 
       return off;
     }
   };
-  drawRollingStackFrame(prepped.ctx, drawOpts);
+  const keywordLayer = canvas.id === 'captions-canvas' && cssConfig.keywordOnlyBlend;
+  drawRollingStackFrame(prepped.ctx, keywordLayer ? { ...drawOpts, params: { ...params, captionWordLayer: 'normal' } } : drawOpts);
+  if (keywordLayer) {
+    drawKeywordLayer(fontFamily, cssConfig, fontSizePx, drawOpts, drawRollingStackFrame);
+  }
   return measureRollingStackFrame(prepped.ctx, drawOpts);
 }
 
@@ -710,7 +776,7 @@ export function applyCSSPreviewStyles() {
   // legacy DOM text-layer fallback path via Object.assign.
   const captionsCanvasEl = document.getElementById('captions-canvas');
   if (captionsCanvasEl) {
-    captionsCanvasEl.style.mixBlendMode = cssConfig.textBlendMode && cssConfig.textBlendMode !== 'normal'
+    captionsCanvasEl.style.mixBlendMode = !cssConfig.keywordOnlyBlend && cssConfig.textBlendMode && cssConfig.textBlendMode !== 'normal'
       ? cssConfig.textBlendMode
       : '';
   }
@@ -732,6 +798,7 @@ export function syncVideoSubtitles() {
   // stale content from a previous mode.
   const captionsCanvas = document.getElementById('captions-canvas');
   if (captionsCanvas) captionsCanvas.classList.remove('active');
+  document.getElementById('captions-keyword-canvas')?.classList.remove('active');
   captionsText.style.visibility = '';
   // Re-shown only by the two graphics-renderer branches below — every other
   // path (demo fallback, Word Mode, non-graphics-renderer CSS fallback)

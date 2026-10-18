@@ -42,10 +42,16 @@ import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 import { normalizeImageLayerList, getImageLayerBoundaryTimes, imageLayerMotionSpans, drawImageLayer } from '../../shared/imageLayer.js';
 import { normalizeShapeLayerList, getShapeLayerBoundaryTimes, shapeLayerMotionSpans, drawShapeLayer } from '../../shared/shapeLayer.js';
 import { resolveLayerStack, layerRuns } from '../../shared/visualLayers.js';
+import { normalizeOcclusionList, occludedLayersAt, stackWithSubjects, isOcclusionActive } from '../../shared/objects/occlusion.js';
 import {
-  normalizeObjectEffectList, resolveObjectEffects, drawObjectEffects, drawObjectEffectMasks, blurSigmas, objectEffectBoundaryTimes
+  normalizeObjectEffectList, resolveObjectEffects, drawObjectEffects, drawObjectEffectMasks, blurSigmas, objectEffectBoundaryTimes, effectUnit, MASK_EFFECT_TYPES, effectMaskTrackKeys
 } from '../../shared/objects/effects.js';
+import { resolveSubjects, drawSubjectBackground, drawMaskAlpha, hasBackgroundEffect, maskWithEdges } from '../../shared/objects/subject.js';
+import { createMaskReader, getMaskAtTime, normalizeSegmentation } from '../../shared/objects/segmentation.js';
+import { getTrackAtTime } from '../../shared/objects/tracking.js';
+import { normalizeVideoStyle } from '../../shared/composition.js';
 import { normalizeTrack } from '../../shared/objects/tracking.js';
+import { videoToComposition } from '../../shared/objects/coordinates.js';
 import { resolveVideoTransformAtTime } from '../../shared/videoTransform.js';
 
 /**
@@ -492,6 +498,60 @@ function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
  *   skipped) and the run's own PNG `filePrefix` (unique per run, so two runs
  *   never write the same file).
  */
+/**
+ * ONE SUBJECT PASS (V2.2 dynamic occlusion) as a stream of PNG mattes: the
+ * subject's own pixels, white-on-nothing, at every sampled instant of the
+ * relationship's span — what the compositor cuts the video with so the layers
+ * beneath this pass end up behind the subject.
+ *
+ * Blank wherever the relationship is off or the segmentation has no mask
+ * there, which leaves those layers fully visible: the V2.1 rule, kept.
+ */
+function buildSubjectMatteSegments(entry, params, readers, tracks, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox) {
+  const relation = normalizeOcclusionList(params.occlusions).find((r) => r.id === entry.relationId);
+  const reader = readers.get(entry.trackKey);
+  const track = tracks.get(entry.trackKey);
+  if (!relation || !reader || !track) return [];
+  const placementAt = (t) => ({
+    canvasWidth,
+    canvasHeight,
+    boxWidth: videoBox?.boxWidth || canvasWidth,
+    boxHeight: videoBox?.boxHeight || canvasHeight,
+    transform: resolveVideoTransformAtTime(params.videoTransform, t)
+  });
+  const from = Math.max(0, relation.start);
+  const to = Math.min(videoDuration, relation.end);
+  if (!(to > from)) return [];
+  const cuts = new Set([0, videoDuration, from, to]);
+  animationSampleTimes(from, to).forEach((t) => { if (t > 0 && t < videoDuration) cuts.add(t); });
+  const boundaries = Array.from(cuts).filter((t) => t >= 0 && t <= videoDuration).sort((a, b) => a - b);
+  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const ctx = canvas.getContext('2d');
+  const offscreen = (w, h) => createCanvas(w, h);
+  const unit = effectUnit(canvasWidth, canvasHeight);
+  const segments = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const start = boundaries[i];
+    const end = boundaries[i + 1];
+    if (end - start < 0.001) continue;
+    const mask = isOcclusionActive(relation, start)
+      ? getMaskAtTime(reader, (t) => getTrackAtTime(track, t), start)
+      : null;
+    if (!mask) { segments.push({ start, end, file: blankFile }); continue; }
+    const place = placementAt(start);
+    const a = videoToComposition({ x: mask.frame.x, y: mask.frame.y }, place);
+    const b = videoToComposition({ x: mask.frame.x + mask.frame.width, y: mask.frame.y }, place);
+    const frameCanvasWidth = Math.hypot((b.x - a.x) * canvasWidth, (b.y - a.y) * canvasHeight);
+    const alpha = maskWithEdges(mask, { expand: relation.grow ?? 4, feather: relation.feather || 0 }, unit, frameCanvasWidth);
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    drawMaskAlpha(ctx, mask, alpha, place, canvasWidth, canvasHeight, offscreen);
+    const file = path.join(outDir, `occ-${entry.relationId}-${Math.round(start * 1000)}.png`);
+    fs.writeFileSync(file, canvas.toBuffer('image/png'));
+    segments.push({ start, end, file });
+  }
+  return segments.some((x) => x.file !== blankFile) ? segments : [];
+}
+
 function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources = null, filePrefix = 'run' } = {}) {
   // What this run can actually draw: text elements by the preview's own "does
   // it draw anything" rule (an interlude with no words still draws its
@@ -671,8 +731,44 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
  * @param {{boxWidth:number, boxHeight:number}} videoBox the video's resting box on the canvas (videoDecoration.js)
  * @returns {{overlay: object[], masks: {sigma:number, segments:object[]}[]}} empty lists for a project without effects
  */
-function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox) {
-  const none = { overlay: [], masks: [] };
+/**
+ * The SEGMENTATION masks that came with the effects (params.
+ * objectSegmentations: only the tracks whose effects need pixels), as mask
+ * readers — the very bytes the editor's preview reads, so the export cannot
+ * draw a different mask from the one the user saw.
+ * @returns {Map<string, {reader:object}>} trackKey → reader
+ */
+function buildTracks(raw) {
+  let value = raw;
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { value = null; }
+  }
+  const out = new Map();
+  Object.entries(value && typeof value === 'object' ? value : {}).forEach(([key, item]) => {
+    const track = normalizeTrack(item);
+    if (track) out.set(key, track);
+  });
+  return out;
+}
+
+function buildMaskReaders(params, field = 'objectSegmentations') {
+  let raw = params[field];
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { raw = null; }
+  }
+  const out = new Map();
+  Object.entries(raw && typeof raw === 'object' ? raw : {}).forEach(([trackKey, entry]) => {
+    const record = normalizeSegmentation(entry?.record);
+    if (!record || !entry?.masks) return;
+    const parts = String(entry.masks).split(' ').filter(Boolean).map((b64) => new Uint8Array(Buffer.from(b64, 'base64')));
+    if (parts.length !== record.keyframes.length) return;
+    out.set(trackKey, createMaskReader(record, parts));
+  });
+  return out;
+}
+
+function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox, imageSources) {
+  const none = { overlay: [], masks: [], background: [], subjectMask: [] };
   const effects = normalizeObjectEffectList(params.objectEffects).filter((e) => e.enabled !== false && e.start < videoDuration);
   if (!effects.length) return none;
   let rawTracks = params.objectEffectTracks;
@@ -710,12 +806,29 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
   const overlay = [];
   const masks = sigmas.map((sigma) => ({ sigma, segments: [] }));
   const offscreen = (w, h) => createCanvas(w, h);
+  // SUBJECT ISOLATION (shared/objects/subject.js): two more streams — what
+  // goes behind the object, and the object's own alpha matte. Both empty
+  // unless a 'background' effect is on, so nothing else changes.
+  const readers = effectMaskTrackKeys(usable).length ? buildMaskReaders(params) : new Map();
+  const maskAt = (effect, time) => {
+    const reader = readers.get(effect.trackKey);
+    const track = tracks.get(effect.trackKey);
+    return reader && track ? getMaskAtTime(reader, (t) => getTrackAtTime(track, t), time) : null;
+  };
+  const canvasBackground = params.composition?.background?.color || null;
+  // The video's own rounded corners (it may arrive as JSON, as every param may).
+  let rawStyle = params.videoStyle;
+  if (typeof rawStyle === 'string') { try { rawStyle = JSON.parse(rawStyle); } catch { rawStyle = null; } }
+  const videoCornerRadius = normalizeVideoStyle(rawStyle).cornerRadius;
+  const unit = effectUnit(canvasWidth, canvasHeight);
+  const background = [];
+  const subjectMask = [];
 
   for (let i = 0; i < boundaries.length - 1; i++) {
     const start = boundaries[i];
     const end = boundaries[i + 1];
     if (end - start < 0.001) continue;
-    const resolved = resolveObjectEffects(usable, tracks, start, placementAt, canvasWidth, canvasHeight);
+    const resolved = resolveObjectEffects(usable, tracks, start, placementAt, canvasWidth, canvasHeight, undefined, maskAt);
     const drawn = resolved.filter((r) => r.effect.type !== 'blur');
     if (drawn.length) {
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -726,19 +839,59 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
     } else {
       overlay.push({ start, end, file: blankFile });
     }
+    // The background, then its matte — one pair of frames per slice.
+    const subjects = readers.size
+      ? resolveSubjects(resolved, maskAt, start, placementAt(start), canvasWidth, canvasHeight, unit)
+      : [];
+    if (subjects.length) {
+      const place = placementAt(start);
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      let drewBackground = false;
+      subjects.forEach(({ effect, state }) => {
+        const image = effect.appearance.mode === 'image' && effect.appearance.imageAssetId
+          ? imageSources?.get(effect.appearance.imageAssetId) || null
+          : null;
+        if (effect.appearance.mode === 'image' && !image) return;
+        drewBackground = drawSubjectBackground(ctx, {
+          appearance: effect.appearance, presence: state.presence, placement: place, canvasWidth, canvasHeight, image, canvasBackground,
+          cornerRadiusPct: videoCornerRadius
+        }) || drewBackground;
+      });
+      const bgFile = path.join(outDir, `ofxbg-${Math.round(start * 1000)}.png`);
+      if (drewBackground) {
+        fs.writeFileSync(bgFile, canvas.toBuffer('image/png'));
+        background.push({ start, end, file: bgFile });
+      } else {
+        background.push({ start, end, file: blankFile });
+      }
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      subjects.forEach(({ mask, alpha }) => drawMaskAlpha(ctx, mask, alpha, place, canvasWidth, canvasHeight, offscreen));
+      const mFile = path.join(outDir, `ofxsubj-${Math.round(start * 1000)}.png`);
+      fs.writeFileSync(mFile, canvas.toBuffer('image/png'));
+      subjectMask.push({ start, end, file: mFile });
+    } else if (readers.size) {
+      // No mask here: the video is left exactly as it is (an opaque
+      // background with no subject to put back would cut the subject out of
+      // its own film).
+      background.push({ start, end, file: blankFile });
+      subjectMask.push({ start, end, file: blankFile });
+    }
     masks.forEach((m, mi) => {
       if (!resolved.some((r) => r.effect.type === 'blur')) { m.segments.push({ start, end, file: blankFile }); return; }
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-      drawObjectEffectMasks(ctx, resolved, { canvasWidth, canvasHeight, sigma: m.sigma });
+      drawObjectEffectMasks(ctx, resolved, { canvasWidth, canvasHeight, sigma: m.sigma, createOffscreenCanvas: offscreen });
       const file = path.join(outDir, `ofxmask${mi}-${Math.round(start * 1000)}.png`);
       fs.writeFileSync(file, canvas.toBuffer('image/png'));
       m.segments.push({ start, end, file });
     });
   }
   // A stream that never draws anything is no stream at all.
+  const used = (list) => (list.some((x) => x.file !== blankFile) ? list : []);
   return {
-    overlay: overlay.some((s) => s.file !== blankFile) ? overlay : [],
-    masks: masks.filter((m) => m.segments.some((s) => s.file !== blankFile))
+    overlay: used(overlay),
+    masks: masks.filter((m) => m.segments.some((x) => x.file !== blankFile)),
+    background: used(background),
+    subjectMask: used(subjectMask)
   };
 }
 
@@ -780,19 +933,36 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
     ? generateWordModePhraseFrames
     : generatePhraseCaptionFrames;
 
-  const segments = [];
-  let cursor = 0;
-
-  [...phrases].sort((a, b) => a.start - b.start).forEach((phrase) => {
-    pushGap(segments, cursor, phrase.start);
-    // RAW params passed through unmerged — each generator resolves its own
-    // phrase merge (once statically, once per slice) so phrase-level
-    // keyframes can vary correctly across the phrase's own slices; see
-    // generatePhraseCaptionFrames's doc comment for the full rationale.
-    segments.push(...generatePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir));
-    cursor = phrase.end;
-  });
-  pushGap(segments, cursor, videoDuration);
+  // One caption track: every phrase's frames, gaps filled blank. Keyword-only
+  // blend builds it twice over the SAME layout — normal words (plain) and
+  // keywords (blended, a layer of its own) — each into its own folder so the
+  // slice file names cannot collide.
+  const buildCaptionTrack = (trackParams, dir, blank) => {
+    const track = [];
+    const gap = (start, end) => { if (end - start >= 0.001) track.push({ start, end, file: blank }); };
+    let at = 0;
+    [...phrases].sort((a, b) => a.start - b.start).forEach((phrase) => {
+      gap(at, phrase.start);
+      // RAW params passed through unmerged — each generator resolves its own
+      // phrase merge (once statically, once per slice) so phrase-level
+      // keyframes can vary correctly across the phrase's own slices; see
+      // generatePhraseCaptionFrames's doc comment for the full rationale.
+      track.push(...generatePhraseFrames(phrase, trackParams, canvasWidth, canvasHeight, dir));
+      at = phrase.end;
+    });
+    gap(at, videoDuration);
+    return track;
+  };
+  let keywordCaptions = [];
+  let segments;
+  if (cssConfig.keywordOnlyBlend) {
+    const keywordDir = path.join(outDir, 'keywords');
+    fs.mkdirSync(keywordDir, { recursive: true });
+    segments = buildCaptionTrack({ ...params, captionWordLayer: 'normal' }, outDir, blankFile);
+    keywordCaptions = buildCaptionTrack({ ...params, captionWordLayer: 'keywords' }, keywordDir, generateBlankFrame(canvasWidth, canvasHeight, keywordDir));
+  } else {
+    segments = buildCaptionTrack(params, outDir, blankFile);
+  }
 
   // Manually placed captions + text overlays are a SECOND layer, composited
   // separately so the caption's Text Blend Mode can't bleed onto them — see
@@ -820,12 +990,25 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
     imageLayers: normalizeImageLayerList(params.imageLayers),
     shapeLayers: normalizeShapeLayerList(params.shapeLayers)
   });
-  const runs = layerRuns(stack)
+  // V2.2 DYNAMIC OCCLUSION: each relationship's SUBJECT takes its place in
+  // the stack, above the layers it hides. Every relationship is inserted (not
+  // only those on at one instant) because the runs below are cut once for the
+  // whole timeline; each pass simply draws nothing outside its own span, so
+  // the picture matches the preview's. Nothing is inserted for a project
+  // without occlusion.
+  const occlusionReaders = buildMaskReaders(params, 'occlusionSegmentations');
+  const occlusionTracks = buildTracks(params.occlusionTracks);
+  const stackWithOcclusion = stackWithSubjects(stack, occludedLayersAt(
+    normalizeOcclusionList(params.occlusions), null, (key) => occlusionReaders.has(key) && occlusionTracks.has(key)
+  ));
+  const runs = layerRuns(stackWithOcclusion)
     .filter((run) => run.kind !== 'captions')
     .map((run) => ({
       kind: run.kind,
       beneathCaptions: run.beneathCaptions,
-      segments: buildRunSegments(run.entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources, filePrefix: `run${run.index}` })
+      segments: run.kind === 'subject'
+        ? buildSubjectMatteSegments(run.entries[0], params, occlusionReaders, occlusionTracks, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox)
+        : buildRunSegments(run.entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources, filePrefix: `run${run.index}` })
     }))
     .filter((run) => run.segments.length);
   // The V1.3 names, for the default stack's shape (one stream beneath the
@@ -835,9 +1018,9 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
 
   // Object-aware effects: their own streams, under everything (see
   // buildObjectEffectSegments). Empty for a project without them.
-  let objectEffects = { overlay: [], masks: [] };
+  let objectEffects = { overlay: [], masks: [], background: [], subjectMask: [] };
   try {
-    objectEffects = buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox);
+    objectEffects = buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox, imageSources);
   } catch (err) {
     // An effect that cannot be drawn costs the effects, never the export.
     console.error(`[GraphicsExport] Object effects skipped: ${err.message}`, err.stack);
@@ -845,6 +1028,7 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
 
   return {
     captions: segments,
+    keywordCaptions,
     runs,
     objectEffects,
     imagesUnder: firstRun((r) => r.beneathCaptions),

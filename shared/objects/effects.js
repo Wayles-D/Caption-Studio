@@ -47,9 +47,28 @@
  */
 import { getTrackAtTime } from './tracking.js';
 import { videoBoxToComposition } from './coordinates.js';
+import { BACKGROUND_MODES } from './subject.js';
+import { effectAlpha, colouredMaskLayer, cellsPerReferencePixel } from './effectShapes.js';
+import { videoToComposition } from './coordinates.js';
 
-export const OBJECT_EFFECT_TYPES = ['outline', 'glow', 'spotlight', 'blur'];
-export const OBJECT_EFFECT_LABELS = { outline: 'Outline', glow: 'Glow', spotlight: 'Spotlight', blur: 'Blur' };
+export const OBJECT_EFFECT_TYPES = ['outline', 'glow', 'spotlight', 'blur', 'flicker', 'background'];
+export const OBJECT_EFFECT_LABELS = { outline: 'Outline', glow: 'Glow', spotlight: 'Spotlight', blur: 'Blur', flicker: 'Flicker', background: 'Background' };
+/**
+ * Types that need the object's exact PIXELS, not just its box — they do
+ * nothing without a segmentation of their track (shared/objects/subject.js).
+ */
+export const MASK_EFFECT_TYPES = ['background'];
+
+/**
+ * The tracks whose MASKS these effects need: anything replacing a background,
+ * and anything taking the object's own shape (effectShapes.js). Empty when no
+ * effect wants pixels, so a project that uses none sends none.
+ */
+export function effectMaskTrackKeys(effects) {
+  return [...new Set((effects || [])
+    .filter((e) => e.enabled !== false && (MASK_EFFECT_TYPES.includes(e.type) || e.appearance?.shape === 'object'))
+    .map((e) => e.trackKey))];
+}
 export const MIN_EFFECT_DURATION = 0.1;
 
 export const EFFECT_POLICY = {
@@ -63,9 +82,9 @@ export const EFFECT_POLICY = {
    * barely softens. A blur is privacy: when unsure is exactly when it must
    * not let go.
    */
-  uncertainPresence: { outline: 0.55, glow: 0.55, spotlight: 0.85, blur: 1 },
+  uncertainPresence: { outline: 0.55, glow: 0.55, spotlight: 0.85, blur: 1, flicker: 0.55, background: 1 },
   /** Whether the held last sighting fades out (privacy blur holds at full, then stops). */
-  holdFades: { outline: true, glow: true, spotlight: true, blur: false },
+  holdFades: { outline: true, glow: true, spotlight: true, blur: false, flicker: true, background: false },
   /** Below this a tracked sample counts as low confidence. */
   lowConfidence: 0.5,
   lowConfidencePresence: 0.75
@@ -78,16 +97,60 @@ export const EFFECT_POLICY = {
  * corner radius are fractions of the object's size.
  */
 export const EFFECT_DEFAULTS = {
-  outline: { color: '#10E9A0', thickness: 6, opacity: 1, padding: 0.06, cornerRadius: 0.12 },
-  glow: { color: '#10E9A0', intensity: 0.7, radius: 28, opacity: 1, padding: 0.04, cornerRadius: 0.2 },
-  spotlight: { color: '#000000', strength: 0.6, feather: 40, padding: 0.12, cornerRadius: 0.35 },
-  blur: { strength: 0.5, padding: 0.06, cornerRadius: 0.2 }
+  outline: { shape: 'object', color: '#10E9A0', thickness: 6, opacity: 1, padding: 0.06, cornerRadius: 0.12 },
+  glow: { shape: 'object', color: '#10E9A0', intensity: 0.7, radius: 28, opacity: 1, padding: 0.04, cornerRadius: 0.2 },
+  spotlight: { shape: 'object', color: '#000000', strength: 0.6, feather: 40, padding: 0.12, cornerRadius: 0.35 },
+  blur: { shape: 'object', strength: 0.5, padding: 0.06, cornerRadius: 0.2 },
+  /**
+   * FLICKER: the object itself strobes - a bad neon, a spark, a glitch -
+   * instead of being ringed or lit. It takes the object's own shape where
+   * it has one, so what flashes is the person, not the rectangle they
+   * stand in.
+   *
+   * It pairs with the flicker SOUNDS already in the library ("Flicker (1)",
+   * "Flicker (2)", "Light Flicker").
+   */
+  flicker: { shape: 'object', color: '#CFE9FF', rate: 9, intensity: 0.85, opacity: 0.55, radius: 26, padding: 0.02, cornerRadius: 0.2 },
+  // Subject isolation (shared/objects/subject.js): what goes BEHIND the
+  // object once its own pixels are kept. No padding or corner radius — its
+  // region is the mask, not a rectangle.
+  background: { mode: 'transparent', color: '#000000', opacity: 1, imageAssetId: '', expand: 2, feather: 2 }
 };
 
 const RANGES = {
   thickness: [1, 40], opacity: [0, 1], padding: [0, 1], cornerRadius: [0, 0.5],
-  intensity: [0, 1], radius: [2, 120], strength: [0, 1], feather: [0, 200]
+  intensity: [0, 1], radius: [2, 120], strength: [0, 1], feather: [0, 200],
+  expand: [0, 40], rate: [1, 30]
 };
+
+/**
+ * HOW HARD THE FLICKER BURNS at one instant, 0 to 1.
+ *
+ * A flicker is not a sine: a faulty light is mostly ON, snaps OFF for an
+ * instant, stutters, then holds. So the time line is cut into slots at the
+ * effect's rate a second, and each slot takes its value from a hash of its
+ * index - the same slot always gives the same value, so the PREVIEW AND THE
+ * EXPORT flicker identically and a re-render never shimmers differently.
+ * The value HOLDS across a slot rather than fading, which is what reads as
+ * a flicker rather than a pulse.
+ *
+ * Intensity pushes the pattern towards fully on/fully off: low is a gentle
+ * wavering, high is a hard strobe.
+ */
+export function flickerAt(time, rate = 9, intensity = 0.85, seed = 0) {
+  const slot = Math.floor(Math.max(0, time) * Math.max(1, rate));
+  let h = ((slot + 1) * 2654435761 + seed * 40503) >>> 0;
+  h ^= h >>> 13;
+  h = (h * 1274126177) >>> 0;
+  const r = (h >>> 8) / 16777216;
+  const hard = Math.min(1, Math.max(0, intensity));
+  const soft = r < 0.22 ? r / 0.22 : 0.55 + 0.45 * ((r - 0.22) / 0.78);
+  const strobe = r < 0.22 ? 0 : 0.6 + 0.4 * r;
+  return Math.max(0, Math.min(1, soft * (1 - hard) + strobe * hard));
+}
+
+/** Appearance fields that are not numbers and not colours. */
+const CHOICES = { mode: BACKGROUND_MODES, shape: ['object', 'box'] };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const finite = (v, d) => (Number.isFinite(+v) && v !== null && v !== '' ? +v : d);
@@ -110,6 +173,9 @@ export function normalizeObjectEffect(raw) {
   const appearance = {};
   Object.entries(defaults).forEach(([k, d]) => {
     if (k === 'color') appearance[k] = isColor(given[k]) ? given[k] : d;
+    else if (CHOICES[k]) appearance[k] = CHOICES[k].includes(given[k]) ? given[k] : d;
+    // An asset id is an opaque string (an image the project already holds).
+    else if (k === 'imageAssetId') appearance[k] = typeof given[k] === 'string' ? given[k].slice(0, 200) : d;
     else appearance[k] = clamp(finite(given[k], d), ...(RANGES[k] || [-Infinity, Infinity]));
   });
   return {
@@ -253,8 +319,12 @@ export function effectGeometry(effect, box, placement, canvasWidth, canvasHeight
  * @param {object[]} effects  normalized ObjectEffects
  * @param {Map|object} tracks trackKey → track
  * @param {(time:number) => object} placementAt  the video's placement at a time
+ * @param {(effect:object, time:number) => object|null} [maskAt]  the object's
+ *        SEGMENTATION mask there (V2.0). Given one, the effect takes the
+ *        object's own shape instead of its box — see effectShapes.js. Without
+ *        it (no segmentation, or a caller that has none) nothing changes.
  */
-export function resolveObjectEffects(effects, tracks, time, placementAt, canvasWidth, canvasHeight, policy = EFFECT_POLICY) {
+export function resolveObjectEffects(effects, tracks, time, placementAt, canvasWidth, canvasHeight, policy = EFFECT_POLICY, maskAt = null) {
   const get = (k) => (tracks instanceof Map ? tracks.get(k) : tracks?.[k]);
   const out = [];
   let placement = null;
@@ -265,7 +335,17 @@ export function resolveObjectEffects(effects, tracks, time, placementAt, canvasW
     const state = effectStateAt(effect, track, time, policy);
     if (!state) continue;
     placement = placement || placementAt(time);
-    out.push({ effect, state, geometry: effectGeometry(effect, state.box, placement, canvasWidth, canvasHeight) });
+    const item = { effect, state, time, geometry: effectGeometry(effect, state.box, placement, canvasWidth, canvasHeight), placement };
+    // THE OBJECT'S OWN SHAPE, where it is known and the user wants it.
+    const mask = maskAt && effect.appearance?.shape !== 'box' ? maskAt(effect, time) : null;
+    if (mask) {
+      const a = videoToComposition({ x: mask.frame.x, y: mask.frame.y }, placement);
+      const b = videoToComposition({ x: mask.frame.x + mask.frame.width, y: mask.frame.y }, placement);
+      const frameCanvasWidth = Math.hypot((b.x - a.x) * canvasWidth, (b.y - a.y) * canvasHeight);
+      item.mask = mask;
+      item.cell = cellsPerReferencePixel(mask, effectUnit(canvasWidth, canvasHeight), frameCanvasWidth);
+    }
+    out.push(item);
   }
   return out;
 }
@@ -317,6 +397,16 @@ function reset(ctx) {
 
 const FAR = 100000;
 
+const state_ = (item) => item.state.presence;
+
+/** The effect's own shape, as a coloured layer — or null when it has no mask. */
+function shapedLayer(item, colour, createOffscreenCanvas, canvasWidth, canvasHeight) {
+  if (!item.mask) return null;
+  const alpha = effectAlpha(item.effect.type, item.mask, item.effect.appearance, item.cell);
+  if (!alpha) return null;
+  return colouredMaskLayer(item.mask, alpha, colour, item.placement, canvasWidth, canvasHeight, createOffscreenCanvas);
+}
+
 function drawOutline(ctx, { effect, state, geometry }, unit) {
   const a = effect.appearance;
   ctx.globalAlpha = a.opacity * state.presence;
@@ -353,8 +443,20 @@ function drawSpotlights(ctx, items, unit, canvasWidth, canvasHeight, createOffsc
   lc.fillStyle = rgba(strongest.effect.appearance.color, strongest.effect.appearance.strength * strongest.state.presence);
   lc.fillRect(0, 0, canvasWidth, canvasHeight);
   lc.globalCompositeOperation = 'destination-out';
-  items.forEach(({ effect, state, geometry }) => {
+  items.forEach((item) => {
+    const { effect, state, geometry } = item;
     lc.globalAlpha = 1;
+    // The object's own shape punched out of the dimming, where it is known.
+    if (item.mask) {
+      const alpha = effectAlpha('spotlight', item.mask, effect.appearance, item.cell);
+      if (alpha) {
+        const layer = colouredMaskLayer(item.mask, alpha, '#000', item.placement, canvasWidth, canvasHeight, createOffscreenCanvas);
+        lc.globalAlpha = clamp(state.presence / Math.max(0.001, strongest.state.presence), 0, 1);
+        lc.drawImage(layer, 0, 0);
+        lc.globalAlpha = 1;
+        return;
+      }
+    }
     lc.shadowColor = `rgba(0,0,0,${clamp(state.presence / Math.max(0.001, strongest.state.presence), 0, 1)})`;
     lc.shadowBlur = effect.appearance.feather * unit;
     lc.shadowOffsetX = -FAR;
@@ -386,12 +488,65 @@ export function drawObjectEffects(ctx, resolved, { canvasWidth, canvasHeight, cr
     if (drawBlurred) {
       of('blur').forEach((r) => {
         reset(ctx);
-        drawBlurred(ctx, () => traceRegion(ctx, r.geometry), blurSigma(r.effect, canvasWidth, canvasHeight), r.state.presence);
+        const shaped = r.mask ? shapedLayer(r, '#fff', createOffscreenCanvas, canvasWidth, canvasHeight) : null;
+        drawBlurred(ctx, () => traceRegion(ctx, r.geometry), blurSigma(r.effect, canvasWidth, canvasHeight), r.state.presence, shaped);
       });
     }
     drawSpotlights(ctx, of('spotlight'), unit, canvasWidth, canvasHeight, createOffscreenCanvas);
-    of('glow').forEach((r) => { reset(ctx); drawGlow(ctx, r, unit); });
-    of('outline').forEach((r) => { reset(ctx); drawOutline(ctx, r, unit); });
+    of('glow').forEach((r) => {
+      reset(ctx);
+      const a = r.effect.appearance;
+      const layer = shapedLayer(r, a.color, createOffscreenCanvas, canvasWidth, canvasHeight);
+      if (layer) {
+        ctx.globalAlpha = Math.min(1, a.opacity * state_(r) * (0.35 + 0.65 * a.intensity));
+        ctx.drawImage(layer, 0, 0);
+        ctx.globalAlpha = 1;
+        return;
+      }
+      drawGlow(ctx, r, unit);
+    });
+    of('flicker').forEach((r) => {
+      reset(ctx);
+      const a = r.effect.appearance;
+      const burn = flickerAt(r.time ?? 0, a.rate, a.intensity, (r.effect.id || '').length);
+      if (burn <= 0.01) return;
+      const strength = Math.min(1, a.opacity * state_(r) * burn);
+      if (r.mask) {
+        // The object LIGHTS UP: a halo thrown off its silhouette, and the
+        // silhouette itself lifted — not painted over. A solid fill replaced
+        // the person with a white cut-out, which reads as a hole, not a spark.
+        const halo = effectAlpha('glow', r.mask, a, r.cell);
+        if (halo) {
+          const h = colouredMaskLayer(r.mask, halo, a.color, r.placement, canvasWidth, canvasHeight, createOffscreenCanvas);
+          ctx.globalAlpha = strength;
+          ctx.drawImage(h, 0, 0);
+        }
+        const body = shapedLayer(r, a.color, createOffscreenCanvas, canvasWidth, canvasHeight);
+        if (body) {
+          ctx.globalAlpha = strength * 0.45;
+          ctx.drawImage(body, 0, 0);
+        }
+      } else {
+        // No segmentation: the tracked box, so it still does something.
+        ctx.globalAlpha = strength * 0.5;
+        ctx.fillStyle = a.color;
+        traceRegion(ctx, r.geometry);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    });
+    of('outline').forEach((r) => {
+      reset(ctx);
+      const a = r.effect.appearance;
+      const layer = shapedLayer(r, a.color, createOffscreenCanvas, canvasWidth, canvasHeight);
+      if (layer) {
+        ctx.globalAlpha = Math.min(1, a.opacity * state_(r));
+        ctx.drawImage(layer, 0, 0);
+        ctx.globalAlpha = 1;
+        return;
+      }
+      drawOutline(ctx, r, unit);
+    });
   } finally {
     reset(ctx);
     ctx.restore();
@@ -403,12 +558,22 @@ export function drawObjectEffects(ctx, resolved, { canvasWidth, canvasHeight, cr
  * as opaque as the effect is present. The compositor lays a Gaussian-blurred
  * copy of the video over the video through this mask.
  */
-export function drawObjectEffectMasks(ctx, resolved, { canvasWidth, canvasHeight, sigma }) {
+export function drawObjectEffectMasks(ctx, resolved, { canvasWidth, canvasHeight, sigma, createOffscreenCanvas = null }) {
   reset(ctx);
   resolved
     .filter((r) => r.effect.type === 'blur' && blurSigma(r.effect, canvasWidth, canvasHeight) === sigma)
     .forEach((r) => {
       ctx.globalAlpha = r.state.presence;
+      // The object's own shape, where it is known: the blur then follows the
+      // person, not the rectangle they stand in.
+      if (r.mask && createOffscreenCanvas) {
+        const alpha = effectAlpha('blur', r.mask, r.effect.appearance, r.cell);
+        if (alpha) {
+          ctx.drawImage(colouredMaskLayer(r.mask, alpha, '#fff', r.placement, canvasWidth, canvasHeight, createOffscreenCanvas), 0, 0);
+          ctx.globalAlpha = 1;
+          return;
+        }
+      }
       ctx.fillStyle = '#fff';
       traceRegion(ctx, r.geometry);
       ctx.fill();

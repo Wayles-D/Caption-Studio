@@ -114,6 +114,11 @@ export function moveInLayerOrder(stack, id, direction) {
  * their own class — they have their own render pipeline.
  */
 function compositeClass(entry) {
+  // The SUBJECT (shared/objects/occlusion.js) — the video's own pixels through
+  // its mask, taking its place in the stack so the layers beneath it are
+  // behind it. Always its own run: it is drawn from the video, not from the
+  // layer it sits between.
+  if (entry.type === 'subject') return 'subject';
   if (entry.type === 'captions') return 'captions';
   if (entry.type === 'text' && entry.item?.kind === 'caption') return 'caption-blend';
   return 'plain';
@@ -126,7 +131,7 @@ function compositeClass(entry) {
  * compositing changes. The preview and the exporter both draw exactly these
  * runs, in this order.
  *
- * @returns {{ index:number, kind:'captions'|'caption-blend'|'plain', entries:object[], beneathCaptions:boolean }[]}
+ * @returns {{ index:number, kind:'captions'|'caption-blend'|'plain'|'subject', entries:object[], beneathCaptions:boolean }[]}
  */
 export function layerRuns(stack) {
   const runs = [];
@@ -134,7 +139,7 @@ export function layerRuns(stack) {
   stack.forEach((entry) => {
     const kind = compositeClass(entry);
     const last = runs[runs.length - 1];
-    if (kind !== 'captions' && last && last.kind === kind) {
+    if (kind !== 'captions' && kind !== 'subject' && last && last.kind === kind) {
       last.entries.push(entry);
     } else {
       runs.push({ index: runs.length, kind, entries: [entry], beneathCaptions: !passedCaptions && kind !== 'captions' });

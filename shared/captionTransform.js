@@ -16,7 +16,7 @@
  * the frontend sent (see src/main.js's regenerate call).
  */
 
-import { resolveAnimatableField } from './keyframes.js';
+import { resolveAnimatableField, evaluatePropertyAtTime, isSteppedProperty } from './keyframes.js';
 
 /**
  * A stable per-phrase key. Rounds to hundredths of a second so float noise
@@ -175,9 +175,14 @@ export function resolveWordOverrideAtTime(baseParams, wordIndex, currentTime) {
  * (`outlineSize`/`shadowSize` in the 0-50 / 0-100 slider units, not px), so
  * the Word panel reuses those controls' ranges verbatim and the renderer
  * converts them with the same maths resolveGeometry already applies to the
- * caption-level values. Never keyframed — deliberately NOT part of
- * resolveWordOverrideAtTime, since a font family or a colour has no
- * meaningful interpolation between two keyframes.
+ * caption-level values.
+ *
+ * These CAN be keyframed (resolveWordStyleOverrideAtTime below). They were
+ * not, on the reasoning that a font family has no meaningful interpolation
+ * between two keyframes — which is true, and is why they STEP instead:
+ * the value set at a keyframe holds until the next one and then changes
+ * outright. That is what makes "this word is one font until 2.5s and
+ * another after" possible.
  *
  * @returns {{fontFamily?, fontWeight?, italic?, underline?, color?,
  *   outlineSize?, outlineColor?, shadowEnabled?, shadowSize?, shadowColor?,
@@ -200,10 +205,74 @@ export function resolveWordStyleOverride(baseParams, wordIndex) {
  * paintRollingStackLines fast path), so it must stay true for a word that
  * has ONLY a style override and no transform.
  */
+/**
+ * A word's style AT AN INSTANT: its static override, with any keyframed
+ * style properties resolved at `currentTime`.
+ *
+ * Style keyframes live in the SAME `keyframes` list the word's transform
+ * keyframes already use, under the style property's own name — so one
+ * marker on the timeline can carry both "move here" and "change font here".
+ * They hold rather than ease (shared/keyframes.js's isSteppedProperty).
+ *
+ * With no time, or no style keyframes, this returns exactly what
+ * resolveWordStyleOverride returns — so every word that has never been
+ * keyframed renders through the unchanged path.
+ */
+export function resolveWordStyleOverrideAtTime(baseParams, wordIndex, currentTime) {
+  const style = resolveWordStyleOverride(baseParams, wordIndex);
+  if (currentTime == null) return style;
+  const override = resolveWordOverride(baseParams, wordIndex);
+  if (!Array.isArray(override?.keyframes) || !override.keyframes.length) return style;
+  let out = style;
+  override.keyframes.forEach((entry) => {
+    Object.keys(entry?.values || {}).forEach((property) => {
+      if (!isSteppedProperty(property)) return;
+      const value = evaluatePropertyAtTime(override.keyframes, property, currentTime);
+      if (value === undefined) return;
+      if (out === style) out = { ...(style || {}) };
+      out[property] = value;
+    });
+  });
+  return out && Object.values(out).some((v) => v != null) ? out : null;
+}
+
 export function hasWordOverride(baseParams, wordIndex) {
   const override = resolveWordOverride(baseParams, wordIndex);
   if (!override) return false;
   if (resolveWordStyleOverride(baseParams, wordIndex)) return true;
   // Any non-style key present means a transform/animation/group override.
   return Object.keys(override).some((k) => k !== 'style');
+}
+
+/**
+ * The whole caption-transform map with every word's STYLE resolved at
+ * `currentTime` — the one call a renderer makes per frame so that each word
+ * below it reads its font, weight, casing and colour for that instant
+ * without knowing anything about keyframes.
+ *
+ * Returns the SAME object when nothing is style-keyframed, so a project that
+ * has never used the feature renders through the identical path it always
+ * did (and the renderers' own fast paths still compare by identity).
+ */
+export function resolveCaptionTransformsAtTime(params, currentTime) {
+  const map = params?.captionTransforms;
+  if (!map || typeof map !== 'object' || currentTime == null) return params;
+  let next = null;
+  Object.keys(map).forEach((key) => {
+    const entry = map[key];
+    if (!entry || !Array.isArray(entry.keyframes) || !entry.keyframes.length) return;
+    const stepped = entry.keyframes.some((k) => Object.keys(k?.values || {}).some(isSteppedProperty));
+    if (!stepped) return;
+    const style = { ...(entry.style || {}) };
+    entry.keyframes.forEach((k) => {
+      Object.keys(k?.values || {}).forEach((property) => {
+        if (!isSteppedProperty(property)) return;
+        const value = evaluatePropertyAtTime(entry.keyframes, property, currentTime);
+        if (value !== undefined) style[property] = value;
+      });
+    });
+    if (!next) next = { ...map };
+    next[key] = { ...entry, style };
+  });
+  return next ? { ...params, captionTransforms: next } : params;
 }

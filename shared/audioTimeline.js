@@ -94,7 +94,12 @@ export function createSoundEvent(soundId, startTime, overrides = {}) {
     fadeIn: 0,
     fadeOut: 0,
     playbackRate: 1,
-    duration: null, // null = play the asset's own natural length
+    // How far INTO the asset playback begins, and how long it runs.
+    // duration null = to the end of the asset. Together these are what
+    // makes a sound effect trimmable without moving it: trimStart changes
+    // which part is heard, startTime changes when it is heard.
+    trimStart: 0,
+    duration: null,
     enabled: true,
     source: 'manual',
     eventType: null,
@@ -123,6 +128,7 @@ export function normalizeSoundEvent(raw) {
     fadeIn: Math.max(0, finiteOr(raw.fadeIn, 0)),
     fadeOut: Math.max(0, finiteOr(raw.fadeOut, 0)),
     playbackRate: clamp(finiteOr(raw.playbackRate, 1), MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE),
+    trimStart: Math.max(0, finiteOr(raw.trimStart, 0)),
     duration,
     enabled: raw.enabled !== false,
     source: raw.source === 'ai' ? 'ai' : 'manual',
@@ -131,6 +137,33 @@ export function normalizeSoundEvent(raw) {
     userModified: raw.userModified === true,
     attachedTo: raw.attachedTo && typeof raw.attachedTo === 'object' ? raw.attachedTo : null
   };
+}
+
+/**
+ * THE LENGTH OF A SOUND EFFECT, in timeline seconds.
+ *
+ * The asset's own length comes from the registry (no decoding needed), is
+ * reduced by anything trimmed off its head, and divided by the playback
+ * rate — a sound played at 2x occupies half the timeline. An explicit
+ * `duration` (the user trimmed its tail) wins, but can never run past the
+ * end of the asset.
+ */
+export function soundEventNaturalDuration(event) {
+  const asset = getSoundDefinition(event.soundId)?.duration;
+  if (!(asset > 0)) return null; // unknown until the buffer is decoded
+  const rate = event.playbackRate || 1;
+  return Math.max(0, asset - (event.trimStart || 0)) / rate;
+}
+
+export function soundEventDuration(event) {
+  const natural = soundEventNaturalDuration(event);
+  if (event.duration == null) return natural;
+  return natural == null ? event.duration : Math.min(event.duration, natural);
+}
+
+/** Whether anything has been trimmed off either end — i.e. whether Full length would do something. */
+export function isSoundEventTrimmed(event) {
+  return (event.trimStart || 0) > 1e-4 || event.duration != null;
 }
 
 // --- Audio tracks ----------------------------------------------------------

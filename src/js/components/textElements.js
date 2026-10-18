@@ -14,7 +14,7 @@
  *     gesture is one undo step rather than sixty;
  *   - normalize on every write, not just on read.
  */
-import { appState, updateState } from '../state.js';
+import { appState, updateState, getStyleParams } from '../state.js';
 import { resolveCaptionPhrases, normalizeCaptionEvent } from '../../../shared/captionEvent.js';
 import { createSoundEvent } from '../../../shared/audioTimeline.js';
 import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
@@ -31,6 +31,8 @@ import {
 } from '../../../shared/textElement.js';
 import {
   KEYFRAME_PROPERTIES,
+  STYLE_KEYFRAME_PROPERTIES,
+  getPropertyTrack,
   PHRASE_FIELD_TO_PROPERTY,
   routeFieldsThroughKeyframes,
   upsertKeyframeEntry,
@@ -266,6 +268,18 @@ export function updateTextElement(id, patch, { recordHistory = true } = {}) {
 export function updateTextElementStyle(id, styleFields, { recordHistory = true } = {}) {
   const element = getTextElement(id);
   if (!element) return null;
+  // A property that is already KEYFRAMED is edited at the playhead, not
+  // globally — otherwise changing the font while a font animation exists
+  // would silently flatten it.
+  const keyed = Object.keys(styleFields).filter((f) => STYLE_KEYFRAME_PROPERTIES.includes(f)
+    && getPropertyTrack(element.keyframes, f).length > 0);
+  if (keyed.length) {
+    keyed.forEach((f) => setTextElementStyleKeyframe(f, styleFields[f], id));
+    const rest = { ...styleFields };
+    keyed.forEach((f) => delete rest[f]);
+    if (!Object.keys(rest).length) return getTextElement(id);
+    styleFields = rest;
+  }
   const nextStyle = { ...element.style };
   Object.entries(styleFields).forEach(([field, value]) => {
     if (value == null) delete nextStyle[field];
@@ -539,6 +553,67 @@ export function addOrUpdateTextElementKeyframeAtPlayhead() {
   updateTextElement(id, {
     keyframes: upsertKeyframeEntry(element.keyframes, getPlayheadTime(), valuesPatch)
   }, { recordHistory: true });
+}
+
+/**
+ * STYLE KEYFRAMES — the font (or weight, casing, colour) this element has
+ * from this moment on.
+ *
+ * A style keyframe HOLDS rather than eases (shared/keyframes.js's
+ * STYLE_KEYFRAME_PROPERTIES): there is no half-way between two fonts. So
+ * one keyframe at 1s and another at 2.5s means "this font until 2.5s, then
+ * that one" — which is the whole point of keyframing a font.
+ *
+ * The FIRST style keyframe for a property also pins the element's current
+ * value at the element's own start, so the change happens where the user
+ * put it rather than retroactively from the beginning of time.
+ */
+export function setTextElementStyleKeyframe(property, value, id = getSelectedId()) {
+  const element = id ? getTextElement(id) : null;
+  if (!element || !STYLE_KEYFRAME_PROPERTIES.includes(property)) return null;
+  const at = getPlayheadTime();
+  // What the element is ACTUALLY wearing: its own style if it has one, else
+  // the caption style it inherits. An element that has never had its font
+  // touched still renders in SOME font, and that is what the first keyframe
+  // has to pin - a keyframe holding null is dropped by getPropertyTrack, so
+  // pinning null would make the first click do nothing at all.
+  const effective = element.style?.[property] ?? getStyleParams()?.[property] ?? null;
+  const target = value ?? effective;
+  if (target == null) return null;
+  let keyframes = element.keyframes;
+  const existing = getPropertyTrack(keyframes, property);
+  if (!existing.length && at > element.start + 1e-3 && effective != null) {
+    keyframes = upsertKeyframeEntry(keyframes, element.start, { [property]: effective });
+  }
+  keyframes = upsertKeyframeEntry(keyframes, at, { [property]: target });
+  return updateTextElement(id, { keyframes }, { recordHistory: true });
+}
+
+/** Whether this property changes over time on the selected element. */
+export function hasTextElementStyleKeyframes(property, id = getSelectedId()) {
+  const element = id ? getTextElement(id) : null;
+  return !!element && getPropertyTrack(element.keyframes, property).length > 0;
+}
+
+/** Every instant this property changes, for the panel to list. */
+export function getTextElementStyleKeyframeTimes(property, id = getSelectedId()) {
+  const element = id ? getTextElement(id) : null;
+  return element ? getPropertyTrack(element.keyframes, property).map((k) => k.t) : [];
+}
+
+/** Drops every keyframe of one style property, leaving the element's static style. */
+export function clearTextElementStyleKeyframes(property, id = getSelectedId()) {
+  const element = id ? getTextElement(id) : null;
+  if (!element) return null;
+  const keyframes = (element.keyframes || [])
+    .map((k) => {
+      if (!k.values || k.values[property] == null) return k;
+      const values = { ...k.values };
+      delete values[property];
+      return Object.keys(values).length ? { ...k, values } : null;
+    })
+    .filter(Boolean);
+  return updateTextElement(id, { keyframes }, { recordHistory: true });
 }
 
 export function hasTextElementKeyframeAtPlayhead() {

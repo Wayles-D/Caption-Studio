@@ -39,12 +39,15 @@ export const OBJECT_DEFAULTS = {
   trackingStatus: { state: 'idle', done: 0, total: 0, message: null },
   objectEffects: [],
   selectedObjectEffectId: null,
+  // V2.2 dynamic occlusion: which layers go behind which subject
+  // (shared/objects/occlusion.js). A document key — undoable and saved.
+  occlusions: [],
   objectSegmentations: {},
   segmentationStatus: { state: 'idle', done: 0, total: 0, message: null, backend: null },
   maskView: 'overlay'
 };
 
-export const OBJECT_DOCUMENT_KEYS = ['selectedObject', 'objectEffects'];
+export const OBJECT_DOCUMENT_KEYS = ['selectedObject', 'objectEffects', 'occlusions'];
 export const OBJECT_PROJECT_KEYS = ['objectDetections', 'objectTracks', 'objectSegmentations'];
 
 export const useObjectStore = create(() => ({ ...OBJECT_DEFAULTS }));

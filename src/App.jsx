@@ -48,9 +48,14 @@ import * as rhythmApi from './js/components/rhythm.js';
 import * as objectsApi from './js/components/objectDetection.js';
 import * as trackingApi from './js/components/objectTracking.js';
 import * as objectEffectsApi from './js/components/objectEffects.js';
+import { prepareObjectEffectsForExport } from './js/components/objectEffects.js';
+import * as occlusionApi from './js/components/occlusion.js';
+import { prepareOcclusionsForExport } from './js/components/occlusion.js';
 import * as segmentationApi from './js/components/objectSegmentation.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
+import { setSelectionOptionsHost, selectionNeedsOptionsPanel, onSelectionChange } from './js/components/canvasTransform.js';
+import { initHoverPreview } from './js/hoverPreview.js';
 import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
@@ -294,6 +299,33 @@ export function App() {
   // and closing either reverts to Video Inspector rather than hiding the
   // panel itself.
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT_QUERY);
+
+  // The selection's options (scope, animation, reset, rotation) used to float
+  // over the video above whatever was selected, covering the text being edited.
+  // On desktop they live in a card at the top of the right-hand panel instead:
+  // canvasTransform.js moves its toolbar element into this host, and the card
+  // is shown only while the current selection actually has such options.
+  // Below the desktop breakpoint there is no side panel, so the toolbar stays
+  // where it was.
+  // Hovering a style option (a casing, a preset, a mode) previews it on the
+  // video; see src/js/hoverPreview.js. Dropdowns do the same through
+  // HoverSelect, which draws its own list because a native one cannot be hovered.
+  useEffect(() => { initHoverPreview(); }, []);
+
+  const selectionOptionsHostRef = useRef(null);
+  const [selectionOptionsActive, setSelectionOptionsActive] = useState(false);
+  useEffect(() => {
+    if (!isDesktop) return undefined;
+    setSelectionOptionsHost(selectionOptionsHostRef.current);
+    const sync = () => setSelectionOptionsActive(selectionNeedsOptionsPanel());
+    sync();
+    const stop = onSelectionChange(sync);
+    return () => {
+      stop();
+      setSelectionOptionsHost(null);
+      setSelectionOptionsActive(false);
+    };
+  }, [isDesktop]);
   const [desktopSidePanel, setDesktopSidePanel] = useState(DESKTOP_SIDE_PANEL_DEFAULT);
 
   // The sound library (src/components/SoundLibraryPanel.jsx), opened from the
@@ -320,11 +352,16 @@ export function App() {
   // start), or null for "at the playhead". Pinned rather than read from the
   // playhead at pick time, so auditioning by scrubbing can't move it.
   const [soundPlaceAt, setSoundPlaceAt] = useState(null);
+  // The whole WORD the ♪ was pressed on, so the library can offer to place
+  // one sound per syllable of it (shared/syllables.js). Null when adding at
+  // the playhead or to an interlude.
+  const [soundPlaceWord, setSoundPlaceWord] = useState(null);
   const closeSoundLibrary = useCallback(() => {
     setSoundLibraryOpen(false);
     setSoundReplaceTargetId(null);
     setSoundAttachTargetId(null);
     setSoundPlaceAt(null);
+    setSoundPlaceWord(null);
   }, []);
   const toggleSoundLibrary = useCallback(() => {
     // The "+" always means "add", so re-pressing it while a replace is open
@@ -347,6 +384,7 @@ export function App() {
       setSoundReplaceTargetId(null);
       setSoundAttachTargetId(null);
       setSoundPlaceAt(word.start);
+      setSoundPlaceWord(word);
       setSoundLibraryOpen(true);
     };
     window.addEventListener('bhynd:add-sound-at', onAddSoundAt);
@@ -361,6 +399,7 @@ export function App() {
     setSoundReplaceTargetId(null);
     setSoundAttachTargetId(attachToTextElementId);
     setSoundPlaceAt(null);
+    setSoundPlaceWord(null);
     setSoundLibraryOpen(true);
   }, []);
   const openSoundReplace = useCallback((clipId) => {
@@ -431,8 +470,12 @@ export function App() {
       const id = appState.selectedTextElementId;
       if (id === lastId) return;
       lastId = id;
-      const selected = (appState.textElements || []).find((el) => el.id === id);
-      if (selected?.kind === 'interlude' && isDesktopRef.current) setDesktopSidePanel('text-overlay');
+      // ANY text element, not just a cinematic card: selecting a plain
+      // overlay used to open nothing, so its own panel — and with it the
+      // layer controls and "Behind a subject" — were unreachable without
+      // going hunting, while an image or a shape brought its panel up at
+      // once. Same rule for all three now.
+      if (id && isDesktopRef.current && desktopSidePanelRef.current !== 'layers') setDesktopSidePanel('text-overlay');
     });
   }, []);
 
@@ -517,6 +560,7 @@ export function App() {
       window.__objects = objectsApi;
       window.__tracking = trackingApi;
       window.__objectEffects = objectEffectsApi;
+      window.__occlusion = occlusionApi;
       window.__segmentation = segmentationApi;
       window.__captionEvents = captionEventsApi;
     }
@@ -742,6 +786,10 @@ export function App() {
       // A reopened (or long-edited) project: the server may have purged its
       // copy of the video or of imported audio — send them back first.
       await ensureServerHasProjectFiles(API_BASE_URL);
+      // Subject isolation sends the object's MASKS with the style params —
+      // they live in IndexedDB and may not be in memory yet.
+      await prepareObjectEffectsForExport();
+      await prepareOcclusionsForExport();
       const result = await fetchJson(`${API_BASE_URL}/api/upload/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -956,7 +1004,7 @@ export function App() {
           className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
           style={{ bottom: MOBILE_TOOLBAR_HEIGHT + timelineHeight }}
         >
-          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} placeAt={soundPlaceAt} />
+          <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} placeAt={soundPlaceAt} placeWord={soundPlaceWord} />
         </div>
       )}
 
@@ -998,6 +1046,17 @@ export function App() {
                 </svg>
               </button>
             )}
+          </div>
+          {/* Where the selected word's options appear (see the effect above). Always
+              mounted, so the toolbar always has a home to be moved into; only
+              its visibility follows the selection. */}
+          <div
+            ref={selectionOptionsHostRef}
+            id="selection-options-host"
+            hidden={!selectionOptionsActive}
+            className="selection-options-host shrink-0 px-4 py-3 border-b border-[var(--border-color)]"
+          >
+            <div className="selection-options-title">Selection options</div>
           </div>
           <div className="overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'video-info' ? 'block' : 'none' }}>
             <RightInspector sectionFilter="video-info" onRegenerateCaptions={() => triggerRegeneration()} />

@@ -680,6 +680,18 @@ export const TEXT_BLEND_MODES = ['normal', 'screen', 'overlay', 'lighten', 'diff
  * @param {object} profile - The resolved creator profile.
  * @returns {string} One of TEXT_BLEND_MODES.
  */
+/**
+ * True when the blend mode should apply to keywords only (Blend Applies To:
+ * Keywords). It needs keyword highlighting on — without it no word is a
+ * keyword — and an actual blend mode. Callers then draw the captions as two
+ * layers (params.captionWordLayer 'normal' unblended + 'keywords' blended).
+ */
+export function isKeywordOnlyBlend(params, profile = {}) {
+  return params.blendScope === 'keywords'
+    && !!params.enableKeywordHighlighting && params.enableKeywordHighlighting !== 'false'
+    && resolveTextBlendMode(params, profile) !== 'normal';
+}
+
 export function resolveTextBlendMode(params, profile) {
   if (params.textBlendMode && TEXT_BLEND_MODES.includes(params.textBlendMode)) {
     return params.textBlendMode;
@@ -1064,6 +1076,7 @@ export function getASSStyleFromConfig(params = {}) {
     captionMode: resolveCaptionMode(params),
     fontSizeAss: fontSize,
     textBlendMode: resolveTextBlendMode(params, profile),
+    keywordOnlyBlend: isKeywordOnlyBlend(params, profile),
     profile
   };
 }
@@ -1261,6 +1274,7 @@ export function getCSSPreviewFromConfig(params = {}) {
     profile,
     popScale,
     textBlendMode,
+    keywordOnlyBlend: isKeywordOnlyBlend(params, profile),
     wordSpacingPx: numericWordSpacing,
     enableKeywordHighlighting,
     keywordColor,

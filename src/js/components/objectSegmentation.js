@@ -145,7 +145,8 @@ function runModel(input) {
     // afterwards (the mask's colour identity — segmentation.js's
     // maskAppearance), and a transferred buffer is gone from this side.
     const image = input.image.slice();
-    w.postMessage({ id, encoderUrl: '/models/mobilesam-encoder.onnx', decoderUrl: '/models/mobilesam-decoder.onnx', ...input, image }, [image.buffer]);
+    w.postMessage({
+      refine: true, id, encoderUrl: '/models/mobilesam-encoder.onnx', decoderUrl: '/models/mobilesam-decoder.onnx', ...input, image }, [image.buffer]);
   });
 }
 
@@ -303,3 +304,53 @@ export function setMaskView(view) {
 
 // A re-tracked object (or a removed track) leaves its old masks stale.
 subscribe('objectTracks', () => dropStaleSegmentations());
+
+/**
+ * The masks the EXPORT needs, for the given tracks: each one's record and
+ * its keyframes' RLE bytes, base64'd for JSON. Only what is asked for, and
+ * only what is already loaded in this session (a segmentation whose file has
+ * not been read yet starts loading and is left out of this export — the
+ * caller waits for it; see awaitSegmentations).
+ *
+ * The bytes are the very ones the preview reads, so the export cannot draw a
+ * different mask from the one on screen.
+ */
+export function segmentationPayloadFor(trackKeys) {
+  const out = {};
+  (trackKeys || []).forEach((trackKey) => {
+    const track = appState.objectTracks?.[trackKey];
+    const record = track ? getSegmentationFor(trackKey, track) : null;
+    if (!record || record.status === 'failed') return;
+    const reader = readerFor(record);
+    if (!reader?.parts) return;
+    let masks = '';
+    try {
+      masks = reader.parts.map((part) => btoa(String.fromCharCode(...part))).join(' ');
+    } catch {
+      // A very long run of masks can overflow the argument list: chunk it.
+      masks = reader.parts.map((part) => {
+        let s = '';
+        for (let i = 0; i < part.length; i += 8192) s += String.fromCharCode(...part.subarray(i, i + 8192));
+        return btoa(s);
+      }).join(' ');
+    }
+    out[trackKey] = { record, masks };
+  });
+  return out;
+}
+
+/**
+ * Makes sure the masks for these tracks are IN MEMORY, so an export that
+ * needs them does not go out without them (the files load from IndexedDB on
+ * first need, which is usually a draw, and an export can be the first).
+ */
+export async function awaitSegmentations(trackKeys) {
+  const pending = [];
+  (trackKeys || []).forEach((trackKey) => {
+    const track = appState.objectTracks?.[trackKey];
+    const record = track ? getSegmentationFor(trackKey, track) : null;
+    if (!record || record.status === 'failed') return;
+    if (!readerFor(record)) pending.push(readers.get(record.key));
+  });
+  await Promise.all(pending.filter((p) => p && typeof p.then === 'function'));
+}

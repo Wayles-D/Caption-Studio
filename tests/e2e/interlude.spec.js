@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
 
+// The dropdowns are custom lists (so hovering an item can preview it): open, then choose.
+async function pickOption(page, selector, value) {
+  await page.locator(selector).click();
+  await page.locator(`[data-hover-option="${value}"]`).click();
+}
+
 // CINEMATIC TEXT INTERLUDES (shared/textElement.js, kind 'interlude'),
 // driven through the real UI and verified on the preview's own pixels.
 //
@@ -262,7 +268,7 @@ test('animation: the default fade runs from the interlude\'s own start, and a pr
   await seek(page, 3.0);
   expect(cornersAre(await sample(page), [255, 255, 255])).toBe(true);
 
-  await page.locator('#textel-anim-type').selectOption('none');
+  await pickOption(page, '#textel-anim-type', 'none');
   const noAnim = await inkAt(3.02);
   console.log(`no animation: ink at +0.02s ${noAnim}`);
   expect(noAnim).toBeGreaterThan(settled * 0.8);
