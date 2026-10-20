@@ -2386,3 +2386,23 @@ body.light-theme {
   background: var(--accent-color);
   color: #071318;
 }
+
+/* ---------------------------------------------------------------------------
+   Colour picker handles (react-colorful)
+
+   The library ships a 28px round pointer and 24px hue/alpha bars, sized for a
+   full-page picker. In a 340px inspector popover that handle covers a visible
+   chunk of the gradient it is meant to be picking from, so the colour under it
+   is the one you can't see. Smaller handle, slimmer bars — the picking area
+   itself is untouched.
+   --------------------------------------------------------------------------- */
+.react-colorful__pointer {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+
+.react-colorful__hue,
+.react-colorful__alpha {
+  height: 14px;
+}
