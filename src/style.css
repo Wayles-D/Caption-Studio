@@ -2396,13 +2396,16 @@ body.light-theme {
    is the one you can't see. Smaller handle, slimmer bars — the picking area
    itself is untouched.
    --------------------------------------------------------------------------- */
-.react-colorful__pointer {
+/* Two classes deep on purpose: react-colorful injects its own single-class
+   rules into <head> at mount, AFTER this stylesheet, so a matching specificity
+   would simply lose on source order. */
+.react-colorful .react-colorful__pointer {
   width: 16px;
   height: 16px;
   border-width: 2px;
 }
 
-.react-colorful__hue,
-.react-colorful__alpha {
+.react-colorful .react-colorful__hue,
+.react-colorful .react-colorful__alpha {
   height: 14px;
 }
