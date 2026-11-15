@@ -33,6 +33,8 @@
  */
 
 /** Never let a caption collapse to something unclickable on the timeline. */
+
+import { sentenceStartFlags } from './captionConfig.js';
 export const MIN_CAPTION_EVENT_DURATION = 0.1;
 
 function finiteOr(value, fallback) {
@@ -136,6 +138,9 @@ export function resolveCaptionPhrases(words, captionEvents) {
   if (!Array.isArray(words) || !words.length) return [];
   const events = Array.isArray(captionEvents) ? captionEvents : [];
   if (!events.length) return [];
+  // Sentence case capitalises where a SENTENCE begins, not where a caption
+  // does: a caption that continues a sentence starts in lower case.
+  const startsSentence = sentenceStartFlags(words);
 
   return events
     .filter((event) => event.enabled !== false)
@@ -150,7 +155,8 @@ export function resolveCaptionPhrases(words, captionEvents) {
             start: finiteOr(w.start, event.start),
             end: finiteOr(w.end, event.end),
             wordIndex: idx,
-            isKeyword: !!w.isKeyword
+            isKeyword: !!w.isKeyword,
+            sentenceStart: startsSentence[idx]
           };
         })
         .filter(Boolean);
@@ -233,6 +239,69 @@ export function splitCaptionEvent(event, afterPosition, words) {
     normalizeCaptionEvent({ start: event.start, end: Math.max(leftEnd, event.start + MIN_CAPTION_EVENT_DURATION), wordIndices: left }),
     normalizeCaptionEvent({ start: rightStart, end: Math.max(event.end, rightStart + MIN_CAPTION_EVENT_DURATION), wordIndices: right })
   ].filter(Boolean);
+}
+
+/**
+ * Breaks ONE word out of its caption so it stands on its own.
+ *
+ * "Here's my new" with `new` broken off becomes "Here's my" and "new" — two
+ * captions, each with its own timing, each draggable and trimmable like any
+ * other. A word in the MIDDLE leaves three: the part before it, the word, and
+ * the part after.
+ *
+ * Returns the replacement events in order, or null when there is nothing to
+ * do (the word isn't in this caption, or it is already the only word).
+ *
+ * Unlike splitCaptionEvent, the caption's own manual line breaks are carried
+ * across rather than dropped: a break is stored as a POSITION into
+ * wordIndices, so each group has to have them re-expressed relative to its
+ * own, shorter list, and a break that fell exactly where the caption was cut
+ * has already become the cut itself.
+ */
+export function breakWordOutOfCaptionEvent(event, wordIndex, words) {
+  if (!event || !Array.isArray(event.wordIndices)) return null;
+  const position = event.wordIndices.indexOf(wordIndex);
+  if (position === -1 || event.wordIndices.length < 2) return null;
+
+  const groups = [
+    event.wordIndices.slice(0, position),
+    [wordIndex],
+    event.wordIndices.slice(position + 1)
+  ].filter((group) => group.length);
+
+  const breaks = new Set(event.breakAfterIndices || []);
+  let consumed = 0;
+
+  return groups.map((indices, groupIndex) => {
+    const offset = consumed;
+    consumed += indices.length;
+    // The outer edges stay where the caption already started and ended, so
+    // breaking a word out never silently retimes its neighbours. Only the
+    // inner edges are derived from the words themselves.
+    const spans = indices.map((i) => words?.[i]).filter(Boolean);
+    const first = groupIndex === 0;
+    const last = groupIndex === groups.length - 1;
+    // spans can be empty when an index points past the transcript (a stale
+    // event after words were removed). Math.min() of nothing is Infinity, so
+    // fall back to the caption's own edge rather than letting that through.
+    const start = first || !spans.length
+      ? event.start
+      : Math.min(...spans.map((w) => finiteOr(w.start, event.start)));
+    const end = last || !spans.length
+      ? event.end
+      : Math.max(...spans.map((w) => finiteOr(w.end, event.end)));
+    return normalizeCaptionEvent({
+      // The group that keeps the first word keeps the caption's identity, so
+      // a selection or a per-caption override still points at something.
+      id: first ? event.id : undefined,
+      start,
+      end: Math.max(end, start + MIN_CAPTION_EVENT_DURATION),
+      wordIndices: indices,
+      breakAfterIndices: indices
+        .map((_, i) => i)
+        .filter((i) => i < indices.length - 1 && breaks.has(offset + i))
+    });
+  }).filter(Boolean);
 }
 
 /** Joins a caption with the one after it — the inverse of a split. */

@@ -68,6 +68,11 @@ function run(storeName, mode, fn) {
 }
 
 const videoKey = (baseName) => `video:${baseName}`;
+// The EDITING PROXY (backend/utils/proxyVideo.js): a browser-safe copy the
+// editor plays. Kept BESIDE the original, never instead of it — the original
+// is what ensureServerHasProjectFiles re-sends for an export, and exporting
+// from the proxy would quietly turn a 4K video into a 1080p one.
+const proxyKey = (baseName) => `proxy:${baseName}`;
 const audioKey = (assetId) => `audio:${assetId}`;
 const imageKey = (assetId) => `image:${assetId}`;
 
@@ -87,6 +92,17 @@ function getFile(key) {
 export async function startProjectWithVideo(baseName, file) {
   await run(FILE_STORE, 'readwrite', (store) => store.clear());
   if (baseName && file) await putFile(videoKey(baseName), file);
+}
+
+/** Keeps the editing proxy, so a reload plays it straight away instead of a video the browser may not decode. */
+export function rememberProxyFile(baseName, blob) {
+  if (!baseName || !blob) return Promise.resolve(null);
+  return putFile(proxyKey(baseName), blob);
+}
+
+/** The saved editing proxy for this project, or null. */
+export function getSavedProxyFile(baseName) {
+  return baseName ? getFile(proxyKey(baseName)) : Promise.resolve(null);
 }
 
 /** Remembers an imported audio file, for the preview after a reload and for re-sending it to the server. */
@@ -192,12 +208,19 @@ export async function restoreSavedProject({ demoVideoUrl }) {
   if (!doc || !doc.baseName) return null;
 
   let videoUrl = null;
+  // Whether this reopened project still needs its proxy fetched (it was
+  // reloaded before the proxy finished) — the caller resumes the wait.
+  let awaitingProxy = false;
   if (doc.uploadedFile?.demo) {
     videoUrl = demoVideoUrl;
   } else {
-    const blob = await getFile(videoKey(doc.baseName));
+    // The proxy first: it is the copy the browser is guaranteed to play. The
+    // original is the fallback (and is always what an export is made from).
+    const proxy = await getSavedProxyFile(doc.baseName);
+    const blob = proxy || await getFile(videoKey(doc.baseName));
     if (!blob) return null;
     videoUrl = URL.createObjectURL(blob);
+    awaitingProxy = !proxy;
   }
 
   const tracks = await Promise.all((doc.audioTracks || []).map(async (track) => {
@@ -207,7 +230,7 @@ export async function restoreSavedProject({ demoVideoUrl }) {
   }));
 
   restoreProjectSnapshot({ ...doc, audioTracks: tracks });
-  return { videoUrl, name: doc.uploadedFile?.name || null, savedAt: doc.savedAt || null };
+  return { videoUrl, name: doc.uploadedFile?.name || null, savedAt: doc.savedAt || null, baseName: doc.baseName, awaitingProxy };
 }
 
 /**

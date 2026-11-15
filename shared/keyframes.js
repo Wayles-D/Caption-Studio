@@ -354,6 +354,42 @@ export function moveKeyframeEntry(keyframeList, oldTime, newTime) {
  * backend/utils/graphicsFrameGenerator.js's subdivideSlicesForAnimation,
  * reused as-is for keyframes).
  */
+/**
+ * The span over which INTERPOLATED properties move — the only span that needs
+ * dense, per-frame sampling in the exporter.
+ *
+ * A STEPPED property (a font, a weight, a casing — see
+ * STYLE_KEYFRAME_PROPERTIES) holds and then changes outright, so the frames
+ * between two of its keyframes are all identical. Sampling them densely costs
+ * one rendered PNG per output frame to express a change that needs two, which
+ * is pure export time: a single font keyframe pair over 1.5s took one caption
+ * from 3 rendered frames to 27. Pair this with getSteppedKeyframeTimes, which
+ * gives the instants that DO need their own boundary.
+ */
+export function getInterpolatedKeyframeTimeRange(override) {
+  const list = override?.keyframes;
+  if (!isValidList(list)) return null;
+  const times = list
+    .filter((k) => Object.keys(k?.values || {}).some((property) => !isSteppedProperty(property)))
+    .map((k) => k.t);
+  if (!times.length) return null;
+  return { min: Math.min(...times), max: Math.max(...times) };
+}
+
+/**
+ * The instants a stepped property changes. Each needs a frame boundary of its
+ * own — and nothing in between, because nothing in between differs.
+ */
+export function getSteppedKeyframeTimes(override) {
+  const list = override?.keyframes;
+  if (!isValidList(list)) return [];
+  return [...new Set(
+    list
+      .filter((k) => Object.keys(k?.values || {}).some(isSteppedProperty))
+      .map((k) => k.t)
+  )].sort((a, b) => a - b);
+}
+
 export function getKeyframeTimeRange(override) {
   const list = override?.keyframes;
   if (!isValidList(list)) return null;

@@ -2,7 +2,8 @@ import assert from 'assert';
 import { groupWordsToPhrases } from './utils/phraseGrouper.js';
 import { resolveASSStyle, generateASSHeader, generateASSDialogueLine } from './utils/assWriter.js';
 import { generateSubtitleFromTranscript } from './services/subtitleService.js';
-import { getASSStyleFromConfig, getCSSPreviewFromConfig, CREATOR_PROFILES, ANIMATION_MODES, hexToASSColor } from '../shared/captionConfig.js';
+import { getASSStyleFromConfig, getCSSPreviewFromConfig, CREATOR_PROFILES, ANIMATION_MODES, hexToASSColor, applyCaseTransform as caseOf, sentenceStartFlags } from '../shared/captionConfig.js';
+import { resolveCaptionPhrases as phrasesFrom } from '../shared/captionEvent.js';
 import { balancePhraseLines } from './utils/phraseGrouper.js';
 import { wordOffsetToCanvasPx, canvasPxToWordOffset } from '../shared/captionGraphics.js';
 import { buildVideoTransformFilterChain } from './utils/videoTransformFilter.js';
@@ -540,6 +541,20 @@ assert.ok(resolveVideoTransformAtTime(animatedVt, 6).opacity > 0 && resolveVideo
 const backToStatic = routeFieldsThroughKeyframes({ keyframes: [] }, { opacity: 20 }, VIDEO_FIELD_TO_PROPERTY, 2, readDefault);
 assert.strictEqual(backToStatic.nextKeyframes, null, 'Removing every keyframe must return the target to static mode');
 console.log('✓ Static until opted in; the keyframe button enables animation; edits then key at the playhead');
+
+// SENTENCE CASE FOLLOWS THE SPEECH, NOT THE CAPTION: a caption that continues
+// a sentence starts in lower case; a new sentence gets its capital wherever it
+// begins; I and all-capitals words (BHYND) are left alone.
+{
+  const said = "okay so this is BHYND and i think it works. then we move on, right? yes I'm sure".split(' ').map((w, i) => ({ word: w, start: i, end: i + 0.9 }));
+  const events = [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10], [11, 12, 13], [14, 15, 16, 17]]
+    .map((ix, n) => ({ id: 'c' + n, wordIndices: ix, start: ix[0], end: ix[ix.length - 1] + 0.9, enabled: true }));
+  const shown = phrasesFrom(said, events).map((p) => p.words.map((w, i) => caseOf(w.word, 'normal', w.sentenceStart ?? i === 0)).join(' '));
+  assert.deepStrictEqual(shown, ['Okay so this is', 'BHYND and I think', 'it works. Then', 'we move on,', "right? Yes I'm sure"]);
+  assert.strictEqual(caseOf('this is it. and then', 'normal', false), 'this is it. And then');
+  assert.deepStrictEqual(sentenceStartFlags([{ word: 'a' }, { word: 'b.' }, { word: 'c' }]), [true, false, true]);
+  console.log('✓ Sentence case follows the speech: continuations lower case, new sentences capitalised, I and BHYND kept');
+}
 
 console.log('\n=== ALL CAPTION ENGINE TESTS PASSED SUCCESSFULLY! ===\n');
 

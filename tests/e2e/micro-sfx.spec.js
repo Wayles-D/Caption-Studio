@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { selectDirectedMoments } from '../../shared/sfxDirection.js';
+import { openTool } from './helpers/dock.js';
 
 // AI-directed micro-SFX — the director (shared/sfxDirection.js) driven through
 // the real editor rather than as arithmetic, which backend/test_audio_pipeline
@@ -323,7 +324,7 @@ test('the "+" still adds rather than replacing, after a replace has been used', 
 
 test('a volume change applies to the ticked effects, or to all when none are ticked', async ({ page }) => {
   await loadWithAnalysis(page);
-  await page.getByRole('button', { name: 'Audio', exact: true }).click();
+  await openTool(page, 'Audio');
 
   const ids = (await soundEvents(page)).map((e) => e.id);
   expect(ids.length).toBeGreaterThanOrEqual(4);

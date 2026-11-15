@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { videoToComposition, compositionToScreen } from '../../shared/objects/coordinates.js';
 import { sampleTimes } from '../../shared/objects/detections.js';
 import { serveVideo } from './serveVideo.js';
+import { openTool } from './helpers/dock.js';
 
 // OBJECT DETECTION & SELECTION in the real editor (src/js/components/
 // objectDetection.js, objectOverlay.js), on real footage — a CC BY 4.0
@@ -44,7 +45,7 @@ async function seek(page, t) {
 }
 
 async function openObjects(page) {
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await expect(page.locator('#objects-editor')).toBeVisible();
 }
 

@@ -123,10 +123,13 @@ function SidebarColorField({ fieldKey, label, openField, setOpenField }) {
 // exact shape produced (the active border rendered as if it were never
 // applied). Keeping them mutually exclusive sidesteps the ambiguity
 // entirely instead of depending on generation order.
-const PRESET_BTN_BASE = `preset-btn bg-[var(--bg-input)] border rounded-[var(--radius-sm)] p-2 cursor-pointer transition-all duration-200
-  hover:border-[var(--accent-color)] hover:bg-[rgba(217,119,87,0.08)]`;
+// Each tile PREVIEWS a caption look (white, yellow, chrome text...), so it
+// sits on a fixed video-dark backdrop in both colour modes, on purpose — on a
+// light tile the white presets vanished.
+const PRESET_BTN_BASE = `preset-btn bg-[#0E0E11] border rounded-[var(--radius-sm)] p-2 cursor-pointer transition-[border-color,box-shadow] duration-200
+  hover:border-[#5A5A64]`;
 const PRESET_BTN_INACTIVE = 'border-[var(--border-color)]';
-const PRESET_BTN_ACTIVE = 'border-[var(--accent-color)] bg-[rgba(217,119,87,0.08)]';
+const PRESET_BTN_ACTIVE = 'border-[#0E0E11] shadow-[0_0_0_2px_var(--bg-sidebar),0_0_0_3.5px_var(--accent-color)]';
 
 // One entry per Preset Profile button — driving these from `currentPreset`
 // (Zustand) instead of a manually-toggled `.active` class is what makes
@@ -180,12 +183,12 @@ function handleCaptionModeChange(mode) {
 }
 
 const SETTINGS_GROUP = 'flex flex-col gap-1.5';
-const GROUP_LABEL = 'text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]';
+const GROUP_LABEL = 'text-[12px] font-medium text-[var(--text-secondary)]';
 const LABEL_JUSTIFY = 'flex items-center justify-between';
-const FIELD_HINT = 'text-[11px] text-[var(--text-muted)] m-0';
+const FIELD_HINT = 'text-[12px] text-[var(--text-muted)] m-0';
 const SLIDER = `appearance-none w-full h-1.5 rounded-[3px] bg-[var(--bg-input)] outline-none cursor-pointer
   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full
-  [&::-webkit-slider-thumb]:bg-[var(--accent-color)] [&::-webkit-slider-thumb]:shadow-[0_0_10px_rgba(217,119,87,0.5)]
+  [&::-webkit-slider-thumb]:bg-[var(--accent-color)] [&::-webkit-slider-thumb]:shadow-[0_0_0_3px_var(--accent-glow)]
   [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:duration-150
   hover:[&::-webkit-slider-thumb]:scale-[1.2]`;
 const SELECT = `w-full h-9 bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] text-[var(--text-primary)]
@@ -193,11 +196,11 @@ const SELECT = `w-full h-9 bg-[var(--bg-input)] border border-[var(--border-colo
 const RADIO_GRID = 'grid grid-cols-2 gap-1.5 bg-[var(--bg-input)] p-1 rounded-[var(--radius-sm)] border border-[var(--border-color)]';
 const RADIO_TAB = 'relative text-center cursor-pointer';
 const RADIO_TAB_INPUT = 'peer absolute opacity-0';
-const RADIO_TAB_SPAN = `block px-2.5 py-1.5 text-[11px] font-bold text-[var(--text-secondary)] rounded-md transition-all duration-200
+const RADIO_TAB_SPAN = `block px-2.5 py-1.5 text-[12px] font-bold text-[var(--text-secondary)] rounded-md transition-all duration-200
   peer-checked:bg-[var(--bg-card)] peer-checked:text-[var(--text-primary)] peer-checked:shadow-[var(--shadow-sm)]`;
 const COLOR_PICKER_GRID = 'grid grid-cols-4 gap-2.5';
 const COLOR_PICKER_ITEM = 'flex flex-col items-center gap-1.5';
-const COLOR_PICKER_ITEM_LABEL = 'text-[10px] font-semibold text-[var(--text-secondary)] text-center';
+const COLOR_PICKER_ITEM_LABEL = 'text-[11px] font-semibold text-[var(--text-secondary)] text-center';
 // 'accordion-item'/'accordion-header' carry no styling of their own — kept
 // as stable selector hooks for sidebarInspector.js's querySelectorAll('.accordion-header')
 // + closest('.accordion-item') collapse-toggle wiring, exactly like
@@ -309,7 +312,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
       {!bare && (
         <div className="py-4 px-5 border-b border-[var(--border-color)] flex items-center justify-between">
           <span className="font-bold text-[13px] uppercase tracking-[0.06em] text-[var(--text-secondary)]">Caption Inspector</span>
-          <span className="text-[10px] font-bold text-[var(--status)] flex items-center gap-[5px] bg-[var(--status-wash-bg)] px-2 py-[3px] rounded-xl">
+          <span className="text-[11px] font-bold text-[var(--status)] flex items-center gap-[5px] bg-[var(--status-wash-bg)] px-2 py-[3px] rounded-xl">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--status)] shadow-[0_0_8px_var(--status)] animate-[pulse_1.8s_infinite]" /> LIVE WYSIWYG
           </span>
         </div>
@@ -459,6 +462,12 @@ export function SidebarInspector({ sectionFilter } = {}) {
                 <input type="radio" name="text-case" value="lowercase" className={RADIO_TAB_INPUT} />
                 <span className={RADIO_TAB_SPAN}>lowercase</span>
               </label>
+              {/* AS TYPED: every word exactly as it is in the transcript —
+                  "BHYND", "iPhone" — instead of re-cased. */}
+              <label className={RADIO_TAB} title="Every word exactly as it is written in the transcript">
+                <input type="radio" name="text-case" value="none" className={RADIO_TAB_INPUT} />
+                <span className={RADIO_TAB_SPAN}>As typed</span>
+              </label>
             </div>
           </div>
         </AccordionSection>}
@@ -480,7 +489,7 @@ export function SidebarInspector({ sectionFilter } = {}) {
                   data-preset={key}
                   onClick={() => applyPresetSelection(key)}
                 >
-                  <span className={`text-[11px] font-extrabold block text-center ${labelClassName}`}>{label}</span>
+                  <span className={`text-[12px] font-extrabold block text-center ${labelClassName}`}>{label}</span>
                 </button>
               ))}
             </div>

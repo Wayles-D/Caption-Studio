@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { SOUND_IDS } from '../../shared/soundRegistry.js';
+import { openTool } from './helpers/dock.js';
 
 /**
  * The audio timeline: the "+ Sound" / "+ Audio" lanes, manual sound-effect
@@ -592,7 +593,7 @@ test('the model may name a sound per moment, but the user always outranks it', a
 
 test('the mapping UI distinguishes "Auto" from a pinned sound', async ({ page }) => {
   await loadDemoVideo(page);
-  await page.getByRole('button', { name: 'Audio', exact: true }).click();
+  await openTool(page, 'Audio');
 
   const reveal = page.locator('select[data-event-type="reveal"]');
   await expect(reveal).toBeVisible();

@@ -85,7 +85,7 @@ export function SplashScreen({ onDone }) {
       role="status"
       aria-label="bhYnd"
       onPointerDown={dismiss}
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-[#050607]"
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-[#050506]"
       style={{
         opacity: leaving ? 0 : 1,
         // Stops taking presses the instant it starts leaving, so a click

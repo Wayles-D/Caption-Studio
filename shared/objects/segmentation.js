@@ -99,6 +99,26 @@ export const DEFAULT_SEGMENTATION_CONFIG = {
    * subject or change where a gap is. Every visibility decision still belongs
    * to the grid, so identity behaves exactly as it was validated.
    */
+  /**
+   * Prompt the model from the PREVIOUS MASK's box (carried by the tracker's
+   * motion) rather than the tracked box itself. Measured: mask quality
+   * correlates 0.63 with box quality for a subject in clear view, and the
+   * tracked box averages only 0.88 IoU — so the prompt, not the sampling
+   * rate, is what caps the silhouette.
+   *
+   * OFF at this step size, and measured: carrying the previous mask's box
+   * forward over 0.4s DRIFTS. On the crossing subject, whose mask is already
+   * clipped by spill protection, it runs away — a smaller mask gives a
+   * smaller prompt which gives a smaller mask again (IoU 0.883 -> 0.774,
+   * worst frame 0.680 -> 0.245). The subject in clear view was unaffected
+   * (0.937 -> 0.933), so the mechanism is drift, not the idea.
+   *
+   * This is the primitive dense propagation needs — a matte carried frame to
+   * frame, the way Resolve does it, where the step is 1/30s and the previous
+   * silhouette is an excellent guess. It must stay off until the sampling is
+   * dense enough to earn it.
+   */
+  promptFromMask: false,
   refineMotion: true,
   /** Neighbouring masks less alike than this moved enough to be worth a keyframe between them. */
   refineBelowIoU: 0.82,
@@ -147,6 +167,76 @@ export function isSegmentationValidFor(seg, trackKey, track, config) {
 /** The mask frame for a box: the box widened by `margin` of its size each side (may extend past the video). */
 export function maskFrame(box, margin) {
   return { x: box.x - margin * box.width, y: box.y - margin * box.height, width: box.width * (1 + 2 * margin), height: box.height * (1 + 2 * margin) };
+}
+
+/**
+ * The tight box around a mask, in normalized FRAME coordinates.
+ *
+ * The mask is stored over maskFrame(box, margin) — the box it was segmented
+ * for, widened on every side — so a cell maps back through that frame. Null
+ * when the mask is empty.
+ *
+ * This is what makes the silhouette, rather than the tracker, able to say
+ * where the object is: the tracked box averages 0.88 IoU with the truth and
+ * SAM is prompted with it, so it caps the mask it is asked to produce.
+ */
+export function maskBounds(alpha, grid, box, margin) {
+  let minX = grid.width; let minY = grid.height; let maxX = -1; let maxY = -1;
+  for (let y = 0; y < grid.height; y++) {
+    for (let x = 0; x < grid.width; x++) {
+      if (alpha[y * grid.width + x] < 128) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;
+  const frame = maskFrame(box, margin);
+  return {
+    x: frame.x + (minX / grid.width) * frame.width,
+    y: frame.y + (minY / grid.height) * frame.height,
+    width: Math.max(1e-6, ((maxX + 1 - minX) / grid.width) * frame.width),
+    height: Math.max(1e-6, ((maxY + 1 - minY) / grid.height) * frame.height)
+  };
+}
+
+/**
+ * The previous mask's box, carried forward by how the TRACKER says the object
+ * moved since then.
+ *
+ * Propagating a matte needs small steps: 0.4s apart, last keyframe's mask is a
+ * poor guess at where the object is now. So the shape comes from the mask (it
+ * fits the silhouette, which a detector box does not) and the motion from the
+ * tracker (it knows where the object went). Falls back to the tracker's own
+ * box whenever the two disagree badly — a propagated box that has drifted off
+ * the object must not drag the segmentation with it.
+ */
+export function propagatedBox(previousMaskBox, previousBox, currentBox, minAgreement = 0.3) {
+  if (!previousMaskBox || !previousBox || !currentBox) return currentBox;
+  const sx = currentBox.width / Math.max(1e-6, previousBox.width);
+  const sy = currentBox.height / Math.max(1e-6, previousBox.height);
+  // Scale the mask box about the previous tracked box's centre, then move it
+  // to the current one's.
+  const pcx = previousBox.x + previousBox.width / 2;
+  const pcy = previousBox.y + previousBox.height / 2;
+  const ccx = currentBox.x + currentBox.width / 2;
+  const ccy = currentBox.y + currentBox.height / 2;
+  const moved = {
+    x: ccx + (previousMaskBox.x - pcx) * sx,
+    y: ccy + (previousMaskBox.y - pcy) * sy,
+    width: previousMaskBox.width * sx,
+    height: previousMaskBox.height * sy
+  };
+  return iouOf(moved, currentBox) >= minAgreement ? moved : currentBox;
+}
+
+function iouOf(a, b) {
+  const x0 = Math.max(a.x, b.x); const y0 = Math.max(a.y, b.y);
+  const x1 = Math.min(a.x + a.width, b.x + b.width); const y1 = Math.min(a.y + a.height, b.y + b.height);
+  const inter = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+  const union = a.width * a.height + b.width * b.height - inter;
+  return union > 0 ? inter / union : 0;
 }
 
 /** A segmentation's grid size, chosen once from the object's shape at its start. */
@@ -514,12 +604,18 @@ export async function segmentTrack(opts) {
   const segmentAt = async (time) => {
     const at = opts.boxAt(time);
     if (!at) return null;
-    const crop = cropFor(at.box, W, H, config.cropPad);
+    // The box the model is PROMPTED with: the previous silhouette's own box,
+    // moved as the tracker says the object moved. Falls back to the tracked
+    // box when there is no previous mask, or when the two disagree.
+    const promptBox = config.promptFromMask && previous?.maskBox
+      ? propagatedBox(previous.maskBox, previous.box, at.box)
+      : at.box;
+    const crop = cropFor(promptBox, W, H, config.cropPad);
     const [input, others] = await Promise.all([opts.grab(time, crop), opts.others ? opts.others(time) : Promise.resolve([])]);
-    const prompt = boxPrompt(at.box, crop, W, H);
-    const negatives = negativePoints(at.box, others, crop, W, H);
+    const prompt = boxPrompt(promptBox, crop, W, H);
+    const negatives = negativePoints(promptBox, others, crop, W, H);
     const maskInput = config.usePreviousMask && previous?.lowRes
-      ? warpLowRes(previous.lowRes, previous.crop, previous.box, crop, at.box, W, H)
+      ? warpLowRes(previous.lowRes, previous.crop, previous.box, crop, promptBox, W, H)
       : null;
     const out = await opts.segment({
       image: input.data, width: crop.inputWidth, height: crop.inputHeight,
@@ -540,14 +636,14 @@ export async function segmentTrack(opts) {
     const mask = r.judged.hidden ? new Uint8Array(grid.width * grid.height) : r.alpha;
     keyframes.push(keyframe);
     masks.push(mask);
-    chain.push(r.judged.hidden ? null : { alpha: r.alpha, lowRes: r.out.lowRes, crop: r.crop, box: r.at.box });
+    chain.push(r.judged.hidden ? null : { alpha: r.alpha, lowRes: r.out.lowRes, crop: r.crop, box: r.at.box, maskBox: maskBounds(r.alpha, grid, r.at.box, config.margin) });
     opts.onKeyframe?.({
       time: r.time, box: r.at.box, state: r.at.state, negatives: r.negatives, predictedIoU: r.out.iou, agreement: boxAgreement(r.alpha, grid, config.margin),
       spill: r.spill, overlap: r.overlap, temporal: r.consistency, hidden: r.judged.hidden, confidence: r.judged.confidence,
       keyframe, mask, grid, config
     });
     // Only a mask that IS the object prompts the next one.
-    previous = r.judged.hidden ? null : { alpha: r.alpha, lowRes: r.out.lowRes, crop: r.crop, box: r.at.box };
+    previous = r.judged.hidden ? null : { alpha: r.alpha, lowRes: r.out.lowRes, crop: r.crop, box: r.at.box, maskBox: maskBounds(r.alpha, grid, r.at.box, config.margin) };
   };
 
   // Times that must be keyframes: the track's ends and both edges of every gap.

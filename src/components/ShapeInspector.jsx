@@ -87,7 +87,7 @@ function ShapeEditor({ shape }) {
             {DRAW_DIRECTIONS.map((d) => (
               <button
                 type="button" key={d} id={`shape-draw-direction-${d}`} data-direction={d}
-                className={`h-7 flex-1 rounded-[3px] border text-[11px] font-bold cursor-pointer ${a.drawDirection === d ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+                className={`h-7 flex-1 rounded-[3px] border text-[12px] font-bold cursor-pointer ${a.drawDirection === d ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
                 onClick={() => setAppearance({ drawDirection: d })}
               >{DRAW_DIRECTION_LABELS[shape.kind]?.[d] || d}</button>
             ))}
@@ -168,7 +168,7 @@ export function ShapeInspector() {
       <div className={CARD}>
         <div className="flex items-center justify-between">
           <span className={SECTION_TITLE}>Shapes</span>
-          <span className="text-[11px] font-semibold text-[var(--accent-color)]">{shapes.length}</span>
+          <span className="text-[12px] font-semibold text-[var(--accent-color)]">{shapes.length}</span>
         </div>
         <p className={HINT}>Simple shapes over the video for a stretch of the timeline — at the playhead.</p>
         <div className="grid grid-cols-3 gap-2" id="shape-add">
@@ -182,9 +182,9 @@ export function ShapeInspector() {
               <button key={s.id} type="button"
                 className={`${ROW_BASE} ${s.id === selected?.id ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}`}
                 onClick={() => shapeLayers.selectShapeLayer(s.id)}>
-                <span className="text-[10px] font-bold text-[var(--text-muted)]">SHP</span>
+                <span className="text-[11px] font-bold text-[var(--text-muted)]">SHP</span>
                 <span className="text-[12px] text-[var(--text-primary)] truncate flex-1">{SHAPE_LABELS[s.kind]}</span>
-                <span className="text-[10px] text-[var(--text-muted)]">{s.start.toFixed(1)}s</span>
+                <span className="text-[11px] text-[var(--text-muted)]">{s.start.toFixed(1)}s</span>
               </button>
             ))}
           </div>

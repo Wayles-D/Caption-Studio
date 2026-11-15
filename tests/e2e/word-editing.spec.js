@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // The dropdowns are custom lists (so hovering an item can preview it): open, then choose.
 async function pickOption(page, selector, value) {
@@ -54,7 +55,7 @@ test('a word typed in the transcript reaches the video, and survives the caption
   await page.waitForTimeout(300);
   const before = await captionPixels(page);
 
-  await page.getByRole('button', { name: 'Transcript', exact: true }).click();
+  await openTool(page, 'Transcript');
   const chip = page.locator('#transcript-words-container .word-chip[data-index="1"]');
   await chip.click();
   await page.keyboard.press('End');

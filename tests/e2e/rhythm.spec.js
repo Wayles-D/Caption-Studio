@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { drums, toWav } from '../fixtures/rhythmSynth.js';
+import { openTool } from './helpers/dock.js';
 
 // THE RHYTHM ENGINE in the real editor (src/js/components/rhythm.js): audio
 // imported through "+ Audio", analysed in the worker, its beats on the
@@ -86,7 +87,7 @@ test('imported music: tempo, beats on the ruler where they are, playhead jumps b
   expect(Math.abs((geo.x / geo.w) * geo.d - beats[3].t)).toBeLessThan(0.05);
 
   // The Rhythm card, in plain words.
-  await page.getByRole('button', { name: 'Audio', exact: true }).click();
+  await openTool(page, 'Audio');
   await expect(page.locator('#rhythm-status')).toContainText('Rhythm detected');
   await expect(page.locator('#rhythm-bpm')).toHaveText('120');
   await expect(page.locator('#rhythm-confidence')).toHaveText('High');
@@ -145,7 +146,7 @@ test('"add at next beat" creates at the beat after the playhead — and edits no
   await openDemo(page);
   await importAudio(page, DRUMS_120.file);
   await waitForRhythmOf(page, 'drums-120');
-  await page.getByRole('button', { name: 'Audio', exact: true }).click();
+  await openTool(page, 'Audio');
   const existing = await page.evaluate(() => window.__shapeLayers.addShapeLayer('ellipse', { start: 5 }).id);
   const before = await page.evaluate((i) => JSON.stringify(window.__appState.shapeLayers.find((s) => s.id === i)), existing);
   await page.evaluate(() => { document.getElementById('preview-video').currentTime = 1.0; });

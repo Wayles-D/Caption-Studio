@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { SOUND_IDS } from '../../shared/soundRegistry.js';
+import { openTool } from './helpers/dock.js';
 
 // THE TRANSCRIPT AS AN EDITING SURFACE, and the live SFX preview's first play.
 //
@@ -27,7 +28,7 @@ async function load(page) {
     }
     window.__updateState({ words, phrases, soundEvents: [] }, { recordHistory: false });
   }, WORDS);
-  await page.getByRole('button', { name: 'Transcript', exact: true }).first().click();
+  await openTool(page, 'Transcript');
   await expect(page.locator('.word-chip')).toHaveCount(WORDS.length);
 }
 
@@ -55,9 +56,12 @@ test('focusing a word in the transcript puts that word — not the one before �
 
 test('a word\'s ♪ places a sound effect on that word, on the SFX lane; undo takes it back', async ({ page }) => {
   await load(page);
-  const sfx = page.locator('.word-chip-sfx-toggle[data-word-sfx="7"]');
-  await expect(sfx).not.toHaveClass(/active/);
+  // The word itself shows whether a sound is on it (a dot); its Sound option
+  // is in the bar that opens when the word is clicked.
+  const sfx = page.locator('#transcript-words-container .word-chip[data-index="7"]');
+  await expect(sfx).not.toHaveClass(/has-sound/);
   await sfx.click();
+  await page.locator('#word-actions [data-word-action="sound"]').click();
   await expect(page.locator('#sound-library-panel')).toBeVisible();
   // Scrubbing while choosing must not move where it lands.
   await page.evaluate(() => { document.getElementById('preview-video').currentTime = 4.2; });
@@ -69,12 +73,12 @@ test('a word\'s ♪ places a sound effect on that word, on the SFX lane; undo ta
   expect(events[0].t).toBeCloseTo(WORDS[7].start, 6);
   expect(events[0].s).toBe(SOUND_IDS[0]);
   await expect(page.locator(`#timeline-sfx-track .timeline-sfx-clip`)).toHaveCount(1);
-  await expect(sfx).toHaveClass(/active/);
-  await expect(page.locator('.word-chip-sfx-toggle.active')).toHaveCount(1);
+  await expect(sfx).toHaveClass(/has-sound/);
+  await expect(page.locator('.word-chip.has-sound')).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Undo (Ctrl+Z)' }).click();
   await expect(page.locator('#timeline-sfx-track .timeline-sfx-clip')).toHaveCount(0);
-  await expect(sfx).not.toHaveClass(/active/);
+  await expect(sfx).not.toHaveClass(/has-sound/);
 });
 
 /** Records every Web Audio source started, against the video's state at that moment. */

@@ -148,6 +148,15 @@ export function initSidebarInspector() {
       updateState({ textCase: e.target.value });
     });
   });
+  // The radios used to be write-only: after a reload, a preset or an undo,
+  // they kept showing UPPERCASE (their markup default) whatever the captions
+  // were actually using. They follow the real value now.
+  const syncTextCaseRadios = () => {
+    const current = appState.textCase || 'uppercase';
+    textCaseRadios.forEach((radio) => { radio.checked = radio.value === current; });
+  };
+  syncTextCaseRadios();
+  subscribe('textCase', syncTextCaseRadios);
 
   // 4. Custom Color Picker Popovers — now real React <ColorPickerField>
   // components rendered directly in SidebarInspector.jsx's JSX (see the

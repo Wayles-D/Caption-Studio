@@ -1,35 +1,39 @@
 /**
- * Top Toolbar — React port of src/js/components/toolbar.js (see the
- * migration plan's Stage 2). Reset still delegates to the exact same
- * src/js/state.js function (resetStyles) — an imperative action, not
- * itself reactive state, so there's nothing to gain by routing it through
- * a Zustand action.
+ * Top bar — brand and project on the left, the session's actions on the
+ * right, with exactly ONE filled button (Export): the eye should land on the
+ * thing that finishes the job. Everything else is quiet until hovered.
  *
- * Undo/Redo have moved down to the timeline header, next to the Keyframe/
- * Advanced buttons (see src/js/components/timelinePanel.js) — they're
- * history-editing controls for the SAME keyframe/style edits the timeline
- * is the primary surface for, so they now live with the rest of the
- * editing controls instead of the nav.
+ * Reset still delegates to the exact same src/js/state.js function
+ * (resetStyles) — an imperative action, not itself reactive state.
  *
- * Import now only happens via the upload dropzone (PreviewStage's "Select
- * Video" button) — the nav no longer has its own separate Import Video
- * button/entry point.
+ * Undo/Redo live in the timeline header, next to the Keyframe/Advanced
+ * buttons (see src/js/components/timelinePanel.js) — they are history for
+ * the same edits the timeline is the primary surface for.
  *
- * "Export" replaces the old separate "Generate Video" (pre-render) and
- * floating-playback-bar "Download" buttons with a single nav action —
- * onExportVideo is App.jsx's handleDownloadVideo, which already renders the
- * current edits fresh before serving the file, so Export always produces
- * up-to-date output in one click.
+ * Import only happens via the upload dropzone (PreviewStage's "Select
+ * Video" button).
+ *
+ * "Export" is App.jsx's handleDownloadVideo, which renders the current
+ * edits fresh before serving the file, so Export always produces up-to-date
+ * output in one click.
  */
 import { useEffect, useRef, useState } from 'react';
 import { appState, resetStyles, subscribe, updateState } from '../js/state.js';
 import { discardSavedProject } from '../js/projectPersistence.js';
 import { SKIP_SPLASH_ONCE } from './SplashScreen.jsx';
-import { ToggleSwitch } from './ToggleSwitch.jsx';
+import { useThemeStore } from '../store/themeStore.js';
+import { BrandMark } from './BrandMark.jsx';
 
-const SECONDARY = `bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)] text-xs font-semibold
-  px-3 py-1.5 rounded-[var(--radius-sm)] flex items-center gap-1.5 cursor-pointer transition-all duration-200
-  hover:bg-[var(--bg-card-hover)] hover:border-[var(--border-color-hover)]`;
+// Quiet chrome: no border, no fill until hovered. Labels collapse to icons
+// on narrow screens (the aria-label still names them).
+const GHOST = `h-8 px-2.5 rounded-lg border-0 bg-transparent text-[var(--text-secondary)] text-[12.5px] font-medium
+  flex items-center gap-1.5 cursor-pointer transition-colors duration-[var(--dur-fast)]
+  hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] active:bg-[var(--bg-pressed)] disabled:opacity-50`;
+const ICON_BTN = `h-8 w-8 rounded-lg border-0 bg-transparent text-[var(--text-secondary)] grid place-items-center
+  cursor-pointer transition-colors duration-[var(--dur-fast)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]`;
+const PRIMARY = `h-8 px-3.5 rounded-lg border-0 bg-[var(--accent-gradient)] text-[var(--text-on-accent)] text-[12.5px] font-semibold
+  flex items-center gap-1.5 cursor-pointer shadow-[var(--shadow-glow)] transition-[background-color,transform] duration-[var(--dur-fast)]
+  hover:bg-[var(--accent-hover)] active:scale-[0.98] disabled:opacity-60`;
 
 /**
  * NEW PROJECT — the open project (its video and every edit) is saved in this
@@ -68,27 +72,26 @@ function NewProjectButton() {
 
   return (
     <div className="relative" ref={box}>
-      <button type="button" id="btn-toolbar-new" className={SECONDARY} onClick={() => setAsking((a) => !a)} aria-expanded={asking}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="12" y1="18" x2="12" y2="12" /><line x1="9" y1="15" x2="15" y2="15" /></svg>
-        New Project
+      <button
+        type="button" id="btn-toolbar-new" className={GHOST} onClick={() => setAsking((a) => !a)}
+        aria-expanded={asking} aria-label="New project"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+        <span className="max-sm:hidden">New project</span>
       </button>
       {asking && (
         <div
           id="new-project-confirm" role="dialog" aria-label="Start a new project"
-          className="absolute right-0 top-[calc(100%+8px)] w-[280px] bg-[var(--bg-card)] border border-[var(--border-color)]
-            rounded-[var(--radius-md)] shadow-[var(--shadow-md)] p-4 flex flex-col gap-3 z-[1001]"
+          className="bhynd-pop absolute right-0 top-[calc(100%+8px)] w-[290px] bg-[var(--bg-raised)] border border-[var(--border-color)]
+            rounded-[14px] shadow-[var(--shadow-lg)] p-4 flex flex-col gap-2.5 z-[1001]"
         >
-          <span className="text-[13px] font-bold text-[var(--text-primary)]">Start a new project?</span>
-          <span className="text-[12px] text-[var(--text-secondary)] leading-snug">
+          <span className="text-[14px] font-semibold text-[var(--text-primary)]">Start a new project?</span>
+          <span className="text-[12.5px] text-[var(--text-secondary)] leading-relaxed">
             This removes the current video and all its edits from this browser. Export first if you want to keep it.
           </span>
-          <div className="flex justify-end gap-2">
-            <button type="button" id="new-project-cancel" className={SECONDARY} onClick={() => setAsking(false)} disabled={busy}>Cancel</button>
-            <button
-              type="button" id="new-project-confirm-btn" onClick={startNew} disabled={busy}
-              className="bg-[var(--accent-gradient)] border-0 text-[var(--text-on-accent)] text-xs font-bold px-3 py-1.5
-                rounded-[var(--radius-sm)] cursor-pointer disabled:opacity-60"
-            >
+          <div className="flex justify-end gap-2 mt-1">
+            <button type="button" id="new-project-cancel" className={GHOST} onClick={() => setAsking(false)} disabled={busy}>Cancel</button>
+            <button type="button" id="new-project-confirm-btn" className={PRIMARY} onClick={startNew} disabled={busy}>
               {busy ? 'Clearing…' : 'Start new project'}
             </button>
           </div>
@@ -98,27 +101,52 @@ function NewProjectButton() {
   );
 }
 
+function ThemeButton() {
+  const theme = useThemeStore((s) => s.theme);
+  const toggleTheme = useThemeStore((s) => s.toggleTheme);
+  const light = theme === 'light';
+  return (
+    <button
+      type="button" id="theme-toggle" className={ICON_BTN}
+      onClick={() => {
+        toggleTheme();
+        // Kept in step for anything that still reads it from the editor state.
+        updateState({ theme: light ? 'dark' : 'light' }, { recordHistory: false });
+      }}
+      aria-label={light ? 'Switch to dark mode' : 'Switch to light mode'}
+      title={light ? 'Dark mode' : 'Light mode'}
+    >
+      {light ? (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+      ) : (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+      )}
+    </button>
+  );
+}
+
 export function Toolbar({ onExportVideo }) {
   return (
     <>
-      <div className="flex items-center gap-2.5">
-        {/* The bhYnd mark, as artwork rather than the hand-drawn SVG that used
-            to stand in for it. alt is empty on purpose: the wordmark beside it
-            already says "bhYnd", so a screen reader announcing it twice would
-            be noise, not information. */}
-        <img className="h-10 w-12 border-0 rounded-[6px]" src="/Logo.jpeg" alt="" />
-        <span className="font-bold text-[15px] tracking-[-0.02em] text-[var(--text-primary)]">bhYnd</span>
-      </div>
+      <div className="flex items-center gap-3 min-w-0 flex-1">
+        <div className="flex items-center gap-2 shrink-0 text-[var(--text-primary)]">
+          {/* The mark is decorative here: the wordmark beside it already says
+              "bhYnd", so a screen reader would hear it twice. */}
+          <BrandMark className="h-7 w-7" />
+          <span className="font-semibold text-[16px] tracking-[-0.02em]">bhYnd</span>
+        </div>
 
-      <div className="flex-1 max-w-[320px] mx-5">
+        <span className="h-5 w-px bg-[var(--border-color)] shrink-0 max-sm:hidden" aria-hidden="true" />
+
         <input
           type="text"
           id="project-title-input"
-          className="w-full bg-transparent border border-transparent rounded-[var(--radius-sm)] text-[var(--text-primary)]
-            font-[family-name:var(--font-main)] text-[13px] font-semibold px-2 py-1 text-center transition-all duration-200
-            outline-none hover:bg-[var(--bg-input)] hover:border-[var(--border-color)] focus:bg-[var(--bg-input)] focus:border-[var(--border-color)]"
+          aria-label="Project name"
+          className="min-w-0 w-full max-w-[280px] h-8 bg-transparent border border-transparent rounded-lg text-[var(--text-primary)]
+            font-[family-name:var(--font-main)] text-[13px] font-medium px-2 transition-colors duration-[var(--dur-fast)]
+            outline-none hover:bg-[var(--bg-hover)] focus:bg-[var(--bg-input)] focus:border-[var(--border-color-hover)] max-sm:hidden"
           defaultValue="Untitled Short Video"
-          title="Click to rename project"
+          title="Rename project"
           onChange={(e) => {
             const newTitle = e.target.value.trim() || 'Untitled Project';
             updateState({ projectName: newTitle }, { recordHistory: false });
@@ -126,35 +154,23 @@ export function Toolbar({ onExportVideo }) {
         />
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1 shrink-0">
+        <button type="button" id="btn-toolbar-reset" onClick={() => resetStyles()} className={GHOST} aria-label="Reset caption style" title="Reset the caption style to its defaults">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+          <span className="max-md:hidden">Reset style</span>
+        </button>
+
         <NewProjectButton />
 
-        <button type="button" id="btn-toolbar-reset" onClick={() => resetStyles()} className={SECONDARY}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
-          Reset Style
-        </button>
+        <ThemeButton />
 
-        <button
-          type="button" id="btn-toolbar-export" onClick={() => onExportVideo?.()}
-          className="bg-[var(--accent-gradient)] border-0 text-[var(--text-on-accent)] text-xs font-bold px-3.5 py-1.5
-            rounded-[var(--radius-sm)] flex items-center gap-1.5 cursor-pointer shadow-[var(--shadow-glow)]
-            transition-all duration-200 hover:bg-[var(--accent-hover)] hover:-translate-y-px"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+        <span className="h-5 w-px bg-[var(--border-color)] mx-1.5" aria-hidden="true" />
+
+        <button type="button" id="btn-toolbar-export" onClick={() => onExportVideo?.()} className={PRIMARY}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
           Export
         </button>
-
-        <ToggleSwitch
-          id="theme-toggle-checkbox"
-          title="Toggle Light / Dark mode"
-          onChange={(e) => {
-            const newTheme = e.target.checked ? 'light' : 'dark';
-            document.body.classList.toggle('light-theme', e.target.checked);
-            updateState({ theme: newTheme }, { recordHistory: false });
-          }}
-        />
       </div>
     </>
   );
 }
-

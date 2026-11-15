@@ -124,6 +124,21 @@ export async function compositeTextElementsOnto(videoPath, styles, outputPath, f
  * @param {string} framesDir - Absolute path for this job's scratch PNG directory (removed before returning, success or failure).
  * @returns {Promise<boolean>} true if the graphics pipeline produced outputVideoPath — caller should skip the ASS burn. false if the caller must fall back to the ASS pipeline (unsupported preset/mode, or a rendering failure).
  */
+/** Every PNG under a scratch dir, however deeply nested - the real frame count. */
+function countPngs(dir) {
+  let n = 0;
+  const walk = (d) => {
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.isDirectory()) walk(path.join(d, e.name));
+      else if (e.name.endsWith(".png")) n += 1;
+    }
+  };
+  walk(dir);
+  return n;
+}
+
 export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, outputVideoPath, framesDir) {
   const params = styles || {};
   lastGraphicsFailure = null;
@@ -183,6 +198,11 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // second layer is added) for a project with no text elements.
     // Every picture the image layers use, decoded once for the whole render.
     const imageSources = await loadImageSources(imageAssetsNeeded(params));
+    // Timed separately on purpose: "rendering" is two very different costs -
+    // drawing and PNG-encoding thousands of transparent frames here, then
+    // ffmpeg overlaying them in the composite below. One combined number
+    // cannot tell you which to fix, and they have opposite remedies.
+    const frameStart = Date.now();
     const { captions: segments, keywordCaptions, runs: layerRuns, manualCaptions: manualCaptionSegments, text: textSegments, objectEffects } =
       buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, {
         frameRate,
@@ -198,6 +218,11 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // of truth, same resolver the preview's getCSSPreviewFromConfig call
     // uses) is passed through the same way, so the exported file's caption
     // compositing matches the live preview exactly.
+    const frameMs = Date.now() - frameStart;
+    const pngCount = countPngs(framesDir);
+    console.log(`[GraphicsExport] Frame generation: ${pngCount} PNGs in ${frameMs}ms (${pngCount ? (frameMs / pngCount).toFixed(0) : 0}ms each)`);
+
+    const compositeStart = Date.now();
     await compositeGraphicsCaptionTrack(videoPath, segments, outputVideoPath, {
       videoTransform: params.videoTransform,
       // The text layers are laid onto the video's own frame grid (see
@@ -229,6 +254,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       audio: params.audio,
       hasSourceAudio: hasAudio
     });
+    console.log(`[GraphicsExport] ffmpeg compositing: ${Date.now() - compositeStart}ms`);
     console.log(`[GraphicsExport] Rendered ${segments.length} caption segments${manualCaptionSegments.length ? ` + ${manualCaptionSegments.length} manual-caption segments` : ''}${textSegments.length ? ` + ${textSegments.length} text-overlay segments` : ''} via the graphics pipeline (preset: ${params.preset || 'default'}).`);
     return true;
   } catch (err) {

@@ -280,7 +280,7 @@ function generateWordModeDialogueEvents(phrase, options) {
     if (w.end - w.start < 0.001) return; // skip degenerate zero-length words
 
     const caseForWord = resolveWordTextCase(!!w.isKeyword, enableKeywordHighlighting, textCase, keywordTextCase);
-    const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, true);
+    const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, w.sentenceStart ?? true);
     let payload = buildShadowOverrideTag(options);
 
     if (keywordDriven) {
@@ -332,7 +332,7 @@ function buildRollingStackLineBlock(chunk, options, isWordActive) {
   } = options;
 
   const caseForChunk = resolveWordTextCase(chunk.type === 'keyword', enableKeywordHighlighting, textCase, keywordTextCase);
-  const lineText = applyCaseTransform(chunkRawText(chunk), caseForChunk, true);
+  const lineText = applyCaseTransform(chunkRawText(chunk), caseForChunk, chunk.words?.[0]?.sentenceStart ?? true);
 
   const metadata = resolveWordStyleMetadata({ isKeyword: chunk.type === 'keyword' }, {
     keywordStyleConfig,
@@ -400,7 +400,7 @@ function generateStaticHighlightDialogueEvents(phrase, options) {
   const wordTexts = phrase.words.map((w, idx) => {
     const raw = (w.word || w.text || '').trim();
     const caseForWord = resolveWordTextCase(!!w.isKeyword, enableKeywordHighlighting, textCase, keywordTextCase);
-    return applyCaseTransform(raw, caseForWord, idx === 0);
+    return applyCaseTransform(raw, caseForWord, w.sentenceStart ?? idx === 0);
   });
 
   const clamp = (t) => Math.max(phrase.start, Math.min(phrase.end, t));
@@ -445,7 +445,7 @@ function generateTypewriterDialogueLine(phrase, options) {
     const duration = Math.max(1, Math.round((w.end - w.start) * 100));
 
     const caseForWord = resolveWordTextCase(!!w.isKeyword, enableKeywordHighlighting, textCase, keywordTextCase);
-    const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, idx === 0);
+    const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, w.sentenceStart ?? idx === 0);
 
     const isFirstWord = idx === 0;
     const isLineBreak = breakIndices.has(idx - 1);
@@ -602,7 +602,7 @@ function buildFlatPhraseText(phrase, textCase, enableKeywordHighlighting, keywor
   return phrase.words.map((w, idx) => {
     const raw = (w.word || w.text || '').trim();
     const caseForWord = resolveWordTextCase(!!w.isKeyword, enableKeywordHighlighting, textCase, keywordTextCase);
-    const wordText = applyCaseTransform(raw, caseForWord, idx === 0);
+    const wordText = applyCaseTransform(raw, caseForWord, w.sentenceStart ?? idx === 0);
     const isLineBreak = breakIndices.has(idx - 1);
     const isFirstWord = idx === 0;
     const prefixSpace = (isFirstWord || isLineBreak) ? '' : ' ';
@@ -646,7 +646,7 @@ export function generateUnifiedShadowWordDialogueEvents(phrase, options = {}) {
     .filter((w) => w.end - w.start >= 0.001)
     .map((w) => {
       const caseForWord = resolveWordTextCase(!!w.isKeyword, options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
-      const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, true);
+      const wordText = applyCaseTransform((w.word || w.text || '').trim(), caseForWord, w.sentenceStart ?? true);
       return `Dialogue: 0,${formatASSTimestamp(w.start)},${formatASSTimestamp(w.end)},Shadow,,0,0,0,,${posOverrideTag}${wordText}`;
     })
     .join('\n');
@@ -670,11 +670,11 @@ export function generateUnifiedShadowRollingStackDialogueEvents(phrase, options 
 
   return slices.map((slice) => {
     const bottomCase = resolveWordTextCase(slice.bottom.type === 'keyword', options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
-    const bottomText = applyCaseTransform(chunkRawText(slice.bottom), bottomCase, true);
+    const bottomText = applyCaseTransform(chunkRawText(slice.bottom), bottomCase, slice.bottom.words?.[0]?.sentenceStart ?? true);
     let text = bottomText;
     if (slice.top) {
       const topCase = resolveWordTextCase(slice.top.type === 'keyword', options.enableKeywordHighlighting, textCase, options.keywordTextCase || null);
-      text = `${applyCaseTransform(chunkRawText(slice.top), topCase, true)}\\N${bottomText}`;
+      text = `${applyCaseTransform(chunkRawText(slice.top), topCase, slice.top.words?.[0]?.sentenceStart ?? true)}\\N${bottomText}`;
     }
     return `Dialogue: 0,${formatASSTimestamp(slice.start)},${formatASSTimestamp(slice.end)},Shadow,,0,0,0,,${posOverrideTag}${text}`;
   }).join('\n');

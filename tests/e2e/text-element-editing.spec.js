@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // Three reported editing problems with text overlays, plus the "make the
 // others match" request that came with them:
@@ -48,7 +49,7 @@ async function setup(page, { count = 1 } = {}) {
   // effect) and the tool button toggles, so an unconditional click would
   // shut it again and leave every control below missing.
   if (!(await page.locator('#textel-content').count())) {
-    await page.getByRole('button', { name: 'Overlay', exact: true }).click();
+    await openTool(page, 'Overlay');
   }
   await page.waitForTimeout(500);
   await page.locator('#textel-content').waitFor();

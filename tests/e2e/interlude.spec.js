@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // The dropdowns are custom lists (so hovering an item can preview it): open, then choose.
 async function pickOption(page, selector, value) {
@@ -76,7 +77,7 @@ const interludes = (page) => page.evaluate(() => window.__appState.textElements.
 /** The Text panel, opened the way a user opens it: the toolbar's Overlay tool. */
 async function openPanel(page) {
   if (await page.locator('#textel-content').count()) return;
-  await page.getByRole('button', { name: 'Overlay', exact: true }).click();
+  await openTool(page, 'Overlay');
   await expect(page.locator('#textel-content')).toBeVisible();
 }
 

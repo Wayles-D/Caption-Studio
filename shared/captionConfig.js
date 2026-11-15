@@ -435,7 +435,8 @@ export const CAPTION_POSITIONS = {
  * on screen.
  *
  * @param {string} text - Raw text (word or full phrase), untransformed.
- * @param {string} textCase - 'uppercase' | 'lowercase' | anything else (sentence case).
+ * @param {string} textCase - 'uppercase' | 'lowercase' | 'none' (as typed —
+ *   the text exactly as written) | anything else (sentence case).
  * @param {boolean} [isSentenceStart=true] - Whether this unit starts the sentence/phrase.
  *   Only relevant for sentence case: the sentence-starting word/phrase gets its
  *   first letter capitalized, every other unit is lowercased.
@@ -448,11 +449,58 @@ export function applyCaseTransform(text, textCase, isSentenceStart = true) {
       return text.toUpperCase();
     case 'lowercase':
       return text.toLowerCase();
+    // AS TYPED: the text exactly as written. 'none' fell through to sentence
+    // case, so the overlay panel's own "As typed" option turned "BHYND" into
+    // "Bhynd" (first word) or "bhynd" — a brand name typed in capitals, or
+    // fixed in the transcript, could not survive into the caption at all.
+    // Captions never stored 'none' (their Sentence is 'normal'), so no
+    // existing caption changes.
+    case 'none':
+      return text;
     default:
-      return isSentenceStart
-        ? text.charAt(0).toUpperCase() + text.slice(1).toLowerCase()
-        : text.toLowerCase();
+      return sentenceCase(text, isSentenceStart);
   }
+}
+
+/** Whether a word ends a sentence: it finishes with . ! ? or … (quotes/brackets after it allowed). */
+export function endsSentence(word) {
+  return /[.!?…]["'”’)\]]*$/.test(String(word || '').trim());
+}
+
+/**
+ * Per transcript word: does it BEGIN a sentence? The first word does, and so
+ * does every word after one that ends a sentence. A caption is a slice of
+ * speech, not a sentence — so whether its first word is capitalised is decided
+ * here, by the transcript, never by where the caption happens to start.
+ * @param {Array<{word?:string,text?:string}>} words the flat transcript
+ * @returns {boolean[]}
+ */
+export function sentenceStartFlags(words) {
+  return (words || []).map((w, i) => i === 0 || endsSentence(words[i - 1]?.word ?? words[i - 1]?.text));
+}
+
+/**
+ * SENTENCE CASE the way people write: a capital where a sentence begins, and
+ * for "I" (I'm, I'll, I've, I'd), and an all-capitals word (BHYND, NASA, OK)
+ * left as it is — everything else in lower case. Works on a single word or a
+ * run of words: a sentence that ends inside the text starts the next one with
+ * a capital.
+ */
+function sentenceCase(text, startsSentence) {
+  let atStart = startsSentence;
+  return text.replace(/\S+/g, (token) => {
+    const out = caseToken(token, atStart);
+    atStart = endsSentence(token);
+    return out;
+  });
+}
+
+function caseToken(token, capital) {
+  const bare = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}'’]+$/gu, '');
+  if (/^i(['’](m|ll|ve|d|s|re))?$/iu.test(bare)) return token.replace(/i/iu, 'I').replace(/['’](M|LL|VE|D|S|RE)/u, (m) => m.toLowerCase());
+  if (bare.length >= 2 && bare === bare.toUpperCase() && /\p{Lu}/u.test(bare)) return token;
+  const lower = token.toLowerCase();
+  return capital ? lower.replace(/\p{L}/u, (c) => c.toUpperCase()) : lower;
 }
 
 /**

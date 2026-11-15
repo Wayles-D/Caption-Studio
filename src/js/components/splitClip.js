@@ -24,6 +24,7 @@ import { normalizeImageLayer } from '../../../shared/imageLayer.js';
 import { normalizeShapeLayer } from '../../../shared/shapeLayer.js';
 import { normalizeObjectEffect } from '../../../shared/objects/effects.js';
 import { placeAboveInLayerOrder } from './layerStack.js';
+import { getCaptionEvent, splitCaptionEventAtTime } from './captionEvents.js';
 import { normalizeSoundEvent, soundEventDuration, normalizeAudioTrack, getAudioTrackDuration } from '../../../shared/audioTimeline.js';
 
 /** A clip must keep at least this much on each side of the cut to be worth splitting. */
@@ -107,6 +108,14 @@ function find(kind, id) {
 
 /** Whether this clip can be cut here at all — both halves must be worth keeping. */
 export function canSplit(kind, id, time) {
+  // A caption is cut between its words: there has to be a word on each side.
+  if (kind === 'caption') {
+    const event = getCaptionEvent(id);
+    if (!event || event.wordIndices.length < 2) return false;
+    const words = appState.words || [];
+    const started = event.wordIndices.filter((w) => Number(words[w]?.start) <= time).length;
+    return started >= 1 && started < event.wordIndices.length;
+  }
   if (kind === 'sound' || kind === 'audio') {
     const list = kind === 'sound' ? appState.soundEvents : appState.audioTracks;
     const e = (list || []).find((x) => x.id === id);
@@ -127,6 +136,9 @@ export function canSplit(kind, id, time) {
 export function splitClip(kind, id, time) {
   if (kind === 'sound') return splitSound(id, time);
   if (kind === 'audio') return splitAudioTrack(id, time);
+  // Captions split between words, after the last word already spoken at the
+  // cut — the transcript's timing is never changed (captionEvents.js).
+  if (kind === 'caption') return canSplit(kind, id, time) ? splitCaptionEventAtTime(id, time) : null;
   const found = find(kind, id);
   if (!found || !canSplit(kind, id, time)) return null;
   const { spec, list, index, item } = found;
@@ -148,6 +160,7 @@ export function selectedClip() {
   if (appState.selectedImageLayerId) return { kind: 'image', id: appState.selectedImageLayerId };
   if (appState.selectedShapeLayerId) return { kind: 'shape', id: appState.selectedShapeLayerId };
   if (appState.selectedObjectEffectId) return { kind: 'effect', id: appState.selectedObjectEffectId };
+  if (appState.selectedCaptionEventId) return { kind: 'caption', id: appState.selectedCaptionEventId };
   // The audio lane holds sound effects and music tracks under ONE selection
   // id, so which kind it is has to be looked up, not assumed.
   const audioId = appState.selectedAudioClipId;

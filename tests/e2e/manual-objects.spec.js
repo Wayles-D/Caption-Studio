@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { videoToComposition, compositionToScreen } from '../../shared/objects/coordinates.js';
 import { truth } from '../fixtures/objects/make-crossing.mjs';
 import { serveVideo } from './serveVideo.js';
+import { openTool } from './helpers/dock.js';
 
 // MANUAL SELECTION in the real editor: DRAG a box round anything on the
 // frame — here a patterned badge the detector has no class for
@@ -75,7 +76,7 @@ async function drag(page, { x0, y0, x1, y1 }) {
 }
 
 async function openObjects(page) {
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await expect(page.locator('#object-overlay')).toBeVisible();
 }
 
@@ -152,7 +153,11 @@ test('drag a box round something the detector missed: it is selected, tracked by
   const empty = await screenRect(page, { x: 0.45, y: 0.8, width: 0.01, height: 0.01 });
   await page.mouse.click(empty.x0, empty.y0);
   await expect.poll(() => page.evaluate(() => window.__objects.getSelectedObject())).toBe(null);
-  await drag(page, { x0: empty.x0, y0: empty.y0, x1: empty.x0 + 7, y1: empty.y0 + 7 });
+  // "Too small" is measured in the VIDEO's pixels (MIN_MANUAL_SIDE), not the
+  // screen's, so the drag is sized from the video: a few of its pixels, at
+  // whatever size the preview happens to be.
+  const tiny = await screenRect(page, { x: 0.45, y: 0.8, width: 0.004, height: 0.004 });
+  await drag(page, { x0: tiny.x0, y0: tiny.y0, x1: Math.max(tiny.x1, tiny.x0 + 1), y1: Math.max(tiny.y1, tiny.y0 + 1) });
   expect(await page.evaluate(() => window.__objects.getSelectedObject())).toBe(null);
   expect(errs).toEqual([]);
 });

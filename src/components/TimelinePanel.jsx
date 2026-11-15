@@ -22,13 +22,23 @@ import { useEffect, useRef, useState } from 'react';
 import { initTimelinePanel } from '../js/components/timelinePanel.js';
 
 /** The panel's default height, and its limits: never so short the lanes vanish, never so tall the preview does. */
-export const TIMELINE_DEFAULT_HEIGHT = 272;
+export const TIMELINE_DEFAULT_HEIGHT = 288;
 const TIMELINE_MIN_HEIGHT = 140;
 const PREVIEW_MIN_HEIGHT = 220;
 const HEIGHT_STORAGE_KEY = 'bhynd.timeline.height';
 
+/** The tool dock's live height (it changes with the screen — see --dock-h in style.css). */
+function dockHeight() {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;height:var(--dock-h)';
+  document.body.appendChild(probe);
+  const h = probe.getBoundingClientRect().height || 68;
+  probe.remove();
+  return h;
+}
+
 function clampHeight(h) {
-  const max = Math.max(TIMELINE_MIN_HEIGHT, window.innerHeight - 56 - 80 - PREVIEW_MIN_HEIGHT);
+  const max = Math.max(TIMELINE_MIN_HEIGHT, window.innerHeight - 56 - dockHeight() - PREVIEW_MIN_HEIGHT);
   return Math.round(Math.min(max, Math.max(TIMELINE_MIN_HEIGHT, h)));
 }
 

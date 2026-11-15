@@ -61,7 +61,7 @@ function BackgroundEditor({ effect, colour }) {
         {BACKGROUND_MODES.map((m) => (
           <button
             type="button" key={m} id={`object-background-mode-${m}`} data-mode={m}
-            className={`h-7 flex-1 rounded-[3px] border text-[11px] font-bold cursor-pointer ${a.mode === m ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+            className={`h-7 flex-1 rounded-[3px] border text-[12px] font-bold cursor-pointer ${a.mode === m ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
             onClick={() => look({ mode: m })}
           >{BACKGROUND_MODE_LABELS[m]}</button>
         ))}
@@ -74,7 +74,7 @@ function BackgroundEditor({ effect, colour }) {
             {busy ? 'Adding…' : a.imageAssetId ? 'Change image' : 'Choose image'}
             <input type="file" accept="image/*" className="hidden" id="object-background-file" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
-          {error && <span className="text-[11px] text-[var(--text-primary)]">{error}</span>}
+          {error && <span className="text-[12px] text-[var(--text-primary)]">{error}</span>}
           {!a.imageAssetId && !error && <p className={HINT}>No image yet — the video is left as it is until you choose one.</p>}
         </div>
       )}
@@ -101,7 +101,7 @@ function ShapeChoice({ effect }) {
         {[['object', 'Object’s shape'], ['box', 'Box']].map(([value, label]) => (
           <button
             type="button" key={value} id={`object-effect-shape-${value}`} data-shape={value}
-            className={`h-7 flex-1 rounded-[3px] border text-[11px] font-bold cursor-pointer ${shape === value ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+            className={`h-7 flex-1 rounded-[3px] border text-[12px] font-bold cursor-pointer ${shape === value ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
             onClick={() => effects.patchObjectEffectAppearance(effect.id, { shape: value })}
           >{label}</button>
         ))}
@@ -240,7 +240,7 @@ function EffectsSection() {
                 onClick={() => effects.selectObjectEffect(on ? null : e.id)}
               >
                 <span className="font-semibold">{effects.describeObjectEffect(e)}</span>
-                <span className="text-[11px] text-[var(--text-muted)]">{linked ? `${e.start.toFixed(1)}–${e.end.toFixed(1)}s` : 'not tracked'}</span>
+                <span className="text-[12px] text-[var(--text-muted)]">{linked ? `${e.start.toFixed(1)}–${e.end.toFixed(1)}s` : 'not tracked'}</span>
               </button>
             );
           })}
@@ -252,8 +252,8 @@ function EffectsSection() {
 }
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
-const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
-const HINT = 'text-[11px] text-[var(--text-muted)] m-0';
+const SECTION_TITLE = 'text-[13px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]';
+const HINT = 'text-[12px] text-[var(--text-muted)] m-0';
 const BTN = `h-9 flex-1 bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)] font-bold text-xs
   rounded-[var(--radius-sm)] cursor-pointer transition-colors duration-150 hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]
   disabled:opacity-40 disabled:cursor-default`;
@@ -351,7 +351,7 @@ function SegmentSection() {
           {MASK_VIEWS.map(([v, label]) => (
             <button
               type="button" key={v} id={`objects-mask-view-${v}`} data-mask-view={v}
-              className={`h-7 flex-1 rounded-[3px] border text-[11px] font-bold cursor-pointer ${view === v ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+              className={`h-7 flex-1 rounded-[3px] border text-[12px] font-bold cursor-pointer ${view === v ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
               onClick={() => segmentation.setMaskView(v)}
             >{label}</button>
           ))}
@@ -438,7 +438,7 @@ export function ObjectsInspector() {
                   onClick={() => (on ? objects.clearSelectedObject() : objects.selectObject(d))}
                 >
                   <span className="font-semibold">{names.get(d.id)}</span>
-                  <span className="text-[11px] text-[var(--text-muted)]">{Math.round(d.confidence * 100)}%</span>
+                  <span className="text-[12px] text-[var(--text-muted)]">{Math.round(d.confidence * 100)}%</span>
                 </button>
               );
             })}
@@ -449,7 +449,7 @@ export function ObjectsInspector() {
             {set.frames.map((f) => (
               <button
                 type="button" key={f.time} data-frame-time={f.time}
-                className={`h-6 px-1.5 rounded-[3px] border text-[10px] cursor-pointer ${here?.time === f.time ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+                className={`h-6 px-1.5 rounded-[3px] border text-[11px] cursor-pointer ${here?.time === f.time ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
                 title={`${f.detections.filter((d) => d.confidence >= appState.objectMinConfidence).length} objects`}
                 onClick={() => jumpTo(f.time)}
               >
@@ -466,7 +466,7 @@ export function ObjectsInspector() {
           <>
             <div className="flex items-center justify-between">
               <span className="text-[13px] font-bold text-[var(--accent-color)]" id="objects-selected-label">{selected.label}</span>
-              <span className="text-[11px] text-[var(--text-muted)]" id="objects-selected-meta">{selected.manual ? 'Drawn' : `${Math.round(selected.confidence * 100)}%`} · at {selected.timestamp.toFixed(2)}s</span>
+              <span className="text-[12px] text-[var(--text-muted)]" id="objects-selected-meta">{selected.manual ? 'Drawn' : `${Math.round(selected.confidence * 100)}%`} · at {selected.timestamp.toFixed(2)}s</span>
             </div>
             <TrackSection />
             <SegmentSection />

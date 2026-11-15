@@ -20,8 +20,8 @@ import {
   INTRO_SETTLED_SECONDS
 } from '../js/brand/bhyndIntro.js';
 
-const BRAND = '#00E599';
-const BRAND_LIGHT = '#7dffd0';
+const BRAND = '#E9EBF0';
+const BRAND_LIGHT = '#FFFFFF';
 
 // The mark is drawn in the system UI face, as the brand artwork specifies —
 // deliberately not the app's Geist/Inter, which is for the product chrome.
@@ -179,11 +179,11 @@ export function BhyndIntro({
       <polygon ref={nodes.poly} fill={BRAND} opacity="0" />
       <text
         ref={nodes.bh} textAnchor="end" opacity="0"
-        style={{ fontFamily: WORDMARK_FONT, fontWeight: 800, fontSize: 120, letterSpacing: '-2px', fill: '#eafff5' }}
+        style={{ fontFamily: WORDMARK_FONT, fontWeight: 600, fontSize: 120, letterSpacing: '-2px', fill: '#F3F4F7' }}
       >bh</text>
       <text
         ref={nodes.nd} textAnchor="start" opacity="0"
-        style={{ fontFamily: WORDMARK_FONT, fontWeight: 800, fontSize: 120, letterSpacing: '-2px', fill: '#eafff5' }}
+        style={{ fontFamily: WORDMARK_FONT, fontWeight: 600, fontSize: 120, letterSpacing: '-2px', fill: '#F3F4F7' }}
       >nd</text>
     </svg>
   );

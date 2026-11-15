@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // "When text reaches the edge": scaling a keyword or a whole caption up used to
 // push it past the edge of the frame, because the line-breaker never knew
@@ -119,7 +120,7 @@ test('the selection box on a scaled keyword matches what is drawn, in both modes
 
 test('the choice is in the sidebar and changes the setting', async ({ page }) => {
   await setup(page);
-  await page.getByRole('button', { name: 'Position', exact: true }).click();
+  await openTool(page, 'Position');
   const keep = page.locator('input[name="scale-overflow"][value="keep"]');
   await expect(keep).toBeAttached();
   await keep.check({ force: true });

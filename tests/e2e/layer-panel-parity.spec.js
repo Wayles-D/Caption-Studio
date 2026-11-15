@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // Selecting a TEXT, an IMAGE or a SHAPE must bring up that object's own panel
 // — and with it the layer controls, including "Behind a subject" (V2.2
@@ -24,8 +25,8 @@ test('a text overlay, an image and a shape each open their own panel with the sa
   await page.waitForTimeout(500);
   await page.locator('.timeline-text-clip').first().click();
   await expect(page.locator('#textel-order')).toHaveCount(1);
-  await expect(page.locator('#textel-behind')).toHaveCount(0); // nothing segmented yet...
-  await expect(page.locator('#textel-behind-none')).toContainText('track it'); // ...so it says what to do
+  await expect(page.locator('#textel-behind-pick')).toBeVisible(); // nothing set up yet: the one button...
+  await expect(page.locator('#textel-behind-none')).toContainText('click the person'); // ...so it says what to do
   await expect(page.locator('#textel-to-back')).toBeVisible();
 
   // SHAPE — the same controls, the same ids but for its own prefix.
@@ -47,7 +48,7 @@ test('the Layers panel offers the same control for whichever layer is selected',
   await openDemo(page);
   const textId = await page.evaluate(() => window.__textElements.addTextElement({ kind: 'overlay', start: 0, text: 'WAHALA' }).id);
   await page.waitForTimeout(400);
-  await page.getByRole('button', { name: 'Layers', exact: true }).click();
+  await openTool(page, 'Layers');
   await page.waitForTimeout(400);
   await page.locator(`[data-layer-id="${textId}"] button`).first().click();
   await expect(page.locator('#layers-behind')).toHaveCount(1);

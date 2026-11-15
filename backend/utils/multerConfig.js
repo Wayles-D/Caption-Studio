@@ -1,4 +1,5 @@
 import multer from 'multer';
+import { MAX_VIDEO_UPLOAD_BYTES } from '../../shared/uploadLimits.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
@@ -49,9 +50,11 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// 500MB limit in bytes (500 * 1024 * 1024)
+// The one video size limit (shared/uploadLimits.js) — the browser checks a
+// file against the same number before sending anything, so this is the
+// backstop, not the first line of defence.
 const limits = {
-  fileSize: 500 * 1024 * 1024
+  fileSize: MAX_VIDEO_UPLOAD_BYTES
 };
 
 // Configure Multer middleware instance

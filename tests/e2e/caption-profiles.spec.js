@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // Caption profiles: save the font pairing (font + weight, keyword font + weight)
 // under a name, hover to preview, click to apply as one undo step; survives a
@@ -11,7 +12,7 @@ async function setup(page) {
   await page.evaluate(() => localStorage.removeItem('bhynd.captionProfiles.v1'));
   await page.reload();
   await page.getByText('Try Demo Video').click();
-  await page.getByRole('button', { name: 'Text', exact: true }).first().click();
+  await openTool(page, 'Text');
 }
 
 test('save a font pair, preview on hover, apply with one undo, persists', async ({ page }) => {
@@ -42,7 +43,7 @@ test('save a font pair, preview on hover, apply with one undo, persists', async 
 
   await page.reload();
   // The project restores itself on reload, so there is no demo button to press.
-  await page.getByRole('button', { name: 'Text', exact: true }).first().click();
+  await openTool(page, 'Text');
   await expect(page.locator('[data-profile="Punchy"]')).toBeVisible();
 });
 

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // Hovering an option previews it on the video; leaving reverts; clicking
 // commits as ONE undo step. Requires `npm run dev:all`.
@@ -33,7 +34,7 @@ const state = (page, key) => page.evaluate((k) => window.__appState[k], key);
 
 test('hovering a casing previews it, leaving reverts, click commits with one undo', async ({ page }) => {
   await setup(page);
-  await page.getByRole('button', { name: 'Text', exact: true }).first().click();
+  await openTool(page, 'Text');
   const before = await state(page, 'textCase');
   const target = before === 'lowercase' ? 'uppercase' : 'lowercase';
   const label = page.locator(`label:has(input[name="text-case"][value="${target}"])`);
@@ -50,7 +51,7 @@ test('hovering a casing previews it, leaving reverts, click commits with one und
 
 test('hovering a font previews it; Escape reverts', async ({ page }) => {
   await setup(page);
-  await page.getByRole('button', { name: 'Text', exact: true }).first().click();
+  await openTool(page, 'Text');
   const before = await state(page, 'fontFamily');
   await page.locator('#font-family-select-trigger').scrollIntoViewIfNeeded();
   await page.locator('#font-family-select-trigger').click();

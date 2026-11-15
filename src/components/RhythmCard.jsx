@@ -12,11 +12,11 @@ import * as shapeLayers from '../js/components/shapeLayers.js';
 import { promptForImageFile } from '../js/components/imageLayers.js';
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
-const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
-const HINT = 'text-[11px] text-[var(--text-muted)] m-0';
+const SECTION_TITLE = 'text-[13px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]';
+const HINT = 'text-[12px] text-[var(--text-muted)] m-0';
 const SELECT = `h-8 w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] text-[var(--text-primary)]
   text-[12px] px-2 outline-none cursor-pointer hover:border-[var(--accent-color)] focus:border-[var(--accent-color)]`;
-const SMALL_BTN = `h-8 flex-1 bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)] font-bold text-[11px]
+const SMALL_BTN = `h-8 flex-1 bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)] font-bold text-[12px]
   rounded-[var(--radius-sm)] cursor-pointer transition-colors duration-150 hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]
   disabled:opacity-40 disabled:cursor-default`;
 
@@ -24,7 +24,7 @@ function Stat({ label, value, id }) {
   return (
     <div className="flex flex-col items-center flex-1 bg-[var(--bg-input)] rounded-[var(--radius-sm)] py-2">
       <span id={id} className="text-[15px] font-bold text-[var(--text-primary)]">{value}</span>
-      <span className="text-[10px] uppercase tracking-[0.05em] text-[var(--text-muted)]">{label}</span>
+      <span className="text-[11px] uppercase tracking-[0.05em] text-[var(--text-muted)]">{label}</span>
     </div>
   );
 }
@@ -84,7 +84,7 @@ export function RhythmCard() {
               ? `${info.downbeats} bar starts found — shown brighter on the timeline.`
               : 'Bar starts weren’t clear enough to mark — beats only.'}
           </p>
-          <span className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]">Add at next beat</span>
+          <span className="text-[12px] font-medium text-[var(--text-secondary)]">Add at next beat</span>
           <div className="flex gap-1.5">
             <button type="button" id="rhythm-add-text" className={SMALL_BTN} onClick={() => addAt((at) => textElements.addTextElement({ kind: 'overlay', start: at, text: 'New text' }))}>Text</button>
             <button type="button" id="rhythm-add-shape" className={SMALL_BTN} onClick={() => addAt((at) => shapeLayers.addShapeLayer('rounded', { start: at }))}>Shape</button>

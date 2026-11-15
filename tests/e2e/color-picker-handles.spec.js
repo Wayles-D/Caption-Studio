@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // react-colorful ships a 28px round pointer and 24px hue/alpha bars, sized for
 // a full-page picker. In a narrow inspector popover that handle hides a visible
@@ -20,7 +21,7 @@ test('the picker handles are the small ones, not the library defaults', async ({
   }));
   await page.waitForTimeout(800);
 
-  await page.getByRole('button', { name: 'Canvas', exact: true }).click();
+  await openTool(page, 'Canvas');
   await page.waitForTimeout(600);
   await page.locator('.color-swatch-trigger').first().click();
   await page.locator('.react-colorful').waitFor();

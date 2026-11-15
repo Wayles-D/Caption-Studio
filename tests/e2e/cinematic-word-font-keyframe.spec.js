@@ -56,6 +56,12 @@ async function setup(page) {
 /** Clicks the element's second word on the video — the real route in. */
 async function selectSecondWord(page, id) {
   const frame = await page.locator('#preview-video').boundingBox();
+  // Wait for the LAYOUT, not a fixed delay: the card's words only have screen
+  // rects once it has actually been painted at a time inside its own span, and
+  // under parallel workers a timeout loses that race and reports zero words -
+  // a failure that says nothing about the feature under test.
+  await page.waitForFunction(
+    (i) => (window.__debugTextWordRects(i) || []).length > 1, id, { timeout: 15000 });
   const rects = await page.evaluate((i) => window.__debugTextWordRects(i), id);
   expect(rects.length).toBeGreaterThan(1);
   const w = rects[1];

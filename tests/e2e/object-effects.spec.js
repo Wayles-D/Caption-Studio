@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { videoToComposition, compositionToScreen } from '../../shared/objects/coordinates.js';
 import { truth } from '../fixtures/objects/make-crossing.mjs';
 import { serveVideo } from './serveVideo.js';
+import { openTool } from './helpers/dock.js';
 
 // OBJECT-AWARE EFFECTS in the real editor (src/js/components/objectEffects.js,
 // shared/objects/effects.js): track a person on crossing.mp4 — two real people
@@ -47,7 +48,7 @@ async function seek(page, t) {
 /** Detect at 0.5s (opening Objects the first time), select the person nearest `name`, track them. */
 async function trackPerson(page, name) {
   await seek(page, 0.5);
-  if (!(await page.locator('#objects-editor').count())) await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  if (!(await page.locator('#objects-editor').count())) await openTool(page, 'Objects');
   await page.waitForFunction(() => window.__objects.getDetectionsAt(0.5)?.detections.length > 0, null, { timeout: 60000 });
   await page.evaluate((gt) => {
     const dets = window.__objects.getDetectionsAt(0.5).detections.filter((d) => d.class === 'person');
@@ -125,7 +126,7 @@ test('track a person, add a glow and an outline: they follow him as you scrub, o
   expect(Object.keys(glow)).not.toContain('keyframes');
   expect(Object.keys(glow)).not.toContain('samples');
   // The Objects tool closed: effects are content, not an editing aid — still drawn.
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await expect(page.locator('#objects-editor')).toHaveCount(0);
 
   for (const t of [0.6, 1.2, 1.9, 2.8, 3.1]) {
