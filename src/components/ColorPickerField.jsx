@@ -41,7 +41,7 @@ import {
 } from '../lib/colorConversion.js';
 
 const NUMBER_FIELD = 'w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] text-[var(--text-primary)] text-[13px] px-2 py-1.5 text-center outline-none focus:border-[var(--accent-color)]';
-const NUMBER_LABEL = 'text-[10px] font-semibold text-[var(--text-muted)] text-center block mt-1';
+const NUMBER_LABEL = 'text-[11px] font-semibold text-[var(--text-muted)] text-center block mt-1';
 
 export function ColorPickerField({
   label,

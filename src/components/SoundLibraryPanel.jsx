@@ -24,9 +24,9 @@ import * as audioTimeline from '../js/components/audioTimeline.js';
 import * as textElements from '../js/components/textElements.js';
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)]';
-const SECTION_LABEL = 'text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--text-secondary)] px-1 pt-5 pb-0.5 border-b border-[var(--border-color)]';
-const GROUP_LABEL = 'text-[10px] font-bold uppercase tracking-[0.06em] text-[var(--text-muted)] px-1 pt-3 pb-1';
-const WORD_BADGE = 'shrink-0 text-[9px] uppercase tracking-[0.06em] text-[var(--text-muted)] border border-[var(--border-color)] rounded px-1';
+const SECTION_LABEL = 'text-[12px] font-bold uppercase tracking-[0.08em] text-[var(--text-secondary)] px-1 pt-5 pb-0.5 border-b border-[var(--border-color)]';
+const GROUP_LABEL = 'text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--text-muted)] px-1 pt-3 pb-1';
+const WORD_BADGE = 'shrink-0 text-[11px] uppercase tracking-[0.06em] text-[var(--text-muted)] border border-[var(--border-color)] rounded px-1';
 
 /** Every search word must appear somewhere in the sound's name, id, tags or description. */
 function matches(sound, query) {
@@ -37,7 +37,7 @@ function matches(sound, query) {
 }
 const ROW = `w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] border border-transparent
   text-left cursor-pointer transition-colors duration-150
-  hover:border-[var(--accent-color)] hover:bg-[rgba(0,246,172,0.06)]`;
+  hover:border-[var(--accent-color)] hover:bg-[var(--bg-hover)]`;
 
 const STEP_BTN = `h-6 w-6 rounded-[3px] border border-[var(--border-color)] bg-transparent text-[var(--text-secondary)]
   text-[12px] leading-none cursor-pointer hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]`;
@@ -143,7 +143,7 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
         />
       </div>
       <div id="sound-library-list" className="flex-1 min-h-0 overflow-y-auto px-3 pb-3">
-        <p className="text-[11px] text-[var(--text-muted)] m-0 pt-3">
+        <p className="text-[12px] text-[var(--text-muted)] m-0 pt-3">
           {replacing
             ? 'Swaps the sound on the selected effect. Its timing, volume and fades stay as they are.'
             : 'Plays at the playhead. ▶ auditions it without adding anything.'}
@@ -163,7 +163,7 @@ export function SoundLibraryPanel({ onClose, replaceTargetId = null, attachToTex
                 <button type="button" id="sfx-syllable-less" className={STEP_BTN} onClick={() => setSyllables((n) => Math.max(1, n - 1))}>−</button>
                 <span className="text-[12px] font-bold text-[var(--accent-color)]" id="sfx-syllable-count">{syllables}</span>
                 <button type="button" id="sfx-syllable-more" className={STEP_BTN} onClick={() => setSyllables((n) => Math.min(12, n + 1))}>+</button>
-                <span className="text-[11px] text-[var(--text-muted)]">syllable{syllables === 1 ? '' : 's'} — pick a short, dry sound below</span>
+                <span className="text-[12px] text-[var(--text-muted)]">syllable{syllables === 1 ? '' : 's'} — pick a short, dry sound below</span>
               </div>
             )}
           </div>

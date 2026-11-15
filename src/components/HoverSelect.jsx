@@ -165,7 +165,7 @@ export function HoverSelect({
           <div role="listbox" aria-label={ariaLabel}>
             {options.map((option, index) => (option.group ? (
               // A heading, not an option: nothing to hover or choose.
-              <div key={`group-${index}`} role="presentation" className="px-2.5 pt-2 pb-1 text-[10px] font-bold uppercase tracking-[0.06em] text-[var(--text-muted)]">
+              <div key={`group-${index}`} role="presentation" className="px-2.5 pt-2 pb-1 text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--text-muted)]">
                 {option.group}
               </div>
             ) : (

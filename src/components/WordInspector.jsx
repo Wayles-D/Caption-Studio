@@ -32,6 +32,9 @@ import {
   getWordStyleKeyframeTimes,
   clearWordStyleKeyframes
 } from '../js/components/canvasTransform.js';
+import { breakWordOutOfCaption, canBreakWordOutOfCaption } from '../js/components/captionEvents.js';
+import { wordToOverlay } from '../js/components/textElements.js';
+import { isTranscriptWordHidden, setTranscriptWordHidden } from '../js/components/transcriptEditorState.js';
 import { listFontOptions } from '../../shared/fontRegistry.js';
 import { ColorPickerField } from './ColorPickerField.jsx';
 import { ToggleSwitch } from './ToggleSwitch.jsx';
@@ -39,15 +42,40 @@ import { HoverSelect } from './HoverSelect.jsx';
 import { previewWordStyle } from '../js/hoverPreview.js';
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
-const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
-const HINT = 'text-[11px] text-[var(--text-muted)] m-0';
-const GROUP_LABEL = 'text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]';
+const SECTION_TITLE = 'text-[13px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]';
+const HINT = 'text-[12px] text-[var(--text-muted)] m-0';
+const ACTION_BTN = 'h-8 px-3 rounded-[var(--radius-sm)] border border-[var(--border-color)] bg-transparent text-[12px] font-bold text-[var(--text-secondary)] cursor-pointer hover:bg-[var(--bg-card-hover)]';
+
+/**
+ * Switches a transcript word off the video (or back on). The same flag the
+ * Transcript panel's ◉ sets — re-keyed on the saved value, because it can
+ * change from either place or from an Undo, and an uncontrolled switch would
+ * otherwise keep showing what it last showed.
+ */
+function WordHiddenToggle({ wordIndex, text }) {
+  const hidden = isTranscriptWordHidden(wordIndex);
+  return (
+    <div className="flex items-center justify-between gap-3" id="word-hidden-row">
+      <span className="text-xs font-semibold text-[var(--text-primary)]">
+        {hidden ? <>“{text}” is hidden from the video</> : <>Hide “{text}” from the video</>}
+      </span>
+      <ToggleSwitch
+        key={hidden ? 'hidden' : 'shown'}
+        id="word-hidden-toggle"
+        defaultChecked={hidden}
+        title={hidden ? 'Show this word again' : 'Hide this word — every other word keeps its timing'}
+        onChange={(e) => setTranscriptWordHidden(wordIndex, e.target.checked)}
+      />
+    </div>
+  );
+}
+const GROUP_LABEL = 'text-[12px] font-medium text-[var(--text-secondary)]';
 const SELECT = `h-8 w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] text-[var(--text-primary)]
   text-[12px] px-2 outline-none cursor-pointer transition-colors duration-200 hover:border-[var(--accent-color)] focus:border-[var(--accent-color)]`;
 const SLIDER = `appearance-none w-full h-1.5 rounded-[3px] bg-[var(--border-color-hover)] outline-none cursor-pointer
   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full
   [&::-webkit-slider-thumb]:bg-[var(--accent-color)] [&::-webkit-slider-thumb]:cursor-pointer`;
-const VALUE_BADGE = 'text-[10px] font-semibold text-[var(--text-secondary)] w-10 text-right shrink-0';
+const VALUE_BADGE = 'text-[11px] font-semibold text-[var(--text-secondary)] w-10 text-right shrink-0';
 const SECONDARY_BTN = `h-9 bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)] font-bold text-xs
   rounded-[var(--radius-sm)] cursor-pointer transition-colors duration-150 hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]`;
 const TOGGLE_BTN_BASE = `flex-1 h-9 rounded-[var(--radius-sm)] border text-[13px] font-bold cursor-pointer
@@ -61,6 +89,19 @@ const TOGGLE_BTN_OFF = 'border-[var(--border-color)] text-[var(--text-secondary)
 const OUTLINE_MAX = 50;
 const SHADOW_MAX = 100;
 const SHADOW_OFFSET_RANGE = 100;
+/**
+ * A word's own case — shared with the Transcript panel's per-word control
+ * (src/js/components/transcriptEditorState.js), so the two always offer the
+ * same choices. 'none' is AS TYPED: the word exactly as written ("BHYND",
+ * "iPhone"), even when it is a keyword whose style would re-case it.
+ */
+export const WORD_CASE_OPTIONS = [
+  { value: 'none', label: 'As typed' },
+  { value: 'uppercase', label: 'UPPERCASE' },
+  { value: 'lowercase', label: 'lowercase' },
+  { value: 'capitalize', label: 'Capitalized' }
+];
+
 const WEIGHT_OPTIONS = [
   { value: '400', label: 'Regular' },
   { value: '600', label: 'Semibold' },
@@ -100,18 +141,18 @@ function WordStyleKeyframeRow({ wordIndex, property, label, value }) {
     <div className="flex items-center gap-2 flex-wrap" id={`word-${property}-kf`}>
       <button
         type="button" id={`word-${property}-kf-add`}
-        className={`h-6 px-2 rounded-[3px] border text-[10px] font-bold cursor-pointer ${on ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+        className={`h-6 px-2 rounded-[3px] border text-[11px] font-bold cursor-pointer ${on ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
         title={`Change this word's ${label} from the playhead onwards`}
         onClick={() => setWordStyleKeyframe(wordIndex, property, value ?? null)}
       >◆ Change {label} here</button>
       {on && (
         <>
-          <span className="text-[10px] text-[var(--text-muted)]" id={`word-${property}-kf-times`}>
+          <span className="text-[11px] text-[var(--text-muted)]" id={`word-${property}-kf-times`}>
             {times.map((t) => `${t.toFixed(2)}s`).join(', ')}
           </span>
           <button
             type="button" id={`word-${property}-kf-clear`}
-            className="h-6 px-2 rounded-[3px] border border-[var(--border-color)] text-[10px] text-[var(--text-muted)] cursor-pointer"
+            className="h-6 px-2 rounded-[3px] border border-[var(--border-color)] text-[11px] text-[var(--text-muted)] cursor-pointer"
             onClick={() => clearWordStyleKeyframes(wordIndex, property)}
           >Clear</button>
         </>
@@ -160,7 +201,7 @@ function OverrideSlider({ label, value, fallbackLabel, min, max, unit, onChange,
         {isSet && (
           <button
             type="button"
-            className="text-[10px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
+            className="text-[11px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
             onClick={onClear}
             title="Go back to inheriting this from the caption"
           >
@@ -236,7 +277,7 @@ export function WordInspector() {
     );
   }
 
-  const { wordIndex, text, isKeyword, style } = target;
+  const { wordIndex, text, isKeyword, style, textElementId } = target;
   const set = (fields) => applyWordStyleFields(wordIndex, fields);
   const hasAnyOverride = Object.values(style).some((v) => v != null);
 
@@ -246,7 +287,7 @@ export function WordInspector() {
         <div className="flex items-center justify-between gap-2">
           <span className={SECTION_TITLE}>Word</span>
           {isKeyword && (
-            <span className="text-[10px] font-bold uppercase tracking-[0.04em] text-[var(--accent-color)]">Keyword</span>
+            <span className="text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--accent-color)]">Keyword</span>
           )}
         </div>
         <span className="text-[15px] font-bold text-[var(--text-primary)] truncate" title={text}>“{text}”</span>
@@ -256,6 +297,44 @@ export function WordInspector() {
             : 'Currently following the caption’s style. Change anything below to override it for this word only.'}
         </p>
       </div>
+
+      {/* --- This word in its caption ---
+          Only for TRANSCRIPT words: a word inside a text element has no
+          caption to break out of, hide from, or lift out of. */}
+      {!textElementId && (
+        <div className={CARD} id="word-caption-card">
+          <span className={SECTION_TITLE}>Caption</span>
+
+          {canBreakWordOutOfCaption(wordIndex) && (
+            <div className="flex flex-col gap-1.5" id="word-break-card">
+              <p className={HINT}>
+                Give <b>{text}</b> a caption of its own, so it is no longer shown with the rest
+                of the phrase. Its timing stays exactly where it is.
+              </p>
+              <button type="button" id="word-break-out" className={ACTION_BTN} onClick={() => breakWordOutOfCaption(wordIndex)}>
+                Break “{text}” out
+              </button>
+            </div>
+          )}
+
+          {/* BEHIND SOMEONE: the word lifted out as a text overlay that keeps
+              the caption's look and timing — free to drag above a head, with
+              the "Behind a subject" control on its own panel. One undo. */}
+          <div className="flex flex-col gap-1.5">
+            <p className={HINT}>
+              To put <b>{text}</b> behind a person or object, lift it out as its own text — it keeps
+              this caption’s look and timing, and you can drag it anywhere.
+            </p>
+            <button type="button" id="word-to-overlay" className={ACTION_BTN} onClick={() => wordToOverlay(wordIndex)}>
+              Put “{text}” behind someone…
+            </button>
+          </div>
+
+          {/* HIDE: off the video, still in the transcript, still in the
+              caption's timing — every word around it keeps its moment. */}
+          <WordHiddenToggle wordIndex={wordIndex} text={text} />
+        </div>
+      )}
 
       {/* --- Typeface --- */}
       <div className={CARD}>
@@ -292,7 +371,7 @@ export function WordInspector() {
             id="word-case-select"
             className={SELECT}
             value={style.textCase || ''}
-            options={[{ value: '', label: 'Same as caption' }, ...[{ value: 'uppercase', label: 'UPPERCASE' }, { value: 'lowercase', label: 'lowercase' }, { value: 'capitalize', label: 'Capitalized' }]]}
+            options={[{ value: '', label: 'Same as caption' }, ...WORD_CASE_OPTIONS]}
             onChange={(v) => set({ textCase: v || null })}
             onPreview={(v) => previewWordStyle(wordIndex, { textCase: v || null })}
           />
@@ -327,7 +406,7 @@ export function WordInspector() {
             {style.color && (
               <button
                 type="button"
-                className="text-[10px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
+                className="text-[11px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
                 onClick={() => set({ color: null })}
                 title="Go back to inheriting this from the caption"
               >inherit</button>
@@ -358,7 +437,7 @@ export function WordInspector() {
             {style.outlineColor && (
               <button
                 type="button"
-                className="text-[10px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
+                className="text-[11px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
                 onClick={() => set({ outlineColor: null })}
               >inherit</button>
             )}

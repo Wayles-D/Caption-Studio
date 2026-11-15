@@ -29,9 +29,9 @@ export function CaptionProfiles() {
 
   return (
     <div className="flex flex-col gap-2" id="caption-profiles">
-      <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--text-secondary)]">Profiles</span>
+      <span className="text-[13px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">Profiles</span>
       {profiles.length === 0 && (
-        <p className="m-0 text-[11px] text-[var(--text-muted)]">
+        <p className="m-0 text-[12px] text-[var(--text-muted)]">
           Set a caption font and a keyword font, then save the pair as a profile to reuse it.
         </p>
       )}
@@ -49,7 +49,7 @@ export function CaptionProfiles() {
             onClick={() => { endPreview(); updateState(profilePatch(p)); }}
           >
             <div className="text-[12px] font-bold truncate">{p.name}</div>
-            <div className="text-[10px] text-[var(--text-muted)] truncate">
+            <div className="text-[11px] text-[var(--text-muted)] truncate">
               {describe(p.fontFamily, p.fontWeight)} · {describe(p.keywordFont, p.keywordWeight)}
             </div>
           </button>

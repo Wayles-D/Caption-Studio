@@ -98,8 +98,32 @@ export function normalizeOcclusion(raw) {
     start,
     end,
     enabled: raw.enabled !== false,
-    feather: clamp(finite(raw.feather, 2), 0, MAX_OCCLUSION_FEATHER),
-    grow: clamp(finite(raw.grow, 4), 0, MAX_OCCLUSION_GROW)
+    // The effect lives exactly as long as its layer(s) — moved and trimmed
+    // with them — unless the creator set its own start/end (then false).
+    followsLayer: raw.followsLayer !== false,
+    // THE EDGE. The subject used to be cut with a 4px grow and a 2px soften,
+    // a safety margin for the old engine's rough masks — and that margin is
+    // the BACKGROUND around them (a bright wall), which showed as a light
+    // outline wherever dark hair or a dark chair met what was behind them.
+    // The video segmenter's masks hug the subject, so the edge is now cut
+    // tight (grow 0, soften 1). Relationships still carrying the OLD
+    // untouched defaults move to the new ones once (edgeDefaults marks
+    // that); an edge someone set by hand is kept.
+    ...edgeOf(raw),
+    edgeDefaults: EDGE_DEFAULTS_VERSION
+  };
+}
+
+export const OCCLUSION_EDGE_DEFAULTS = { feather: 1, grow: 0 };
+const EDGE_DEFAULTS_VERSION = 2;
+
+function edgeOf(raw) {
+  const legacyUntouched = raw.edgeDefaults !== EDGE_DEFAULTS_VERSION
+    && (raw.grow == null || raw.grow === 4) && (raw.feather == null || raw.feather === 2);
+  if (legacyUntouched) return { ...OCCLUSION_EDGE_DEFAULTS };
+  return {
+    feather: clamp(finite(raw.feather, OCCLUSION_EDGE_DEFAULTS.feather), 0, MAX_OCCLUSION_FEATHER),
+    grow: clamp(finite(raw.grow, OCCLUSION_EDGE_DEFAULTS.grow), 0, MAX_OCCLUSION_GROW)
   };
 }
 

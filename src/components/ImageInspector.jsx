@@ -38,7 +38,7 @@ function ImageEditor({ layer }) {
       <div className={CARD} id="image-editor">
         <div className="flex items-center justify-between gap-2">
           <span className={SECTION_TITLE}>Image</span>
-          <span className="text-[11px] text-[var(--text-muted)] truncate max-w-[60%]" title={layer.name}>{layer.name || 'Untitled'}</span>
+          <span className="text-[12px] text-[var(--text-muted)] truncate max-w-[60%]" title={layer.name}>{layer.name || 'Untitled'}</span>
         </div>
         <div className="flex gap-2">
           <TimeField id="img-start" label="Start" value={layer.start} onCommit={(v) => imageLayers.moveImageLayer(id, v)} />
@@ -141,7 +141,7 @@ export function ImageInspector() {
       <div className={CARD}>
         <div className="flex items-center justify-between">
           <span className={SECTION_TITLE}>Images</span>
-          <span className="text-[11px] font-semibold text-[var(--accent-color)]">{layers.length}</span>
+          <span className="text-[12px] font-semibold text-[var(--accent-color)]">{layers.length}</span>
         </div>
         <p className={HINT}>Pictures placed over the video for a stretch of the timeline. PNG, JPEG or WebP.</p>
         <button type="button" id="img-add" className={PRIMARY_BTN} onClick={() => imageLayers.promptForImageFile()}>+ Image at playhead</button>
@@ -153,9 +153,9 @@ export function ImageInspector() {
                 className={`${ROW_BASE} ${img.id === selected?.id ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}`}
                 onClick={() => imageLayers.selectImageLayer(img.id)}
               >
-                <span className="text-[10px] font-bold text-[var(--text-muted)]">IMG</span>
+                <span className="text-[11px] font-bold text-[var(--text-muted)]">IMG</span>
                 <span className="text-[12px] text-[var(--text-primary)] truncate flex-1">{img.name || 'Image'}</span>
-                <span className="text-[10px] text-[var(--text-muted)]">{img.start.toFixed(1)}s</span>
+                <span className="text-[11px] text-[var(--text-muted)]">{img.start.toFixed(1)}s</span>
               </button>
             ))}
           </div>

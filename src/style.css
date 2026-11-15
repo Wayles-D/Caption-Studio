@@ -28,50 +28,69 @@
    ========================================================================== */
 
 /* 1. Design System Tokens & CSS Variables
-   Near-black + spring-mint theme (design/caption-studio-color-update.md).
-   All UI chrome colors are defined once here — do not hardcode hex values
+   All UI chrome colours are defined once here — do not hardcode hex values
    inline in components. (This palette is for the app's own UI chrome only;
    caption/text styling in the video preview is a separate, user-configurable
-   system — see captionConfig.js.) */
+   system — see captionConfig.js.)
+
+   MONOCHROME, from the bhYnd mark: frosted white panes receding on a cool
+   black ground, cut by a white playhead. No brand hue — the creator's video
+   and captions are the only colour on screen, which is what a pro editor
+   should feel like.
+
+   THE SURFACE LADDER. Every surface sits on one rung, and a rung up is a
+   step towards the viewer — app ground, then panels, then cards, then
+   whatever floats (menus, toasts). Depth comes from the rung, a hairline and
+   a soft shadow, never from a box drawn around a box.
+
+   The "accent" is the brightest ink of the mode — white on dark, near-black
+   on light. It is reserved for three meanings: the one main action (Export),
+   what is selected/active, and the playhead. */
 :root {
-  --bg-app: #020202;
-  --bg-toolbar: rgba(16, 16, 16, 0.85);
-  --bg-sidebar: #101010;
-  --bg-card: #1B1B1B;
-  --bg-card-hover: #262626;
-  --bg-input: #1B1B1B;
+  --bg-app: #050506;
+  --bg-stage: #08080A;
+  --bg-toolbar: rgba(10, 10, 12, 0.82);
+  --bg-sidebar: #0B0B0D;
+  --bg-card: #131316;
+  --bg-card-hover: #1A1A1E;
+  --bg-input: #0F0F12;
+  --bg-raised: #17171B;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-pressed: rgba(255, 255, 255, 0.09);
 
-  --border-color: #262626;
-  --border-color-hover: #333333;
-  --accent-color: #00F6AC;
-  --accent-hover: #00D999;
-  --accent-glow: rgba(0, 246, 172, 0.25);
-  --accent-gradient: #00F6AC;
-  --text-on-accent: #020202;
-  --accent-wash-bg: #082A20;
-  --accent-wash-text: #4FF0BE;
+  --border-color: #1F1F24;
+  --border-color-hover: #303038;
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  /* The faint top edge a pane catches — the mark's panes have it. */
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --stage-dot: rgba(255, 255, 255, 0.05);
+  --frame-ring: rgba(255, 255, 255, 0.1);
 
-  /* Status doubles as the brand accent here — mint already reads as
-     "go," so no separate status color is needed (see design doc). */
-  --status: #00F6AC;
-  --status-wash-bg: rgba(0, 246, 172, 0.12);
+  --accent-color: #F3F4F7;
+  --accent-hover: #FFFFFF;
+  --accent-glow: rgba(255, 255, 255, 0.2);
+  --accent-gradient: #F3F4F7;
+  --text-on-accent: #0A0A0C;
+  --accent-wash-bg: #222228;
+  --accent-wash-text: #FFFFFF;
+
+  --status: #F3F4F7;
+  --status-wash-bg: rgba(255, 255, 255, 0.08);
 
   /* The unified keyframe lane's FIRST and LAST marker (see
      timelinePanel.js's buildMarker) get distinct colors so a sequence's
-     start and end are identifiable at a glance instead of every ◆ reading
-     as an identical mint diamond — --accent-color IS the start color
-     already (no separate token needed there); this is only the end/stop
-     one. Amber reads as "the other end of a range" without implying an
-     error the way red would. */
+     start and end are identifiable at a glance — --accent-color IS the start
+     colour; this is only the end/stop one. Amber reads as "the other end of a
+     range" without implying an error the way red would. A working signal,
+     not brand colour. */
   --keyframe-end-color: #FFB454;
 
-  --text-primary: #FFFFFF;
-  --text-secondary: #9A9A9A;
-  --text-muted: #5C5C5C;
+  --text-primary: #F3F4F7;
+  --text-secondary: #A1A1AC;
+  --text-muted: #80808B;
 
-  /* Not used anywhere yet — reserved for a second badge/tag color and for
-     destructive/error states, so they're available when a feature needs
-     them (see design doc's "Supplementary accents"). */
+  /* Reserved for a second badge/tag colour and for destructive/error
+     states. */
   --accent-secondary: #F2B84B;
   --error: #FF5C5C;
 
@@ -80,45 +99,67 @@
   --radius-lg: 16px;
   --radius-phone: 28px;
 
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-glow: 0 0 20px rgba(0, 246, 172, 0.15);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px -6px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 24px 60px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.25), 0 6px 22px -6px rgba(255, 255, 255, 0.28);
 
-  --font-main: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  /* Geist for the interface, Geist Mono (tabular) for every time readout so
+     digits don't jitter while the playhead runs. Caption fonts are separate. */
+  --font-main: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-geist: 'Geist', 'Inter', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  /* Motion: quick and settling, never bouncy for chrome. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
 }
 
-/* Light Theme Variables */
+/* Light Theme Variables — the same system inverted: near-black ink on cool
+   paper. */
 body.light-theme {
-  --bg-app: #F1F5F9;
-  --bg-toolbar: rgba(255, 255, 255, 0.9);
-  --bg-sidebar: #FFFFFF;
-  --bg-card: #F8FAFC;
-  --bg-card-hover: #F1F5F9;
-  --bg-input: #E2E8F0;
+  --bg-app: #EDEDF0;
+  --bg-stage: #E6E6EA;
+  --bg-toolbar: rgba(250, 250, 251, 0.86);
+  --bg-sidebar: #FAFAFB;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #F2F2F5;
+  --bg-input: #F2F2F5;
+  --bg-raised: #FFFFFF;
+  --bg-hover: rgba(10, 10, 20, 0.05);
+  --bg-pressed: rgba(10, 10, 20, 0.09);
 
-  --border-color: rgba(0, 0, 0, 0.08);
-  --border-color-hover: rgba(0, 0, 0, 0.18);
-  --accent-color: #00CE8C;
-  --accent-hover: #00B87D;
-  --accent-gradient: #00CE8C;
-  --accent-glow: rgba(0, 206, 140, 0.25);
-  --text-on-accent: #020202;
-  --accent-wash-bg: #DFFBF1;
-  --accent-wash-text: #00875F;
+  --border-color: #DEDEE3;
+  --border-color-hover: #C4C4CC;
+  --border-subtle: rgba(10, 10, 20, 0.06);
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --stage-dot: rgba(10, 10, 20, 0.08);
+  --frame-ring: rgba(10, 10, 20, 0.14);
 
-  --status: #00CE8C;
-  --status-wash-bg: rgba(0, 206, 140, 0.12);
+  --accent-color: #0B0B0D;
+  --accent-hover: #26262B;
+  --accent-glow: rgba(0, 0, 0, 0.14);
+  --accent-gradient: #0B0B0D;
+  --text-on-accent: #FFFFFF;
+  --accent-wash-bg: #E4E4E9;
+  --accent-wash-text: #0B0B0D;
+
+  --status: #0B0B0D;
+  --status-wash-bg: rgba(0, 0, 0, 0.06);
 
   /* See the dark theme's own comment on this token — same amber, darkened
-     slightly so it keeps enough contrast against light-theme surfaces. */
+     so it keeps enough contrast against light surfaces. */
   --keyframe-end-color: #C97A0A;
 
-  --text-primary: #0F172A;
-  --text-secondary: #475569;
-  --text-muted: #94A3B8;
+  --text-primary: #0B0B0D;
+  --text-secondary: #50505A;
+  --text-muted: #70707A;
 
-  --shadow-glow: 0 0 20px rgba(0, 206, 140, 0.15);
+  --shadow-sm: 0 1px 2px rgba(10, 10, 20, 0.08);
+  --shadow-md: 0 8px 24px -8px rgba(10, 10, 20, 0.18);
+  --shadow-lg: 0 24px 60px -16px rgba(10, 10, 20, 0.28), 0 0 0 1px rgba(10, 10, 20, 0.06);
+  --shadow-glow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 6px 16px -6px rgba(0, 0, 0, 0.35);
 }
 
 /* Global Reset (stands in for Tailwind's Preflight, which is intentionally
@@ -154,6 +195,18 @@ body.light-theme {
 
   body {
     font-size: 14px;
+    font-feature-settings: 'ss01', 'cv11';
+    text-rendering: optimizeLegibility;
+  }
+
+  /* One focus ring for the whole app, keyboard only. */
+  :focus-visible {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--accent-glow);
   }
 
   /* Scrolling stays fully functional everywhere (`overflow` is untouched on
@@ -223,10 +276,26 @@ body.light-theme {
   aspect-ratio: 330 / 586;
   background: #000000;
   border-radius: var(--radius-phone);
-  border: 4px solid rgba(255, 255, 255, 0.12);
-  box-shadow: var(--shadow-md), 0 0 40px rgba(0, 0, 0, 0.8);
+  /* A pane, not a phone shell: a hairline ring and a long soft shadow lift
+     it off the stage. While the video plays the ring brightens and a soft
+     halo comes up — the canvas is the one thing "live" on screen. */
+  border: 0;
+  box-shadow: 0 0 0 1px var(--frame-ring), 0 40px 90px -30px rgba(0, 0, 0, 0.75), 0 12px 30px -12px rgba(0, 0, 0, 0.5);
+  transition: box-shadow 400ms var(--ease-out);
   position: relative;
   overflow: hidden;
+}
+
+.phone-frame.is-playing {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.32), 0 0 60px -10px rgba(255, 255, 255, 0.14), 0 40px 90px -30px rgba(0, 0, 0, 0.75);
+}
+
+body.light-theme .phone-frame {
+  box-shadow: 0 0 0 1px var(--frame-ring), 0 30px 70px -28px rgba(10, 10, 20, 0.45), 0 10px 24px -12px rgba(10, 10, 20, 0.25);
+}
+
+body.light-theme .phone-frame.is-playing {
+  box-shadow: 0 0 0 1px rgba(10, 10, 20, 0.4), 0 30px 70px -28px rgba(10, 10, 20, 0.5);
 }
 
 .view-state {
@@ -546,7 +615,7 @@ body.light-theme {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--text-muted);
   padding: 0 2px;
   flex-basis: 100%;
   text-align: center;
@@ -653,38 +722,7 @@ body.light-theme {
    Keywords" toggle (appState.enableKeywordHighlighting) is on (see
    transcriptEditorState.js's buildWordChip); toggling it off removes this
    class without touching the underlying isKeyword data. */
-.word-chip-keyword {
-  border-color: #F59E0B !important;
-  background: rgba(245, 158, 11, 0.12) !important;
-}
-
-.word-chip-keyword-toggle {
-  border: none;
-  background: transparent;
-  color: var(--text-muted, #9CA3AF);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 2px;
-}
-
-.word-chip-keyword-toggle.active {
-  color: #F59E0B;
-}
-
-.word-chip-sfx-toggle {
-  border: none;
-  background: transparent;
-  color: var(--text-muted, #9CA3AF);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 2px;
-}
-
-.word-chip-sfx-toggle.active {
-  color: #22D3EE;
-}
+/* (The keyword look now lives with the rest of the transcript — see "The transcript" near the end of this file.) */
 
 /* ==========================================================================
    3. Timeline Panel — the primary keyframe editing surface (see
@@ -758,7 +796,7 @@ body.light-theme {
 }
 
 .timeline-history-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
@@ -897,9 +935,11 @@ body.light-theme {
 }
 
 .timeline-time-readout {
-  font-family: 'Geist Mono', monospace;
-  font-size: 11px;
-  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  letter-spacing: -0.01em;
+  color: var(--text-secondary);
   min-width: 64px;
   text-align: right;
 }
@@ -1026,6 +1066,8 @@ body.light-theme {
   top: 0;
   bottom: 0;
   border-left: 1px solid var(--border-color);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 9px;
   color: var(--text-muted);
   padding-left: 3px;
@@ -1043,10 +1085,8 @@ body.light-theme {
 }
 
 .timeline-lane-label {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--text-muted);
   width: 46px;
   flex-shrink: 0;
@@ -1142,7 +1182,7 @@ body.light-theme {
    (already visually "the start" by virtue of being the default marker
    color everywhere else in the app); only the end needs a second color so
    the two are tellable apart at a glance instead of every ◆ on the lane
-   reading as an identical mint diamond. */
+   reading as an identical diamond. */
 .timeline-marker.marker-end {
   border-color: var(--keyframe-end-color);
 }
@@ -1161,6 +1201,7 @@ body.light-theme {
   bottom: 0;
   width: 1.5px;
   background: var(--accent-color);
+  box-shadow: 0 0 10px 0 var(--accent-glow);
   pointer-events: none;
   z-index: 3;
 }
@@ -1409,7 +1450,7 @@ body.light-theme {
   height: 20px;
   padding: 0;
   border-radius: 50%;
-  border: 1px dashed var(--border-color-hover, var(--border-color));
+  border: 1px solid var(--border-color-hover, var(--border-color));
   background: var(--bg-card);
   color: var(--text-secondary);
   cursor: pointer;
@@ -1505,17 +1546,18 @@ body.light-theme {
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
-/* Automatically placed from the transcript analysis — dashed, so it is
-   obvious at a glance which beats the editor suggested and which the user
-   placed by hand. Editing one in any way does not change this: provenance is
-   information, not a lock. */
-.timeline-sfx-clip.auto {
-  border-style: dashed;
+/* Automatically placed from the transcript analysis: its dot is a RING
+   (yours is filled), so it is obvious at a glance which beats the editor
+   suggested and which you placed by hand — without a dashed border. Editing
+   one in any way does not change this: provenance is information, not a
+   lock. */
+.timeline-sfx-clip.auto .timeline-sfx-clip-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--clip, var(--accent-color));
 }
 
 .timeline-sfx-clip.disabled {
   opacity: 0.4;
-  border-style: dotted;
 }
 
 .timeline-sfx-clip-dot {
@@ -1604,7 +1646,6 @@ body.light-theme {
 
 .timeline-audio-clip.disabled {
   opacity: 0.4;
-  border-style: dotted;
 }
 
 /* The waveform canvas fills the clip, behind the label. Sized in CSS and
@@ -1673,12 +1714,9 @@ body.light-theme {
   user-select: none;
 }
 
-/* A manually-timed CAPTION is the same object family as an overlay but a
-   different thing semantically, so it is visually distinguishable without
-   being a separate lane. */
-.timeline-text-clip.is-caption {
-  border-style: dashed;
-}
+/* A CAPTION and a text overlay are the same object family; they are told
+   apart by their lanes and lane colours (see "Lane colours" below), with the
+   same solid border as every clip. */
 
 /* The Cinematic lane is hidden until a project has an interlude (see
    timelinePanel.js's refreshTextLane) — author display rules would
@@ -1789,7 +1827,7 @@ body.light-theme {
 .timeline-convert-menu-item:hover,
 .timeline-convert-menu-item:focus-visible {
   border-color: var(--accent-color);
-  background: rgba(0, 246, 172, 0.06);
+  background: var(--bg-hover);
   outline: none;
 }
 
@@ -2384,7 +2422,26 @@ body.light-theme {
 
 .timeline-sfx-clip-full:hover {
   background: var(--accent-color);
-  color: #071318;
+  color: var(--text-on-accent);
+}
+
+/* A trimmed capsule is as wide as the sound is long, so a short one ("Hit")
+   had Replace sliding under the ⤢. On hover/selection it grows just enough
+   for both controls (CapCut does the same), and Replace sits beside the ⤢
+   rather than wherever the label left it. */
+.timeline-sfx-clip.is-trimming:hover,
+.timeline-sfx-clip.is-trimming:focus-within,
+.timeline-sfx-clip.is-trimming.selected {
+  min-width: 58px;
+  z-index: 4;
+}
+
+.timeline-sfx-clip.is-trimming .timeline-sfx-clip-replace {
+  position: absolute;
+  right: 19px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2408,4 +2465,1097 @@ body.light-theme {
 .react-colorful .react-colorful__hue,
 .react-colorful .react-colorful__alpha {
   height: 14px;
+}
+
+/* ---------------------------------------------------------------------------
+   "Preparing a smooth preview…" — shown over the video while the editing
+   proxy (src/js/proxyPlayback.js) is on its way. Background AND text both
+   come from the theme, so it reads in the dark and the light mode alike.
+   --------------------------------------------------------------------------- */
+.preview-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 10px 14px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.preview-notice-spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: preview-notice-spin 0.8s linear infinite;
+}
+
+@keyframes preview-notice-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------------------------------------------------------------------------
+   Transcript word controls: "Aa" (this word's own case) and ◉/◌ (show or
+   hide this word in the captions). Colours come from the theme so both read
+   in light and dark mode; "active" uses the accent, as the ★ keyword does.
+   --------------------------------------------------------------------------- */
+.word-chip-case-toggle,
+.word-chip-hide-toggle {
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #9CA3AF);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.word-chip-case-toggle.active,
+.word-chip-hide-toggle.active {
+  color: var(--accent-color);
+}
+
+.word-chip-case-toggle:focus-visible,
+.word-chip-hide-toggle:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* A switched-off word stays in the transcript — struck through and dimmed —
+   so it is plain it is still there and can be switched back on. */
+.word-chip-hidden .word-chip {
+  text-decoration: line-through;
+  opacity: 0.45;
+}
+
+/* A HIDDEN caption on the timeline: still on its lane (so it can be shown
+   again), clearly off — dimmed and striped. Theme colours only. */
+.timeline-text-clip.is-hidden-caption {
+  opacity: 0.45;
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--border-color) 6px 8px);
+}
+.timeline-text-clip.is-hidden-caption .timeline-text-clip-label {
+  text-decoration: line-through;
+}
+
+/* ==========================================================================
+   Shell — stage, dock and motion (the 2026 redesign). Colours come only from
+   the tokens at the top of this file, so dark and light both follow.
+   ========================================================================== */
+
+/* The stage the canvas floats on: a faint dot grid, the way a design tool's
+   artboard reads, lit from just above the canvas. */
+.bhynd-stage {
+  background-color: var(--bg-stage);
+  background-image:
+    radial-gradient(ellipse 60% 55% at 50% 42%, var(--bg-hover), transparent 70%),
+    radial-gradient(var(--stage-dot) 1px, transparent 1.2px);
+  background-size: 100% 100%, 22px 22px;
+  background-position: center, center;
+}
+
+/* Dock — two levels: the five sections (a tab bar) and the chosen
+   section's tools (see ToolDock.jsx). Its height is the one number the rest
+   of the layout stacks on, so it lives here as --dock-h. */
+:root {
+  --dock-h: 68px;
+}
+
+.bhynd-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  height: var(--dock-h);
+  background: var(--bg-toolbar);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border-color);
+}
+
+.bhynd-dock-inner {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 0 16px;
+}
+
+/* Level 1: a segmented control — the sections sit in one recessed track and
+   the chosen one is raised out of it, a pane in front of the others. */
+.bhynd-dock-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+}
+
+.bhynd-dock-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 12.5px/1 var(--font-main);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+
+.bhynd-dock-tab svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.bhynd-dock-tab:hover {
+  color: var(--text-primary);
+}
+
+.bhynd-dock-tab.is-selected {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm), var(--edge-highlight), 0 0 0 1px var(--border-subtle);
+}
+
+/* "A tool from this section is open." */
+.bhynd-dock-tab-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-color);
+}
+
+.bhynd-dock-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+
+/* Level 2: the chosen section's tools (five at most). They arrive in a
+   short stagger when the section changes — the dock answers the click. */
+.bhynd-dock-tools {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.bhynd-dock-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 64px;
+  height: 50px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 11px/1 var(--font-main);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
+  animation: bhynd-tool-in 240ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+
+.bhynd-dock-btn svg {
+  width: 20px;
+  height: 20px;
+  transition: transform var(--dur-med) var(--ease-out);
+}
+
+.bhynd-dock-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bhynd-dock-btn:hover svg {
+  transform: translateY(-1px);
+}
+
+.bhynd-dock-btn:active {
+  background: var(--bg-pressed);
+}
+
+/* Open: a raised wash and a short bright bar on top — the mark's playhead. */
+.bhynd-dock-btn.is-active {
+  background: var(--accent-wash-bg);
+  color: var(--accent-wash-text);
+}
+
+.bhynd-dock-btn.is-active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 18px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--accent-color);
+  box-shadow: 0 0 8px var(--accent-glow);
+  transform: translateX(-50%);
+}
+
+@keyframes bhynd-tool-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Medium (tablets, unfolded foldables, small laptops): section labels go
+   under their icons so both levels still fit on one row. */
+@media (max-width: 1099px) {
+  .bhynd-dock-inner { gap: 10px; padding: 0 10px; }
+  .bhynd-dock-tab {
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    height: 54px;
+    min-width: 58px;
+    padding: 0 8px;
+    font-size: 10.5px;
+  }
+  .bhynd-dock-tab svg { width: 17px; height: 17px; }
+  .bhynd-dock-btn { min-width: 58px; padding: 0 6px; }
+  :root { --dock-h: 72px; }
+}
+
+/* Compact (phones, folded foldables): the native-app pattern — the tools
+   row above, the five sections as a full-width tab bar at the very bottom,
+   clear of the home indicator. Every section fits without scrolling. */
+@media (max-width: 639px) {
+  :root { --dock-h: calc(116px + env(safe-area-inset-bottom, 0px)); }
+  .bhynd-dock-inner {
+    flex-direction: column-reverse;
+    justify-content: flex-start;
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+  }
+  .bhynd-dock-divider { display: none; }
+  .bhynd-dock-tools {
+    justify-content: center;
+    gap: 2px;
+    height: 58px;
+    align-items: center;
+    padding: 0 6px;
+  }
+  .bhynd-dock-tools .bhynd-dock-btn { flex: 1 1 0; max-width: 84px; min-width: 0; }
+  .bhynd-dock-tabs {
+    border-radius: 0;
+    border: 0;
+    border-top: 1px solid var(--border-subtle);
+    background: transparent;
+    padding: 0 4px env(safe-area-inset-bottom, 0px);
+    gap: 0;
+  }
+  .bhynd-dock-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 57px;
+    border-radius: 0;
+    color: var(--text-muted);
+  }
+  .bhynd-dock-tab.is-selected {
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-primary);
+  }
+  /* The selected tab carries the playhead bar, like an open tool. */
+  .bhynd-dock-tab.is-selected::before {
+    content: '';
+    position: absolute;
+    top: -1px;
+    left: 50%;
+    width: 22px;
+    height: 2px;
+    border-radius: 0 0 2px 2px;
+    background: var(--accent-color);
+    transform: translateX(-50%);
+  }
+}
+
+/* Fingers need more than a mouse does. */
+@media (pointer: coarse) and (min-width: 640px) {
+  .bhynd-dock-btn { min-width: 62px; height: 54px; }
+}
+
+/* Motion: panels arrive, they don't pop. */
+@keyframes bhynd-panel-in {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes bhynd-sheet-in {
+  from { opacity: 0.6; transform: translateY(24px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes bhynd-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+.bhynd-panel-in { animation: bhynd-panel-in var(--dur-med) var(--ease-out); }
+.bhynd-sheet-in { animation: bhynd-sheet-in 260ms var(--ease-out); }
+.bhynd-pop { animation: bhynd-pop 160ms var(--ease-out); transform-origin: top right; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bhynd-panel-in,
+  .bhynd-sheet-in,
+  .bhynd-pop { animation: none; }
+  .phone-frame,
+  .bhynd-dock-btn svg { transition: none; }
+  .bhynd-dock-btn { animation: none; }
+}
+
+/* ==========================================================================
+   The tray (timeline) — redesign. Three zones in the header, read left to
+   right the way an edit happens: TRANSPORT (play, where you are) · WHAT
+   YOU'RE EDITING (target, keyframe, insert) · VIEW (beats, zoom, precise
+   values, help). Later in the file than the base rules on purpose, so these
+   win without !important.
+   ========================================================================== */
+
+/* The lane-name column — one number for the ruler, filmstrip and every lane
+   (timelinePanel.js reads it too, via gutterPx()). */
+.timeline-panel {
+  --tl-gutter: 168px;
+  gap: 6px;
+  padding: 0 16px 10px;
+}
+
+.timeline-ruler-row,
+.timeline-lane,
+.timeline-filmstrip-row {
+  grid-template-columns: var(--tl-gutter) 1fr;
+}
+
+.timeline-header {
+  min-height: 48px;
+  margin: 0 -16px;
+  padding: 6px 16px;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.timeline-header-row {
+  gap: 6px;
+}
+
+/* Transport */
+.timeline-play-btn {
+  width: 32px;
+  height: 32px;
+  box-shadow: var(--shadow-sm);
+}
+
+.timeline-time {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 0 4px 0 6px;
+  white-space: nowrap;
+}
+
+.timeline-time .timeline-time-readout {
+  min-width: 0;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.timeline-duration-readout {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.timeline-zone-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+
+.timeline-history-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+/* What you're editing */
+.timeline-target-chip {
+  height: 30px;
+  padding: 0 11px;
+  gap: 6px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-input);
+  border-color: var(--border-subtle);
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.timeline-target-chip:hover {
+  color: var(--text-primary);
+}
+
+.timeline-target-label {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-add-keyframe-btn,
+.timeline-advanced-toggle {
+  height: 30px;
+  padding: 0 11px;
+  gap: 6px;
+  border-radius: 9px;
+  border: 1px solid var(--border-color);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.timeline-add-keyframe-btn:hover:not(:disabled),
+.timeline-advanced-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-color-hover);
+}
+
+/* Insert at the playhead: one recessed cluster, three quiet buttons. */
+.timeline-insert-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 11px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.timeline-insert-label {
+  padding: 0 6px 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.timeline-insert-group .timeline-add-keyframe-btn {
+  height: 26px;
+  padding: 0 9px;
+  border-color: transparent;
+  border-radius: 8px;
+}
+
+/* View */
+.timeline-zoom-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border-color: var(--border-color);
+}
+
+.timeline-zoom-level {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 10.5px;
+}
+
+/* Lane names: an icon each, so a lane is recognisable at a glance. */
+.timeline-audio-lane .timeline-lane-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.timeline-audio-lane .timeline-lane-label::before {
+  content: '';
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  background: currentColor;
+  opacity: 0.8;
+  -webkit-mask: var(--lane-icon) center / contain no-repeat;
+  mask: var(--lane-icon) center / contain no-repeat;
+}
+
+.timeline-audio-lane[data-lane="captions"] { --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Crect x='3' y='5' width='18' height='14' rx='3'/%3E%3Cpath d='M7 15h6M15 15h2M7 11h2M11 11h6'/%3E%3C/svg%3E"); }
+.timeline-audio-lane[data-lane="text"] { --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M5 7V5h14v2M12 5v14M9 19h6'/%3E%3C/svg%3E"); }
+.timeline-audio-lane[data-lane="interlude"] { --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Cpath d='M8 10h8M10 14h4'/%3E%3C/svg%3E"); }
+.timeline-audio-lane[data-lane="sfx"] { --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 2 4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E"); }
+.timeline-audio-lane[data-lane="audio"] { --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2'/%3E%3C/svg%3E"); }
+.timeline-audio-lane[data-lane="images"] { --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Ccircle cx='9' cy='10' r='2'/%3E%3Cpath d='m21 16-5-5-9 9'/%3E%3C/svg%3E"); }
+.timeline-audio-lane[data-lane="shapes"] { --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Crect x='3' y='3' width='10' height='10' rx='1.5'/%3E%3Ccircle cx='16' cy='16' r='5'/%3E%3C/svg%3E"); }
+.timeline-audio-lane[data-lane="effects"] { --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1'/%3E%3C/svg%3E"); }
+
+.timeline-filmstrip-gutter {
+  font-weight: 500;
+  font-size: 12px;
+}
+
+/* Laptops a little narrower than a desktop: the cluster's own word goes. */
+@media (max-width: 1279px) {
+  .timeline-insert-label { display: none; }
+}
+
+/* Tablets and unfolded foldables. */
+@media (max-width: 1023px) {
+  .timeline-panel { --tl-gutter: 124px; }
+  .timeline-btn-label { display: none; }
+  .timeline-insert-group .timeline-add-keyframe-btn {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+  /* The controls row scrolls sideways rather than wrapping into a second
+     jumble of half-labels. */
+  .timeline-header-row--controls {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 1px;
+  }
+}
+
+/* Phones and folded foldables: names without icons, in a narrower column. */
+@media (max-width: 639px) {
+  .timeline-panel {
+    --tl-gutter: 100px;
+    padding: 0 10px 8px;
+  }
+  .timeline-header {
+    margin: 0 -10px;
+    padding: 6px 10px;
+  }
+  .timeline-audio-lane .timeline-lane-label {
+    font-size: 11px;
+  }
+  .timeline-audio-lane .timeline-lane-label::before {
+    display: none;
+  }
+}
+
+/* Fingers: lanes and their handles big enough to hit. */
+@media (pointer: coarse) {
+  .timeline-audio-lane { min-height: 44px; }
+  .timeline-history-btn,
+  .timeline-zoom-btn { width: 36px; height: 36px; }
+  .timeline-add-keyframe-btn,
+  .timeline-advanced-toggle,
+  .timeline-target-chip { height: 36px; }
+}
+
+/* ==========================================================================
+   Lane colours. The interface is monochrome; the TRAY is where colour does a
+   job — telling one kind of clip from another at a glance, the way CapCut's
+   orange text clips do. Muted, rich tones (not neon) so they sit on the
+   black and white chrome; a deeper variant of each for light mode so text and
+   borders keep their contrast. Every clip on a lane takes its lane's
+   --clip, and so does the lane's icon in the name column, so label and
+   clips read as one.
+   ========================================================================== */
+:root {
+  --lane-captions: #E3A848;
+  --lane-text: #A194FF;
+  --lane-interlude: #E77FA0;
+  --lane-sfx: #62AEF5;
+  --lane-audio: #5EC490;
+  --lane-images: #EE9470;
+  --lane-shapes: #BACB60;
+  --lane-effects: #CB88E3;
+  /* Ink on a solid lane colour (a hovered/selected sound capsule). */
+  --clip-ink: #0A0A0C;
+}
+
+body.light-theme {
+  --lane-captions: #B07413;
+  --lane-text: #6A55E6;
+  --lane-interlude: #C2466F;
+  --lane-sfx: #2A78CC;
+  --lane-audio: #1F8E57;
+  --lane-images: #C55E2F;
+  --lane-shapes: #6F8417;
+  --lane-effects: #9645B6;
+  --clip-ink: #FFFFFF;
+}
+
+.timeline-audio-lane[data-lane="captions"] { --clip: var(--lane-captions); }
+.timeline-audio-lane[data-lane="text"] { --clip: var(--lane-text); }
+.timeline-audio-lane[data-lane="interlude"] { --clip: var(--lane-interlude); }
+.timeline-audio-lane[data-lane="sfx"] { --clip: var(--lane-sfx); }
+.timeline-audio-lane[data-lane="audio"] { --clip: var(--lane-audio); }
+.timeline-audio-lane[data-lane="images"] { --clip: var(--lane-images); }
+.timeline-audio-lane[data-lane="shapes"] { --clip: var(--lane-shapes); }
+.timeline-audio-lane[data-lane="effects"] { --clip: var(--lane-effects); }
+
+/* The lane's icon wears its colour. */
+.timeline-audio-lane .timeline-lane-label::before {
+  background: var(--clip, currentColor);
+  opacity: 1;
+}
+
+/* Bar clips: captions, text, cinematic, images, shapes, effects. A tinted
+   body, a solid edge in the lane colour, and a label large enough to read. */
+.timeline-text-clip {
+  border-color: var(--clip, var(--accent-color));
+  background: color-mix(in srgb, var(--clip, var(--accent-color)) 24%, var(--bg-card));
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+body.light-theme .timeline-text-clip {
+  background: color-mix(in srgb, var(--clip, var(--accent-color)) 16%, var(--bg-card));
+}
+
+.timeline-text-clip:hover {
+  background: color-mix(in srgb, var(--clip, var(--accent-color)) 34%, var(--bg-card));
+}
+
+.timeline-text-clip.selected {
+  box-shadow: 0 0 0 2px var(--clip, var(--accent-color)), 0 0 0 5px color-mix(in srgb, var(--clip, var(--accent-color)) 25%, transparent);
+}
+
+.timeline-text-clip-handle {
+  background: var(--clip, var(--accent-color));
+}
+
+.timeline-text-clip.is-image,
+.timeline-text-clip.is-shape {
+  background: color-mix(in srgb, var(--clip, var(--accent-color)) 18%, var(--bg-card));
+}
+
+/* Cinematic keeps its card shape (letterbox rules, swatch at the head) in
+   its lane colour. */
+.timeline-text-clip.is-interlude {
+  border-color: var(--clip);
+  border-left-color: var(--interlude-swatch, var(--clip));
+  background: color-mix(in srgb, var(--clip) 16%, var(--bg-card));
+}
+
+.timeline-text-clip.is-interlude .timeline-text-clip-handle {
+  background: var(--clip);
+}
+
+/* Sound effects: a capsule in the lane colour; solid when hovered or
+   selected. */
+.timeline-sfx-clip {
+  border-color: var(--clip, var(--accent-color));
+  background: color-mix(in srgb, var(--clip, var(--accent-color)) 18%, var(--bg-card));
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.timeline-sfx-clip-dot {
+  background: var(--clip, var(--accent-color));
+}
+
+.timeline-sfx-clip:hover,
+.timeline-sfx-clip.selected {
+  background: var(--clip, var(--accent-color));
+  color: var(--clip-ink);
+}
+
+.timeline-sfx-clip:hover .timeline-sfx-clip-dot,
+.timeline-sfx-clip.selected .timeline-sfx-clip-dot {
+  background: var(--clip-ink);
+}
+
+.timeline-sfx-clip.selected {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--clip, var(--accent-color)) 30%, transparent);
+}
+
+/* Imported audio: the waveform carries the clip, so a quieter body. */
+.timeline-audio-clip {
+  border-color: var(--clip, var(--accent-color));
+  background: color-mix(in srgb, var(--clip, var(--accent-color)) 12%, var(--bg-card));
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.timeline-audio-clip.selected {
+  box-shadow: 0 0 0 2px var(--clip, var(--accent-color)), 0 0 0 5px color-mix(in srgb, var(--clip, var(--accent-color)) 25%, transparent);
+}
+
+.timeline-audio-clip-handle {
+  background: var(--clip, var(--accent-color));
+}
+
+/* Native controls (select popups, date pickers, scrollbars) follow the mode,
+   so a dropdown's options are never dark text on a dark list or vice versa. */
+:root { color-scheme: dark; }
+body.light-theme { color-scheme: light; }
+
+/* Sound-effect capsules, big enough to read: a 26px clip with the sound's
+   name at 11.5px. The dot still marks the exact instant the sound starts —
+   margin-left centres it on that instant (padding 8 + border 1 + half the
+   7px dot). A trimmed capsule is as wide as the sound is long, but never so
+   narrow its name disappears entirely. */
+.timeline-sfx-clip {
+  height: 26px;
+  gap: 6px;
+  padding: 0 10px 0 8px;
+  margin-left: -12.5px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.timeline-sfx-clip-dot {
+  width: 7px;
+  height: 7px;
+}
+
+.timeline-sfx-clip-label {
+  max-width: 96px;
+}
+
+.timeline-sfx-clip.is-trimming {
+  min-width: 44px;
+  padding-right: 20px;
+}
+
+.timeline-sfx-clip.is-trimming:hover,
+.timeline-sfx-clip.is-trimming:focus-within,
+.timeline-sfx-clip.is-trimming.selected {
+  /* Wide enough that Replace and the full-length button sit at the right
+     end, clear of the middle — where you grab a clip to drag it. */
+  min-width: 92px;
+}
+
+.timeline-sfx-clip-replace,
+.timeline-sfx-clip-full {
+  width: 17px;
+  height: 17px;
+}
+
+.timeline-sfx-clip.is-trimming .timeline-sfx-clip-replace {
+  right: 21px;
+}
+
+/* ==========================================================================
+   Trim handles you can actually grab (CapCut-style). They used to be 7px,
+   invisible until the exact edge was hovered, and INSIDE the clip — so on a
+   short clip (a word put behind someone is ~half a second) the two handles
+   sat on top of each other and every grab moved the clip instead of
+   stretching it. Now a hovered or selected clip shows solid handles with a
+   grip that STRADDLE its edges — half inside, where people grab, half
+   outside, so even a few-pixel clip can be stretched from either end.
+   ========================================================================== */
+.timeline-text-clip.selected,
+.timeline-text-clip:hover,
+.timeline-audio-clip.selected,
+.timeline-audio-clip:hover {
+  overflow: visible;
+  z-index: 5;
+}
+
+.timeline-text-clip-label,
+.timeline-audio-clip-label {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.timeline-text-clip-handle,
+.timeline-audio-clip-handle {
+  top: -1px;
+  bottom: -1px;
+  width: 12px;
+  border-radius: 4px;
+  background: var(--clip, var(--accent-color));
+  opacity: 0;
+  z-index: 3;
+  touch-action: none;
+}
+
+.timeline-text-clip-handle.start,
+.timeline-audio-clip-handle.start { left: -6px; border-radius: 4px; }
+.timeline-text-clip-handle.end,
+.timeline-audio-clip-handle.end { right: -6px; border-radius: 4px; }
+
+/* The grip: a short bar of the clip's ink in the handle's middle. */
+.timeline-text-clip-handle::after,
+.timeline-audio-clip-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--clip-ink);
+  opacity: 0.75;
+  transform: translate(-50%, -50%);
+}
+
+.timeline-text-clip:hover .timeline-text-clip-handle,
+.timeline-audio-clip:hover .timeline-audio-clip-handle {
+  opacity: 0.7;
+}
+
+.timeline-text-clip.selected .timeline-text-clip-handle,
+.timeline-audio-clip.selected .timeline-audio-clip-handle,
+.timeline-text-clip-handle:hover,
+.timeline-audio-clip-handle:hover {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .timeline-text-clip-handle,
+  .timeline-audio-clip-handle { width: 18px; }
+  .timeline-text-clip-handle.start,
+  .timeline-audio-clip-handle.start { left: -9px; }
+  .timeline-text-clip-handle.end,
+  .timeline-audio-clip-handle.end { right: -9px; }
+}
+
+/* ==========================================================================
+   The transcript — it reads like TEXT. Plain words in running lines; what is
+   set on a word shows quietly on the word itself, and its options appear in
+   one small bar above the word you click or the search lands on
+   (transcriptEditorState.js). Theme tokens only, so both modes follow.
+   ========================================================================== */
+.transcript-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 6px 0 34px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+
+.transcript-search:focus-within {
+  border-color: var(--border-color-hover);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.transcript-search-icon {
+  position: absolute;
+  left: 11px;
+  width: 15px;
+  height: 15px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.transcript-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: 500 13.5px var(--font-main);
+  outline: none;
+}
+
+.transcript-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.transcript-search-count {
+  font: 500 11px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.transcript-search-step {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.transcript-search-step:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.transcript-words {
+  flex: 1;
+  min-height: 180px;
+  overflow-y: auto;
+  padding: 12px 10px;
+  border-radius: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  line-height: 2.05;
+}
+
+.word-chip-wrap {
+  display: inline;
+}
+
+.word-chip {
+  display: inline;
+  position: relative;
+  /* A word wraps to the next line whole, never split mid-word. */
+  white-space: nowrap;
+  margin: 0 1px;
+  padding: 2px 3px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: text;
+  outline: none;
+  transition: background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+
+.word-chip:hover {
+  background: var(--bg-hover);
+}
+
+.word-chip:focus {
+  background: var(--bg-raised);
+  border-color: var(--border-color-hover);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* A keyword: bold, in the captions' lane colour. */
+.word-chip.word-chip-keyword {
+  font-weight: 700;
+  color: var(--lane-captions);
+}
+
+/* A sound effect on this word: a dot beneath it, in the SFX lane colour. */
+.word-chip.has-sound::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--lane-sfx);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* Search: every match tinted, the current one stronger and outlined. */
+.word-chip.is-match {
+  background: color-mix(in srgb, var(--lane-captions) 22%, transparent);
+}
+
+.word-chip.is-current {
+  background: color-mix(in srgb, var(--lane-captions) 40%, transparent);
+  box-shadow: 0 0 0 1.5px var(--lane-captions);
+}
+
+/* The word's options: one bar, above the word. */
+.word-actions {
+  position: fixed;
+  z-index: 1050;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-lg);
+  animation: bhynd-pop 140ms var(--ease-out);
+}
+
+.word-actions[hidden] {
+  display: none;
+}
+
+.word-actions-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 12px var(--font-main);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.word-actions-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.word-actions-icon {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.word-actions-btn.active {
+  background: var(--accent-wash-bg);
+  color: var(--accent-wash-text);
+}
+
+.word-actions-btn[data-word-action="keyword"].active .word-actions-icon { color: var(--lane-captions); }
+.word-actions-btn[data-word-action="sound"].active .word-actions-icon { color: var(--lane-sfx); }
+
+@media (pointer: coarse) {
+  .word-actions-btn { height: 40px; padding: 0 12px; }
+  .word-chip { padding: 4px 4px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .word-actions { animation: none; }
 }

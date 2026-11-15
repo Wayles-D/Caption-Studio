@@ -133,6 +133,42 @@ export function resolveWordOverride(baseParams, wordIndex) {
 }
 
 /**
+ * Whether a word is SWITCHED OFF — kept in the transcript, kept in its
+ * caption's timing, just not drawn. Stored on the word's own override
+ * (captionTransforms' `w<index>` entry: `{ hidden: true }`) so it travels
+ * with everything else about the word: undo, saving, the export payload.
+ */
+export function isWordHidden(baseParams, wordIndex) {
+  return !!resolveWordOverride(baseParams, wordIndex)?.hidden;
+}
+
+/**
+ * The phrase without its switched-off words — what both renderers draw.
+ *
+ * Every other word keeps its own start and end, so the caption's rhythm, the
+ * karaoke highlight and the entrance animation are exactly as before; the
+ * word simply is not there. Manual line breaks are stored by POSITION in the
+ * word list, so they are re-expressed against the shorter list — and a break
+ * that came after a hidden word moves to the word before it, keeping the
+ * line layout the user made. Returns the SAME phrase object when nothing is
+ * hidden, so captions without hidden words take the unchanged path.
+ */
+export function withoutHiddenWords(phrase, baseParams) {
+  const words = phrase?.words;
+  if (!Array.isArray(words) || !words.some((w) => isWordHidden(baseParams, w.wordIndex))) return phrase;
+  const breaks = new Set(phrase.breakAfterIndices || []);
+  const kept = [];
+  const nextBreaks = new Set();
+  words.forEach((w, i) => {
+    if (!isWordHidden(baseParams, w.wordIndex)) kept.push(w);
+    if (breaks.has(i) && kept.length) nextBreaks.add(kept.length - 1);
+  });
+  // No break after the last word drawn — it would only add an empty line.
+  nextBreaks.delete(kept.length - 1);
+  return { ...phrase, words: kept, breakAfterIndices: [...nextBreaks].sort((a, b) => a - b) };
+}
+
+/**
  * Keyframe-aware counterpart to resolveWordOverride, used ONLY for the
  * transform fields (position/scale/rotation/opacity) at actual paint time —
  * see shared/captionGraphics.js's paintSentenceComposite/paintRollingStackLines.

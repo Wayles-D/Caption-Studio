@@ -40,9 +40,9 @@ const ClearMeaning = createContext(INHERIT_CLEAR);
 const INTERLUDE_CLEAR = { short: 'default', title: 'Go back to the cinematic default', unset: 'Default' };
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
-const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
-const HINT = 'text-[11px] text-[var(--text-muted)] m-0';
-const GROUP_LABEL = 'text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]';
+const SECTION_TITLE = 'text-[13px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]';
+const HINT = 'text-[12px] text-[var(--text-muted)] m-0';
+const GROUP_LABEL = 'text-[12px] font-medium text-[var(--text-secondary)]';
 const INPUT = `h-9 w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)]
   text-[var(--text-primary)] text-[13px] px-2.5 outline-none transition-colors duration-200
   hover:border-[var(--accent-color)] focus:border-[var(--accent-color)]`;
@@ -52,7 +52,7 @@ const SELECT = `h-8 w-full bg-[var(--bg-input)] border border-[var(--border-colo
 const SLIDER = `appearance-none w-full h-1.5 rounded-[3px] bg-[var(--border-color-hover)] outline-none cursor-pointer
   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full
   [&::-webkit-slider-thumb]:bg-[var(--accent-color)] [&::-webkit-slider-thumb]:cursor-pointer`;
-const VALUE_BADGE = 'text-[10px] font-semibold text-[var(--text-secondary)] w-12 text-right shrink-0';
+const VALUE_BADGE = 'text-[11px] font-semibold text-[var(--text-secondary)] w-12 text-right shrink-0';
 const PRIMARY_BTN = `h-9 bg-[var(--accent-gradient)] border-0 text-[var(--text-on-accent)] font-bold text-xs
   rounded-[var(--radius-sm)] cursor-pointer transition-colors duration-150 hover:bg-[var(--accent-hover)]`;
 const SECONDARY_BTN = `h-9 bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)] font-bold text-xs
@@ -121,7 +121,7 @@ function InheritButton({ show, onClick }) {
   return (
     <button
       type="button"
-      className="text-[10px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
+      className="text-[11px] font-semibold text-[var(--text-muted)] bg-transparent border-0 cursor-pointer p-0 hover:text-[var(--accent-color)]"
       title={meaning.title}
       onClick={onClick}
     >{meaning.short}</button>
@@ -167,18 +167,18 @@ function StyleKeyframeRow({ id, property, label, elementId }) {
     <div className="flex items-center gap-2" id={id}>
       <button
         type="button" id={`${id}-add`}
-        className={`h-6 px-2 rounded-[3px] border text-[10px] font-bold cursor-pointer ${on ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
+        className={`h-6 px-2 rounded-[3px] border text-[11px] font-bold cursor-pointer ${on ? 'border-[var(--accent-color)] text-[var(--accent-color)]' : 'border-[var(--border-color)] text-[var(--text-muted)]'}`}
         title={`Change the ${label} from the playhead onwards`}
         onClick={() => textElements.setTextElementStyleKeyframe(property, current ?? null, elementId)}
       >◆ Change {label} here</button>
       {on && (
         <>
-          <span className="text-[10px] text-[var(--text-muted)]" id={`${id}-times`}>
+          <span className="text-[11px] text-[var(--text-muted)]" id={`${id}-times`}>
             {times.map((t) => `${t.toFixed(2)}s`).join(', ')}
           </span>
           <button
             type="button" id={`${id}-clear`}
-            className="h-6 px-2 rounded-[3px] border border-[var(--border-color)] text-[10px] text-[var(--text-muted)] cursor-pointer"
+            className="h-6 px-2 rounded-[3px] border border-[var(--border-color)] text-[11px] text-[var(--text-muted)] cursor-pointer"
             title={`Keep one ${label} for the whole clip`}
             onClick={() => textElements.clearTextElementStyleKeyframes(property, elementId)}
           >Clear</button>
@@ -334,7 +334,7 @@ function ApplyStyleTo({ element }) {
                 <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--text-primary)]">
                   {el.text || '(empty)'}
                 </span>
-                <span className="text-[10px] text-[var(--text-muted)] shrink-0">{formatTime(el.start)}</span>
+                <span className="text-[11px] text-[var(--text-muted)] shrink-0">{formatTime(el.start)}</span>
               </label>
             ))}
           </div>
@@ -503,7 +503,7 @@ function InterludeSound({ element, onAddSoundAt }) {
                 title="Linked: moves and deletes with this interlude"
               />
               <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--text-primary)]">{getSoundDefinition(e.soundId).label}</span>
-              <span className="text-[10px] text-[var(--text-muted)] shrink-0">{formatTime(e.startTime)}</span>
+              <span className="text-[11px] text-[var(--text-muted)] shrink-0">{formatTime(e.startTime)}</span>
             </label>
           ))}
         </div>
@@ -847,7 +847,7 @@ export function TextInspector({ onAddSoundAt = null } = {}) {
       <div className={CARD}>
         <div className="flex items-center justify-between">
           <span className={SECTION_TITLE}>Text</span>
-          <span className="text-[11px] font-semibold text-[var(--accent-color)]">{elements.length}</span>
+          <span className="text-[12px] font-semibold text-[var(--accent-color)]">{elements.length}</span>
         </div>
         <p className={HINT}>
 Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
@@ -891,13 +891,13 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
                   : 'border-[var(--border-color)] hover:border-[var(--accent-color)]'}`}
                 onClick={() => textElements.selectTextElement(el.id)}
               >
-                <span className="text-[9px] font-bold uppercase tracking-[0.04em] text-[var(--text-muted)] shrink-0">
+                <span className="text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--text-muted)] shrink-0">
                   {KIND_BADGE[el.kind] || 'TXT'}
                 </span>
                 <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--text-primary)]">
                   {String(el.text || '').replace(/\s+/g, ' ').trim() || '(empty)'}
                 </span>
-                <span className="text-[10px] text-[var(--text-muted)] shrink-0">
+                <span className="text-[11px] text-[var(--text-muted)] shrink-0">
                   {formatTime(el.start)}
                 </span>
               </button>
@@ -979,7 +979,7 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
               ))}
             </div>
 
-            <span className="text-[10px] text-[var(--text-muted)]">
+            <span className="text-[11px] text-[var(--text-muted)]">
               {formatTime(selected.start)} → {formatTime(selected.end)}
               {'  ·  '}{(selected.end - selected.start).toFixed(2)}s
             </span>

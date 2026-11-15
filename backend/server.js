@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { MAX_VIDEO_UPLOAD_LABEL } from '../shared/uploadLimits.js';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
@@ -130,7 +131,7 @@ app.use((err, req, res, next) => {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({
         success: false,
-        message: 'File too large. Maximum allowed size is 500MB.'
+        message: `File too large. Maximum allowed size is ${MAX_VIDEO_UPLOAD_LABEL}.`
       });
     }
     return res.status(400).json({
@@ -169,7 +170,7 @@ app.use((err, req, res, next) => {
 
 // Bind server
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, async () => {
+  const server = app.listen(PORT, async () => {
     console.log(`===============================================`);
     console.log(`BHYND Backend running on port ${PORT}`);
     console.log(`Endpoints available:`);
@@ -203,6 +204,13 @@ if (process.env.NODE_ENV !== 'test') {
       console.log(`[Fonts] All ${Object.keys(FONT_REGISTRY).length} registered font families present in ${fontsDir}.`);
     }
   });
+  // Node closes a request that is still arriving after 5 minutes by default
+  // (server.requestTimeout). A 1.5GB video on an ordinary uplink takes
+  // longer than that, and the failure looks like a random network error with
+  // nothing in any log. Forty-five minutes covers the slowest realistic
+  // upload; headersTimeout stays at its default, so idle sockets still die.
+  server.requestTimeout = 45 * 60 * 1000;
+
 }
 
 export default app;

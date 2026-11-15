@@ -9,6 +9,7 @@ import { analyzeTranscript } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
 import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor, getLastGraphicsFailure, compositeTextElementsOnto } from '../utils/graphicsExport.js';
+import { startProxyJob, getProxyJob } from '../utils/proxyVideo.js';
 
 /**
  * After an ASS fallback burn: puts the project's text elements (overlays,
@@ -172,6 +173,13 @@ export async function uploadAndExtractAudio(req, res, next) {
 
   activeJobIds.add(baseName);
 
+  // THE EDITING PROXY (utils/proxyVideo.js) — a browser-safe H.264 copy of a
+  // video the browser may not be able to play (an iPhone's HEVC, 4K). It runs
+  // in the BACKGROUND, side by side with transcription below; the response
+  // does not wait for it, and the editor asks GET /api/upload/proxy/:baseName
+  // until it is ready. The original stays untouched as the export master.
+  startProxyJob(baseName, videoPath, path.join(outputDir, `${baseName}_proxy.mp4`));
+
   let activeProc = null;
   let isRequestFinished = false;
 
@@ -251,40 +259,12 @@ export async function uploadAndExtractAudio(req, res, next) {
     await generateUnifiedShadowSubtitle(transcriptPath, shadowSubtitlePath, { styles: req.body });
     console.log(`[Pipeline] [${baseName}] Stage: Subtitle Generation Completed (Duration: ${Date.now() - subtitleStart}ms)`);
 
-    // 6. Render the final captioned video. For presets/modes the shared
-    // graphics renderer already covers (see shared/captionGraphics.js's
-    // canDrawCaptionFrame), try that first — it composites the same PNGs
-    // validated against this ASS pipeline during the graphics-renderer
-    // migration. Any gap in scope, or any failure, falls straight back to
-    // the existing ASS/libass burn below, unchanged.
-    console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Started`);
-    const renderStart = Date.now();
-    const resolvedStyle = resolveASSStyle(req.body || {});
-    const usedGraphicsRenderer = await tryRenderCaptionsWithGraphics(
-      videoPath, words, req.body, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName)
-    );
-    if (!usedGraphicsRenderer) {
-      // The legacy ASS/libass burn has no blend-mode compositing support
-      // (see graphicsCompositor.js's buildCaptionCompositeStages, which is
-      // the only place this feature is implemented) — surfacing this in the
-      // logs rather than silently dropping it, since this fallback is only
-      // reached when the graphics pipeline is unsupported or throws.
-      if (resolvedStyle.textBlendMode && resolvedStyle.textBlendMode !== 'normal') {
-        console.warn(`[Pipeline] [${baseName}] Text Blend Mode '${resolvedStyle.textBlendMode}' requested but falling back to the ASS/libass pipeline, which does not support it — captions will render opaque.`);
-      }
-      await burnSubtitles(videoPath, subtitlePath, renderedVideoPath, {
-        onSpawn: (proc) => { activeProc = proc; },
-        shadowAssPath: resolvedStyle.shadowMode === 'unified' && fs.existsSync(shadowSubtitlePath) ? shadowSubtitlePath : null,
-        unifiedShadow: resolvedStyle.unifiedShadow,
-        // The audio timeline is mixed on THIS path too, so falling back to the
-        // ASS renderer never silently drops the user's sound effects.
-        ...(await resolveFallbackAudioOptions(videoPath, req.body))
-      });
-    }
-    // ...and neither does it drop text overlays or cinematic interludes.
-    const textElementsRendered = usedGraphicsRenderer
-      || await addTextElementsToFallbackRender(renderedVideoPath, req.body, graphicsFramesDirFor(outputDir, baseName) + '-text', 'Pipeline] [' + baseName);
-    console.log(`[Pipeline] [${baseName}] Stage: Subtitle Rendering Completed (${usedGraphicsRenderer ? 'graphics' : 'ass'} pipeline, Duration: ${Date.now() - renderStart}ms)`);
+    // 6. NO RENDER DURING IMPORT. This used to burn the captions into a full
+    // render here, before the editor could open — 13 of the 14 minutes a
+    // 3.5-minute 4K iPhone clip took to import — and nothing used the result:
+    // the editor draws captions live over the video, and Download always
+    // renders the CURRENT edits fresh (/regenerate) before serving a file. A
+    // render whose output was always thrown away is pure waiting, so it goes.
     activeProc = null;
 
     // Clean up large intermediate temporary files - only WAV audio (video is retained for re-rendering)
@@ -306,7 +286,6 @@ export async function uploadAndExtractAudio(req, res, next) {
     const relativeAudioPath = path.relative(backendRoot, audioPath);
     const relativeTranscriptPath = path.relative(backendRoot, transcriptPath);
     const relativeSubtitlePath = path.relative(backendRoot, subtitlePath);
-    const relativeRenderedVideoPath = `/${path.relative(backendRoot, renderedVideoPath).replace(/\\/g, '/')}`;
 
     // Generate phrases from words for single source of truth captioning
     const phrases = groupWordsToPhrases(transcriptionJSON);
@@ -319,7 +298,10 @@ export async function uploadAndExtractAudio(req, res, next) {
       audioPath: relativeAudioPath.replace(/\\/g, '/'),
       transcriptPath: relativeTranscriptPath.replace(/\\/g, '/'),
       subtitlePath: relativeSubtitlePath.replace(/\\/g, '/'),
-      renderedVideoPath: relativeRenderedVideoPath,
+      // Nothing is rendered during import (see step 6) — Download renders fresh.
+      renderedVideoPath: null,
+      // The editing proxy, if this video needs one — the editor polls for it.
+      proxy: proxyStatusPayload(baseName),
       transcription: transcriptionJSON,
       words,
       phrases,
@@ -332,19 +314,9 @@ export async function uploadAndExtractAudio(req, res, next) {
       // Moments a supporting image would help. Surfaced as empty slots for the
       // user to fill; nothing is ever placed into one automatically.
       visualSuggestions,
-      // Lets the frontend warn the user when caption transform keyframes
-      // (position/rotation/scale) and text blend mode silently couldn't
-      // reach this render — those only exist in the graphics pipeline (see
-      // tryRenderCaptionsWithGraphics's own doc comment); the ASS/libass
-      // fallback it swaps to on any failure renders plain, un-transformed
-      // captions with no way to tell from the video alone that it happened.
-      renderedWithEffects: usedGraphicsRenderer,
-      // Whether text overlays / cinematic interludes are in the file — true on
-      // the graphics path, and on the fallback once they were composited on.
-      textElementsRendered,
-      // When the graphics renderer bailed, WHY — see graphicsExport.js's
-      // recordFailure: the real cause used to reach the server console only.
-      graphicsFailureReason: usedGraphicsRenderer ? null : getLastGraphicsFailure()
+      // The render-outcome keys (renderedWithEffects, textElementsRendered,
+      // graphicsFailureReason) are reported by /regenerate, which is where a
+      // render now happens.
     };
 
     console.log(`[Pipeline] [${baseName}] Returning response payload keys:`, Object.keys(responsePayload));
@@ -723,4 +695,35 @@ export async function restoreImage(req, res) {
   fs.renameSync(file.path, target);
   console.log(`[Restore] Image asset ${assetId} restored from the client's saved copy.`);
   return res.json({ success: true, restored: true });
+}
+
+/** The proxy's state, as the editor sees it — the file's URL only once it is there. */
+function proxyStatusPayload(baseName) {
+  let job = getProxyJob(baseName);
+  if (!job) {
+    // The job list lives in memory, so a server restart forgets it — but not
+    // the work. A proxy already on disk is simply ready; an upload still on
+    // disk gets its proxy started again. Without this, refreshing the editor
+    // after a restart would wait for a proxy forever.
+    const proxyFile = path.join(outputDir, `${baseName}_proxy.mp4`);
+    if (fs.existsSync(proxyFile)) return { status: 'ready', url: `/output/${baseName}_proxy.mp4` };
+    const uploadsDir = path.join(__dirname, '../uploads');
+    const original = ['.mp4', '.mov', '.webm'].map((ext) => path.join(uploadsDir, baseName + ext)).find((f) => fs.existsSync(f));
+    if (!original) return { status: 'unavailable' };
+    job = startProxyJob(baseName, original, proxyFile);
+  }
+  return {
+    status: job.status,
+    ...(job.status === 'ready' ? { url: `/output/${baseName}_proxy.mp4` } : {}),
+    ...(job.status === 'failed' ? { error: job.error } : {})
+  };
+}
+
+/** GET /api/upload/proxy/:baseName — polled by the editor until the proxy is ready. */
+export function proxyStatus(req, res) {
+  const { baseName } = req.params;
+  if (!isValidJobId(baseName)) {
+    return res.status(400).json({ success: false, message: 'Not a valid job ID.' });
+  }
+  return res.status(200).json({ success: true, ...proxyStatusPayload(baseName) });
 }

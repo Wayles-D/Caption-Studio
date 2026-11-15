@@ -17,6 +17,8 @@ import { smoothSamples, trackSegments } from '../../../shared/objects/tracking.j
 import { getSelectedTrack, getTrackedStateAt } from './objectTracking.js';
 import { getSelectedMaskAt, getSelectedSegmentation } from './objectSegmentation.js';
 import { resolveVideoTransformAtTime } from '../../../shared/videoTransform.js';
+import { isVideoCoveredAt } from '../../../shared/textElement.js';
+import { phase } from '../debug/hangWatch.js';
 import { getVideoBoxFraction } from './compositionView.js';
 import { getDetectionsAt, getSelectedObject, selectObject, selectManualObject, clearSelectedObject, displayNames } from './objectDetection.js';
 
@@ -126,11 +128,16 @@ function build() {
 
 function render() {
   if (!root && !build()) return;
-  const on = !!appState.objectsMode;
-  if (root.hidden === on) root.hidden = !on;
-  if (!on) return;
   const video = document.getElementById('preview-video');
   const t = video?.currentTime ?? 0;
+  // An interlude REPLACES the picture (shared/textElement.js's
+  // orderForCompositing), so while one is on screen the tracked object is not
+  // visible at all. This overlay sits above every canvas, so without this it
+  // keeps drawing the box, the confidence badge and the segmentation
+  // silhouette over the card — a trace of a frame that has been covered.
+  const on = !!appState.objectsMode && !isVideoCoveredAt(appState.textElements, t);
+  if (root.hidden === on) root.hidden = !on;
+  if (!on) return;
   const found = video?.paused ? getDetectionsAt(t) : null;
   const sel = getSelectedObject();
   const placement = currentPlacement(t);
@@ -284,7 +291,7 @@ function drawTrack(track, tracked, placement, sel) {
 
 export function initObjectOverlay() {
   const loop = () => {
-    render();
+    phase('objects-overlay', render);
     rafId = requestAnimationFrame(loop);
   };
   // Re-checked every frame only while the Objects tool is open — rebuilt

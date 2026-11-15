@@ -36,6 +36,7 @@ import * as shapeLayers from './shapeLayers.js';
 import * as objectEffects from './objectEffects.js';
 import { SHAPE_KINDS, SHAPE_LABELS } from '../../../shared/shapeLayer.js';
 import * as captionEvents from './captionEvents.js';
+import { phase } from '../debug/hangWatch.js';
 import * as rhythm from './rhythm.js';
 import { getWaveformPeaks, drawWaveform } from './audioWaveform.js';
 import { toggleShortcutsDialog } from './keyboardShortcuts.js';
@@ -122,9 +123,66 @@ let advancedExpanded = false;
 // not part of the document: how far you happen to be zoomed in is not an edit
 // to the video.
 const TIMELINE_ZOOM_MIN = 1;
-const TIMELINE_ZOOM_MAX = 16;
 const TIMELINE_ZOOM_STEP = 1.5;
-const TIMELINE_GUTTER_PX = 168;
+
+// THE STARTING ZOOM. "Fit" squeezes the whole video into the panel, so a
+// 3½-minute video opened as slivers of captions and sounds nobody could
+// read. Like CapCut, the timeline now opens at a READABLE density instead —
+// this many pixels per second of video (what 7.6x of Fit gave a 3½-minute
+// clip on a laptop) — whatever the video's length. A video short enough to
+// be readable at Fit simply opens at Fit.
+//
+// That starting view is what the zoom label calls 1.0x; + and − count from
+// it (1.5x, 2.3x...), and − still goes all the way out to Fit.
+const DEFAULT_PX_PER_SECOND = 44;
+// How far past the starting view you can zoom in, and never less than the
+// 16x of Fit it always allowed.
+const ZOOM_IN_BEYOND_DEFAULT = 8;
+const TIMELINE_ZOOM_MAX_FLOOR = 16;
+let defaultZoom = 1;
+let defaultZoomAppliedFor = null;
+
+function zoomMax() {
+  return Math.max(TIMELINE_ZOOM_MAX_FLOOR, defaultZoom * ZOOM_IN_BEYOND_DEFAULT);
+}
+
+/** The starting zoom for a video this long in a panel this wide (a multiple of Fit). */
+function defaultZoomFor(duration) {
+  if (!els?.scroll || !(duration > 0)) return 1;
+  const viewportTrack = Math.max(1, els.scroll.clientWidth - gutterPx());
+  return Math.max(1, (DEFAULT_PX_PER_SECOND * duration) / viewportTrack);
+}
+
+function zoomLabel(zoom) {
+  if (zoom <= 1.001) return 'Fit';
+  return `${(zoom / defaultZoom).toFixed(1)}x`;
+}
+
+/**
+ * Opens each newly loaded video at its starting zoom — once per video, so a
+ * zoom the person chose is never overridden (not even when the editing proxy
+ * replaces the original mid-session: same video, same length, same key).
+ */
+function applyDefaultZoomOnce(duration) {
+  if (!(duration > 0) || !els?.scroll || els.scroll.clientWidth <= 0) return;
+  const key = Math.round(duration * 10);
+  if (key === defaultZoomAppliedFor) return;
+  defaultZoomAppliedFor = key;
+  defaultZoom = defaultZoomFor(duration);
+  applyTimelineZoom(defaultZoom);
+  // Start at the start, not wherever the centre anchor put the view.
+  programmaticScroll = true;
+  els.scroll.scrollLeft = 0;
+  requestAnimationFrame(() => { programmaticScroll = false; });
+}
+// The lane-name column. Its width is responsive (168px on laptops, narrower
+// on tablets and phones — see --tl-gutter in style.css), so it is read from
+// the stylesheet rather than assumed.
+const TIMELINE_GUTTER_FALLBACK_PX = 168;
+function gutterPx() {
+  const v = els?.scroll ? parseFloat(getComputedStyle(els.scroll).getPropertyValue('--tl-gutter')) : NaN;
+  return Number.isFinite(v) && v > 0 ? v : TIMELINE_GUTTER_FALLBACK_PX;
+}
 let timelineZoom = 1;
 
 /**
@@ -141,7 +199,7 @@ let timelineZoom = 1;
  * @param {number|null} anchorClientX - Viewport x to keep fixed (the pointer for a wheel-zoom, the panel's centre for a button).
  */
 function applyTimelineZoom(nextZoom, anchorClientX = null) {
-  const clamped = Math.max(TIMELINE_ZOOM_MIN, Math.min(TIMELINE_ZOOM_MAX, nextZoom));
+  const clamped = Math.max(TIMELINE_ZOOM_MIN, Math.min(zoomMax(), nextZoom));
   if (!els?.scroll) return;
 
   const scrollRect = els.scroll.getBoundingClientRect();
@@ -149,27 +207,27 @@ function applyTimelineZoom(nextZoom, anchorClientX = null) {
   // scrollbar, so sizing rows from it made them a scrollbar-width too wide
   // and left the timeline horizontally scrollable even at 1x, where it is
   // supposed to fit the panel exactly.
-  const viewportTrack = Math.max(1, els.scroll.clientWidth - TIMELINE_GUTTER_PX);
+  const viewportTrack = Math.max(1, els.scroll.clientWidth - gutterPx());
   const anchorX = anchorClientX == null ? scrollRect.left + scrollRect.width / 2 : anchorClientX;
 
   // The timeline position under the anchor, as a fraction of the track, BEFORE
   // the resize — so zooming feels like it happens around that point rather
   // than yanking the view back to wherever the scroll happened to be.
   const beforeTrackWidth = viewportTrack * timelineZoom;
-  const beforeOffset = els.scroll.scrollLeft + (anchorX - scrollRect.left) - TIMELINE_GUTTER_PX;
+  const beforeOffset = els.scroll.scrollLeft + (anchorX - scrollRect.left) - gutterPx();
   const anchorFraction = beforeTrackWidth > 0 ? beforeOffset / beforeTrackWidth : 0;
 
   timelineZoom = clamped;
-  const rowWidth = TIMELINE_GUTTER_PX + viewportTrack * clamped;
+  const rowWidth = gutterPx() + viewportTrack * clamped;
   els.scroll.style.setProperty('--timeline-row-width', `${rowWidth}px`);
 
   const afterTrackWidth = viewportTrack * clamped;
-  const desired = (anchorFraction * afterTrackWidth) - (anchorX - scrollRect.left) + TIMELINE_GUTTER_PX;
+  const desired = (anchorFraction * afterTrackWidth) - (anchorX - scrollRect.left) + gutterPx();
   els.scroll.scrollLeft = Math.max(0, desired);
 
-  if (els.zoomLevel) els.zoomLevel.textContent = clamped <= 1 ? 'Fit' : `${clamped.toFixed(1)}x`;
+  if (els.zoomLevel) els.zoomLevel.textContent = zoomLabel(clamped);
   if (els.zoomOutBtn) els.zoomOutBtn.disabled = clamped <= TIMELINE_ZOOM_MIN;
-  if (els.zoomInBtn) els.zoomInBtn.disabled = clamped >= TIMELINE_ZOOM_MAX;
+  if (els.zoomInBtn) els.zoomInBtn.disabled = clamped >= zoomMax();
 
   // Zooming re-anchors on the pointer/centre, which is a deliberate scroll
   // the follow must not mistake for the user taking over.
@@ -255,8 +313,8 @@ function followPlayhead(contentX, force = false) {
   const playing = !!video && !video.paused && !video.ended;
   if (!force && (!playing || !autoFollow)) return;
 
-  const trackWidth = Math.max(1, scroll.clientWidth - TIMELINE_GUTTER_PX);
-  const anchor = TIMELINE_GUTTER_PX + trackWidth * FOLLOW_ANCHOR_FRACTION;
+  const trackWidth = Math.max(1, scroll.clientWidth - gutterPx());
+  const anchor = gutterPx() + trackWidth * FOLLOW_ANCHOR_FRACTION;
   const viewportX = contentX - scroll.scrollLeft;
 
   if (force) {
@@ -264,7 +322,7 @@ function followPlayhead(contentX, force = false) {
     // target is already comfortably on screen, leave the viewport alone —
     // re-centring on every scrub would yank the timeline around while the
     // user is dragging.
-    if (viewportX >= TIMELINE_GUTTER_PX && viewportX <= scroll.clientWidth) return;
+    if (viewportX >= gutterPx() && viewportX <= scroll.clientWidth) return;
     setScrollLeft(Math.max(0, Math.min(maxScroll, contentX - anchor)));
     return;
   }
@@ -405,6 +463,22 @@ function buildDom(container, options) {
   });
   playbackRow.appendChild(playBtn);
 
+  const timeBox = document.createElement('div');
+  timeBox.className = 'timeline-time';
+  const timeReadout = document.createElement('span');
+  timeReadout.className = 'timeline-time-readout';
+  timeReadout.id = 'timeline-time-readout';
+  const durationReadout = document.createElement('span');
+  durationReadout.className = 'timeline-duration-readout';
+  durationReadout.id = 'timeline-duration-readout';
+  timeBox.appendChild(timeReadout);
+  timeBox.appendChild(durationReadout);
+  playbackRow.appendChild(timeBox);
+
+  const transportDivider = document.createElement('span');
+  transportDivider.className = 'timeline-zone-divider';
+  playbackRow.appendChild(transportDivider);
+
   // Undo/Redo — moved here (off the top nav) since they're history controls
   // for the same keyframe/style edits this timeline is the primary editing
   // surface for. canUndo/canRedo have no reactive event of their own to
@@ -439,7 +513,6 @@ function buildDom(container, options) {
   keysBtn.setAttribute('aria-label', 'Keyboard shortcuts');
   keysBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></svg>';
   keysBtn.addEventListener('click', () => toggleShortcutsDialog());
-  playbackRow.appendChild(keysBtn);
 
   // SPLIT the selected clip where the playhead stands (splitClip.js).
   const splitBtn = document.createElement('button');
@@ -466,7 +539,7 @@ function buildDom(container, options) {
   videoChip.type = 'button';
   videoChip.className = 'timeline-target-chip';
   videoChip.id = 'timeline-video-chip';
-  videoChip.textContent = '🎬 Video';
+  videoChip.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="12" height="12" rx="2" /><path d="m15 10 6-3v10l-6-3" /></svg><span>Video</span>';
   videoChip.title = 'Select the video itself as a keyframe target';
   videoChip.addEventListener('click', () => keyframeEngine.selectVideoTarget());
   controlsRow.appendChild(videoChip);
@@ -518,13 +591,24 @@ function buildDom(container, options) {
   addInterludeBtn.type = 'button';
   addInterludeBtn.className = 'timeline-add-keyframe-btn timeline-add-interlude-btn';
   addInterludeBtn.id = 'timeline-add-interlude-btn';
-  addInterludeBtn.textContent = '+ Cinematic';
+  addInterludeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M8 10h8M10 14h4" /></svg><span class="timeline-btn-label">Cinematic</span>';
+  addInterludeBtn.setAttribute('aria-label', 'Add cinematic text at the playhead');
   addInterludeBtn.title = 'Cinematic text at the playhead — a full-frame text card replaces the picture; the audio keeps playing';
   addInterludeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     textElements.addInterlude();
   });
-  controlsRow.appendChild(addInterludeBtn);
+  // One "Insert at playhead" cluster instead of three loose buttons.
+  const insertGroup = document.createElement('div');
+  insertGroup.className = 'timeline-insert-group';
+  insertGroup.setAttribute('role', 'group');
+  insertGroup.setAttribute('aria-label', 'Insert at the playhead');
+  const insertLabel = document.createElement('span');
+  insertLabel.className = 'timeline-insert-label';
+  insertLabel.textContent = 'Insert';
+  insertGroup.appendChild(insertLabel);
+  insertGroup.appendChild(addInterludeBtn);
+  controlsRow.appendChild(insertGroup);
 
   // "+ Image" — a picture at the playhead (shared/imageLayer.js). Its lane
   // only takes room once the project has one, like the Cinematic lane.
@@ -532,13 +616,14 @@ function buildDom(container, options) {
   addImageBtn.type = 'button';
   addImageBtn.className = 'timeline-add-keyframe-btn timeline-add-image-btn';
   addImageBtn.id = 'timeline-add-image-btn';
-  addImageBtn.textContent = '+ Image';
+  addImageBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-9 9" /></svg><span class="timeline-btn-label">Image</span>';
+  addImageBtn.setAttribute('aria-label', 'Add an image at the playhead');
   addImageBtn.title = 'Add a picture at the playhead (PNG, JPEG or WebP)';
   addImageBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     imageLayers.promptForImageFile();
   });
-  controlsRow.appendChild(addImageBtn);
+  insertGroup.appendChild(addImageBtn);
 
   // "+ Shape" — a generated shape at the playhead (shared/shapeLayer.js),
   // picked from a short menu of the kinds there are.
@@ -546,13 +631,14 @@ function buildDom(container, options) {
   addShapeBtn.type = 'button';
   addShapeBtn.className = 'timeline-add-keyframe-btn timeline-add-shape-btn';
   addShapeBtn.id = 'timeline-add-shape-btn';
-  addShapeBtn.textContent = '+ Shape';
+  addShapeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="10" height="10" rx="1.5" /><circle cx="16" cy="16" r="5" /></svg><span class="timeline-btn-label">Shape</span>';
+  addShapeBtn.setAttribute('aria-label', 'Add a shape at the playhead');
   addShapeBtn.title = 'Add a shape at the playhead';
   addShapeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleShapeMenu(addShapeBtn);
   });
-  controlsRow.appendChild(addShapeBtn);
+  insertGroup.appendChild(addShapeBtn);
 
   // Precision (X/Y/scale%/rotation°) numeric fields: shown inline (hidden by
   // default) on mobile/tablet, the same as always — the primary way to set
@@ -584,8 +670,9 @@ function buildDom(container, options) {
   zoomOutBtn.addEventListener('click', () => applyTimelineZoom(timelineZoom / TIMELINE_ZOOM_STEP));
   zoomInBtn.addEventListener('click', () => applyTimelineZoom(timelineZoom * TIMELINE_ZOOM_STEP));
   // Double-clicking the level is the quick way back to "everything visible".
-  zoomLevel.title = 'Double-click to fit the whole clip';
-  zoomLevel.addEventListener('dblclick', () => applyTimelineZoom(1));
+  // Double-clicking the level is the quick way back to the starting zoom.
+  zoomLevel.title = 'Double-click to go back to the starting zoom';
+  zoomLevel.addEventListener('dblclick', () => applyTimelineZoom(defaultZoom));
   zoomControls.appendChild(zoomOutBtn);
   zoomControls.appendChild(zoomLevel);
   zoomControls.appendChild(zoomInBtn);
@@ -631,11 +718,8 @@ function buildDom(container, options) {
     applyAdvancedState();
   });
   controlsRow.appendChild(advancedBtn);
+  controlsRow.appendChild(keysBtn);
 
-  const timeReadout = document.createElement('span');
-  timeReadout.className = 'timeline-time-readout';
-  timeReadout.id = 'timeline-time-readout';
-  controlsRow.appendChild(timeReadout);
 
   header.appendChild(controlsRow);
 
@@ -860,7 +944,7 @@ function buildDom(container, options) {
 
   return {
     header, playbackRow, playBtn, undoBtn, redoBtn, splitBtn, videoChip, targetLabel, targetTooltip,
-    addBtn, advancedBtn, timeReadout, ruler, beatLayer, rhythmControls, snapBtn, scroll, playhead, keyframeTrack, filmstripTrack,
+    addBtn, advancedBtn, timeReadout, durationReadout, ruler, beatLayer, rhythmControls, snapBtn, scroll, playhead, keyframeTrack, filmstripTrack,
     sfxTrack: sfxLane.track, audioTrack: audioLane.track, textTrack: textLane.track,
     captionsTrack: captionsLane.track, interludeTrack: interludeLane.track, interludeRow: interludeLane.row, addInterludeBtn: interludeLane.addBtn,
     imagesTrack: imagesLane.track, imagesRow: imagesLane.row, addImagesLaneBtn: imagesLane.addBtn,
@@ -996,16 +1080,23 @@ function xToTime(x, trackWidth, duration) {
   return Math.max(0, Math.min(duration, (x / trackWidth) * duration));
 }
 
-let lastTickDuration = -1;
+let lastTickKey = '';
+const RULER_LABEL_MIN_PX = 64;
 
 function refreshRulerTicks(duration) {
-  if (duration === lastTickDuration) return;
-  lastTickDuration = duration;
+  // The ruler's full (zoomed) width, bucketed so a resize or zoom re-spaces
+  // the labels but an ordinary frame doesn't rebuild them.
+  const rulerWidth = els.ruler.offsetWidth || 0;
+  const key = `${duration}|${Math.round(rulerWidth / 32)}`;
+  if (key === lastTickKey) return;
+  lastTickKey = key;
   els.ruler.querySelectorAll('.timeline-ruler-tick').forEach((el) => el.remove());
   if (!duration || duration <= 0) return;
 
-  // Aim for roughly 6-10 visible ticks regardless of clip length.
-  const rawStep = duration / 8;
+  // As many labels as fit at least RULER_LABEL_MIN_PX apart (never fewer
+  // than two), on a "nice" step.
+  const fits = Math.max(2, Math.floor(rulerWidth / RULER_LABEL_MIN_PX));
+  const rawStep = duration / fits;
   const niceSteps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
   const step = niceSteps.find((s) => s >= rawStep) || niceSteps[niceSteps.length - 1];
 
@@ -1237,6 +1328,16 @@ document.addEventListener('keydown', (e) => {
   // stopped thinking about. Removes no caption and no other clip.
   if (appState.selectedTextElementId) {
     textElements.removeSelectedTextElement();
+    return;
+  }
+
+  // A selected CAPTION clip. It was missing from this chain, so Backspace on
+  // a caption did nothing and the only way to be rid of one was to drag it
+  // off screen — where it still flashed by in playback. Removing it takes
+  // only that caption: every other caption keeps its own time, the words stay
+  // in the transcript, and one Undo puts it back.
+  if (appState.selectedCaptionEventId) {
+    captionEvents.removeSelectedCaptionEvent();
     return;
   }
 
@@ -1816,9 +1917,16 @@ function paintSoundWaveform(el, event) {
     drawWaveform(canvas, peaks, { startFraction: from, endFraction: Math.max(from + 1e-6, to), color: 'rgba(255, 255, 255, 0.5)' });
   };
   getWaveformPeaks(resolveSoundUrl(event.soundId, SFX_SOUNDS_BASE_URL)).then((peaks) => {
-    if (!peaks) return;
+    if (!peaks || !canvas.isConnected) return;
     draw(peaks);
-    const observer = new ResizeObserver(() => draw(peaks));
+    // The lane rebuilds its clips on every edit, so this canvas is replaced
+    // often. An observer left watching a detached canvas keeps it — and the
+    // peaks array it closes over — alive for the rest of the session, one per
+    // clip per rebuild. It disconnects itself once its canvas is gone.
+    const observer = new ResizeObserver(() => {
+      if (!canvas.isConnected) { observer.disconnect(); return; }
+      draw(peaks);
+    });
     observer.observe(canvas);
   });
 }
@@ -2252,6 +2360,10 @@ function buildCaptionEventClip(event, duration, isSelected) {
   const el = document.createElement('div');
   el.className = 'timeline-text-clip is-caption is-transcript';
   if (isSelected) el.classList.add('selected');
+  // A HIDDEN caption keeps its place on the lane — dimmed, and still there to
+  // switch back on — but shows nothing on the video (resolveCaptionPhrases
+  // skips it).
+  if (event.enabled === false) el.classList.add('is-hidden-caption');
 
   el.style.left = `${timeToPercent(event.start, duration)}%`;
   el.style.width = `${Math.max(1, timeToPercent(event.end, duration) - timeToPercent(event.start, duration))}%`;
@@ -2261,7 +2373,8 @@ function buildCaptionEventClip(event, duration, isSelected) {
   const words = appState.words || [];
   const text = event.wordIndices.map((i) => (words[i]?.word ?? '').trim()).filter(Boolean).join(' ');
   el.title = `${text || '(caption)'} · ${event.start.toFixed(2)}s → ${event.end.toFixed(2)}s`
-    + ' — drag to retime, drag an edge to change how long it shows, S to split at the playhead';
+    + (event.enabled === false ? ' — HIDDEN: not shown on the video' : '')
+    + ' — drag to retime, drag an edge to change how long it shows, S to split at the playhead, Backspace to delete';
 
   const label = document.createElement('span');
   label.className = 'timeline-text-clip-label';
@@ -2278,8 +2391,8 @@ function buildCaptionEventClip(event, duration, isSelected) {
   convertBtn.type = 'button';
   convertBtn.className = 'timeline-caption-convert';
   convertBtn.dataset.convertCaption = event.id;
-  convertBtn.title = 'Turn this caption into cinematic text or a text overlay';
-  convertBtn.setAttribute('aria-label', 'Turn this caption into cinematic text or a text overlay');
+  convertBtn.title = 'Caption options — turn into text, hide or delete';
+  convertBtn.setAttribute('aria-label', 'Caption options: turn into cinematic text or a text overlay, hide, or delete');
   convertBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>';
   convertBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
   convertBtn.addEventListener('click', (e) => {
@@ -2341,6 +2454,45 @@ function openCaptionConvertMenu(anchor, captionEventId) {
       e.stopPropagation();
       closeCaptionConvertMenu();
       textElements.convertCaptionToTextElement(captionEventId, item.kind);
+    });
+    el.appendChild(btn);
+  });
+
+  // THIS CAPTION: hide it (it keeps its place and timing, and comes back with
+  // one click) or delete it (one Undo restores it). Either way no other
+  // caption moves.
+  const event = captionEvents.getCaptionEvent(captionEventId);
+  const hidden = event?.enabled === false;
+  const section = document.createElement('div');
+  section.className = 'timeline-convert-menu-heading';
+  section.textContent = 'This caption';
+  el.appendChild(section);
+  [
+    {
+      id: 'toggle-hidden',
+      label: hidden ? 'Show caption' : 'Hide caption',
+      hint: hidden ? 'Put it back on the video' : 'Keep it on the timeline, but not on the video',
+      run: () => captionEvents.updateCaptionEvent(captionEventId, { enabled: hidden })
+    },
+    {
+      id: 'delete',
+      label: 'Delete caption',
+      hint: 'Or press Backspace — Undo brings it back',
+      run: () => captionEvents.removeCaptionEvent(captionEventId)
+    }
+  ].forEach((item) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'timeline-convert-menu-item';
+    btn.dataset.captionAction = item.id;
+    btn.setAttribute('role', 'menuitem');
+    btn.innerHTML = '<span class="timeline-convert-menu-label"></span><span class="timeline-convert-menu-hint"></span>';
+    btn.querySelector('.timeline-convert-menu-label').textContent = item.label;
+    btn.querySelector('.timeline-convert-menu-hint').textContent = item.hint;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeCaptionConvertMenu();
+      item.run();
     });
     el.appendChild(btn);
   });
@@ -2678,6 +2830,7 @@ function tick() {
   const duration = video?.duration || 0;
   const currentTime = video?.currentTime || 0;
 
+  applyDefaultZoomOnce(duration);
   refreshRulerTicks(duration);
   refreshBeatMarkers(duration);
   refreshRhythmControls();
@@ -2697,6 +2850,10 @@ function tick() {
   refreshShapeLane(duration);
   refreshEffectLane(duration);
   if (els.timeReadout) els.timeReadout.textContent = formatTime(currentTime);
+  if (els.durationReadout) {
+    const total = duration > 0 ? `/ ${formatTime(duration)}` : '';
+    if (els.durationReadout.textContent !== total) els.durationReadout.textContent = total;
+  }
 
   const paused = video?.paused ?? true;
   if (paused !== lastPaused) {
@@ -2782,7 +2939,7 @@ function tick() {
   // Even with nothing selected: every keyframed clip still shows that it
   // has keyframes (passively) — see refreshLanes.
   if (duration > 0) {
-    refreshLanes(duration);
+    phase('timeline', () => refreshLanes(duration));
   } else {
     [els.keyframeTrack, ...els.scroll.querySelectorAll('.timeline-kf-layer')].forEach((layer) => {
       clearMarkers(layer);
@@ -2809,6 +2966,8 @@ export function initTimelinePanel(container, options = {}) {
   lastEffectSignature = null;
   dragClip = null;
   timelineZoom = 1;
+  defaultZoom = 1;
+  defaultZoomAppliedFor = null;
   autoFollow = true;
   programmaticScroll = false;
   applyAdvancedState();

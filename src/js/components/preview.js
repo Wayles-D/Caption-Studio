@@ -7,6 +7,7 @@ import { resolveFontFace } from '../../../shared/fontRegistry.js';
 import { resolveRollingStackFrame, chunkRawText, buildRollingStackChunks, resolveRollingStackWindow } from '../../../shared/rollingStack.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrame, drawRollingStackFrame, measureSentenceFrame, measureRollingStackFrame, paintFrameBackground } from '../../../shared/captionGraphics.js';
 import { initCanvasTransform, updateCanvasTransformOverlay, hideCanvasTransformOverlay, setTextElementBoxes, setGraphicBoxes } from './canvasTransform.js';
+import { phase } from '../debug/hangWatch.js';
 import { isImageLayerActive, drawImageLayer } from '../../../shared/imageLayer.js';
 import { isShapeLayerActive, drawShapeLayer } from '../../../shared/shapeLayer.js';
 import { resolveLayerStack, layerRuns } from '../../../shared/visualLayers.js';
@@ -591,7 +592,7 @@ export function initPreviewWorkspace() {
 
   let previewLoopRafId = null;
   function stepPreviewLoop() {
-    updatePreviewFrame();
+    phase('preview', updatePreviewFrame);
     if (import.meta.env.DEV) window.__debugPreviewFrameCount++;
     previewLoopRafId = requestAnimationFrame(stepPreviewLoop);
   }
@@ -837,9 +838,13 @@ export function syncVideoSubtitles() {
     activePhrase = appState.phrases.find(p => currentTime >= p.start && currentTime <= p.end);
   }
 
-  // Demo Subtitles Fallback
+  // Demo Subtitles Fallback — only while there is no transcript at all. Once
+  // a project has words, a moment with no caption (a gap, or a caption the
+  // creator deleted or hid) must show nothing, as the export does — not the
+  // placeholder lines.
   if (!activePhrase) {
-    const demoItem = MOCK_SUBTITLES.find(s => currentTime >= s.start && currentTime <= s.end);
+    const hasTranscript = Array.isArray(appState.words) && appState.words.length > 0;
+    const demoItem = hasTranscript ? null : MOCK_SUBTITLES.find(s => currentTime >= s.start && currentTime <= s.end);
     if (demoItem) {
       const text = applyCaseTransform(demoItem.text, appState.textCase);
       const wordElement = document.createElement('span');
@@ -951,7 +956,7 @@ export function syncVideoSubtitles() {
     const isWordActive = currentTime >= w.start && currentTime <= w.end;
     const isPastWord = currentTime > w.end;
     const caseForWord = resolveWordTextCase(!!w.isKeyword, keywordsEnabled, appState.textCase, cssConfig.keywordTextCase);
-    const wordText = applyCaseTransform(w.word || w.text || '', caseForWord, idx === 0);
+    const wordText = applyCaseTransform(w.word || w.text || '', caseForWord, w.sentenceStart ?? idx === 0);
 
     const wordElement = document.createElement('span');
 
@@ -1082,7 +1087,7 @@ function renderWordModeCaption(activePhrase, currentTime, cssConfig, captionsTex
   const activeHighlight = cssConfig.highlightColor || '#FEF08A';
   const keywordsEnabled = appState.enableKeywordHighlighting;
   const caseForWord = resolveWordTextCase(!!activeWord.isKeyword, keywordsEnabled, appState.textCase, cssConfig.keywordTextCase);
-  const wordText = applyCaseTransform(activeWord.word || activeWord.text || '', caseForWord, true);
+  const wordText = applyCaseTransform(activeWord.word || activeWord.text || '', caseForWord, activeWord.sentenceStart ?? true);
 
   const wordElement = document.createElement('span');
   wordElement.className = 'word-unit';
@@ -1139,7 +1144,7 @@ function buildRollingStackLineElement(chunk, cssConfig, isActive) {
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
 
   const caseForChunk = resolveWordTextCase(chunk.type === 'keyword', keywordsEnabled, appState.textCase, cssConfig.keywordTextCase);
-  const lineText = applyCaseTransform(chunkRawText(chunk), caseForChunk, true);
+  const lineText = applyCaseTransform(chunkRawText(chunk), caseForChunk, chunk.words?.[0]?.sentenceStart ?? true);
 
   const metadata = resolveWordStyleMetadata({ isKeyword: chunk.type === 'keyword' }, {
     keywordStyleConfig: cssConfig.keywordStyleConfig,

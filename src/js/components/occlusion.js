@@ -144,7 +144,15 @@ export function paintSubjectRun(canvas, entry, time) {
   const mask = getMaskAt(entry.trackKey, track, time);
   if (!mask) return false;
 
-  const rect = canvas.getBoundingClientRect();
+  // Sized from the VIDEO, never from this canvas: the canvas is display:none
+  // until the first time it paints, and a hidden element measures 0×0 — so
+  // the first frame of every occlusion used to be painted into a 1×1 canvas,
+  // which was then shown stretched over the whole picture for a frame (the
+  // "flash" as text went behind someone). The video shares this canvas's box
+  // (every other layer sizes the same way — see preview.js's
+  // prepareGraphicsCanvas) and is always laid out.
+  const rect = video.getBoundingClientRect();
+  if (!(rect.width > 0) || !(rect.height > 0)) return false;
   const dpr = window.devicePixelRatio || 1;
   const W = Math.max(1, Math.round(rect.width * dpr));
   const H = Math.max(1, Math.round(rect.height * dpr));
@@ -160,7 +168,7 @@ export function paintSubjectRun(canvas, entry, time) {
   // of them, so one setting never quietly undoes another's).
   const mine = getOcclusions().filter((r) => r.trackKey === entry.trackKey && r.enabled !== false);
   const feather = Math.max(0, ...mine.map((r) => r.feather || 0), 0);
-  const grow = Math.max(0, ...mine.map((r) => r.grow ?? 4), 0);
+  const grow = Math.max(0, ...mine.map((r) => r.grow ?? 0), 0);
   const a = { x: mask.frame.x, y: mask.frame.y };
   const b = { x: mask.frame.x + mask.frame.width, y: mask.frame.y };
   const toCanvas = (p) => { const q = videoTransformFor(placement, W, H); return { x: q[0] * p.x + q[2] * p.y + q[4], y: q[1] * p.x + q[3] * p.y + q[5] }; };

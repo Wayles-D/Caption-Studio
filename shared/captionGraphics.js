@@ -76,7 +76,9 @@ import { motionsFromParams, motionsFromWordOverride, evaluateMotions } from './m
  * 'uppercase', 'lowercase' or 'capitalize' (first letter capital).
  */
 function applyWordOwnCase(text, textCase) {
-  if (textCase === 'capitalize') return applyCaseTransform(text, 'sentence', true);
+  // "Capitalized" means exactly that — first letter capital, even for a word
+  // typed in capitals (sentence case would leave those alone).
+  if (textCase === 'capitalize') return text ? text.charAt(0).toUpperCase() + text.slice(1).toLowerCase() : text;
   return applyCaseTransform(text, textCase, true);
 }
 
@@ -90,7 +92,7 @@ function applyMotionTransform(ctx, d, pivotX, pivotY, unitPx, extraScale = 1) {
     ctx.translate(-pivotX, -pivotY);
   }
 }
-import { resolveWordOverride, resolveWordOverrideAtTime, resolveWordStyleOverride, resolveCaptionTransformsAtTime, hasWordOverride } from './captionTransform.js';
+import { resolveWordOverride, resolveWordOverrideAtTime, resolveWordStyleOverride, resolveCaptionTransformsAtTime, hasWordOverride, withoutHiddenWords, isWordHidden } from './captionTransform.js';
 
 /**
  * Whether the graphics engine currently knows how to render this resolved
@@ -693,7 +695,7 @@ function computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, param
     const ownCase = resolveWordStyleOverride(params, w.wordIndex)?.textCase;
     const text = ownCase
       ? applyWordOwnCase(w.word || w.text || '', ownCase)
-      : applyCaseTransform(w.word || w.text || '', resolveWordTextCase(!!w.isKeyword, keywordsEnabled, params.textCase, cssConfig.keywordTextCase), idx === 0);
+      : applyCaseTransform(w.word || w.text || '', resolveWordTextCase(!!w.isKeyword, keywordsEnabled, params.textCase, cssConfig.keywordTextCase), w.sentenceStart ?? idx === 0);
     // This word's own style override, applied to whichever unit the two
     // branches below produce — see applyWordStyleOverride for why the merge
     // happens on the finished unit rather than inside the style resolution.
@@ -985,6 +987,13 @@ function renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, cur
   // argument through every layout function. A project with no style
   // keyframes gets the very same params object back.
   params = resolveCaptionTransformsAtTime(params, currentTime);
+
+  // SWITCHED-OFF WORDS (captionTransform.js's withoutHiddenWords) leave the
+  // phrase here, at the one point both renderers share, so a hidden word is
+  // gone from the preview and the export alike — and every word around it
+  // keeps its own timing. All of a caption's words switched off: nothing.
+  activePhrase = withoutHiddenWords(activePhrase, params);
+  if (!activePhrase.words.length) return;
 
   const computed = computeSentenceLines(ctx, { activePhrase, currentTime, cssConfig, params, geometry });
   if (!computed) return;
@@ -1372,7 +1381,7 @@ function resolveRollingStackChunkSpec(chunk, isCurrent, cssConfig, params, geome
   const inactiveColor = cssConfig.inactiveColor || '#FFFFFF';
 
   const caseForChunk = resolveWordTextCase(chunk.type === 'keyword', keywordsEnabled, params.textCase, cssConfig.keywordTextCase);
-  const text = applyCaseTransform(chunkRawText(chunk), caseForChunk, true);
+  const text = applyCaseTransform(chunkRawText(chunk), caseForChunk, chunk.words?.[0]?.sentenceStart ?? true);
 
   const metadata = resolveWordStyleMetadata(
     { isKeyword: chunk.type === 'keyword' },
@@ -1713,6 +1722,15 @@ function paintRollingStackLines(ctx, positionedLines, params, currentTime, canva
 function renderRollingStackResolvedFrame(ctx, { canvasWidth, canvasHeight, windowChunks, currentTime, cssConfig, params, geometry, alignment, createOffscreenCanvas }) {
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   if (!windowChunks || !windowChunks.length) return;
+  // Switched-off words leave Rolling Stack's chunks too — the same rule as
+  // renderResolvedFrame's; a chunk left with no words is dropped entirely.
+  windowChunks = windowChunks
+    .map((chunk) => {
+      const words = (chunk.words || []).filter((w) => !isWordHidden(params, w.wordIndex));
+      return words.length === (chunk.words || []).length ? chunk : { ...chunk, words };
+    })
+    .filter((chunk) => chunk.words && chunk.words.length);
+  if (!windowChunks.length) return;
 
   const shadowMode = resolveShadowMode(params);
 

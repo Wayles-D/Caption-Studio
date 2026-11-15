@@ -49,8 +49,8 @@ function SoundOptions() {
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
-const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
-const HINT = 'text-[11px] text-[var(--text-muted)] m-0';
+const SECTION_TITLE = 'text-[13px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]';
+const HINT = 'text-[12px] text-[var(--text-muted)] m-0';
 const SELECT = `h-8 bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)] text-[var(--text-primary)]
   text-[12px] px-2 outline-none cursor-pointer transition-colors duration-200 hover:border-[var(--accent-color)] focus:border-[var(--accent-color)]`;
 // --bg-input is the same colour as the card these sit on, which renders the
@@ -169,7 +169,7 @@ function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVol
       </div>
 
       <div className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold text-[var(--text-muted)] w-12 shrink-0">Volume</span>
+        <span className="text-[11px] font-semibold text-[var(--text-muted)] w-12 shrink-0">Volume</span>
         <input
           type="range" min="0" max="200" step="1" className={SLIDER}
           value={Math.round(event.volume * 100)}
@@ -177,7 +177,7 @@ function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVol
           onChange={(e) => audio.updateSoundEvent(event.id, { volume: Number(e.target.value) / 100 }, { recordHistory: false })}
           onPointerUp={(e) => audio.updateSoundEvent(event.id, { volume: Number(e.target.value) / 100 })}
         />
-        <span className="text-[10px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
+        <span className="text-[11px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
           {Math.round(event.volume * 100)}%
         </span>
         {/* Applies THIS volume to the ticked effects, or to every other one
@@ -198,7 +198,7 @@ function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVol
           has edited still shows it — it is information about where the effect
           came from, not a claim about who owns it now. */}
       {event.source === 'ai' && event.eventType && (
-        <span className="text-[10px] text-[var(--text-muted)]">
+        <span className="text-[11px] text-[var(--text-muted)]">
           Auto · {SEMANTIC_EVENT_LABELS[event.eventType] || event.eventType}
           {moment?.reason ? ` · ${moment.reason.replace(/_/g, ' ')}` : ''}
           {Number.isFinite(moment?.intensity) ? ` · ${Math.round(moment.intensity * 100)}%` : ''}
@@ -239,7 +239,7 @@ function AudioTrackRow({ track, isSelected }) {
       </div>
 
       <div className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold text-[var(--text-muted)] w-12 shrink-0">Volume</span>
+        <span className="text-[11px] font-semibold text-[var(--text-muted)] w-12 shrink-0">Volume</span>
         <input
           type="range" min="0" max="200" step="1" className={SLIDER}
           value={Math.round(track.volume * 100)}
@@ -247,7 +247,7 @@ function AudioTrackRow({ track, isSelected }) {
           onChange={(e) => audio.updateAudioTrack(track.id, { volume: Number(e.target.value) / 100 }, { recordHistory: false })}
           onPointerUp={(e) => audio.updateAudioTrack(track.id, { volume: Number(e.target.value) / 100 })}
         />
-        <span className="text-[10px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
+        <span className="text-[11px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
           {Math.round(track.volume * 100)}%
         </span>
         <button
@@ -270,7 +270,7 @@ function AudioTrackRow({ track, isSelected }) {
           }
         ].map((field) => (
           <label key={field.label} className="flex flex-col gap-1" title={field.title}>
-            <span className="text-[9px] font-bold uppercase tracking-[0.04em] text-[var(--text-muted)]">{field.label}</span>
+            <span className="text-[11px] font-bold uppercase tracking-[0.04em] text-[var(--text-muted)]">{field.label}</span>
             <input
               type="number" step="0.01" min="0" className={`${SELECT} w-full`}
               value={Number(field.value ?? 0).toFixed(2)}
@@ -284,7 +284,7 @@ function AudioTrackRow({ track, isSelected }) {
         ))}
       </div>
 
-      <span className="text-[10px] text-[var(--text-muted)]">
+      <span className="text-[11px] text-[var(--text-muted)]">
         {formatSeconds(track.startTime)} → {duration != null ? formatSeconds(track.startTime + duration) : '—'}
       </span>
     </div>
@@ -391,7 +391,7 @@ export function AudioInspector({ onNotify }) {
             onChange={(e) => audio.setVideoVolume(Number(e.target.value) / 100, { recordHistory: false })}
             onPointerUp={(e) => audio.setVideoVolume(Number(e.target.value) / 100)}
           />
-          <span className="text-[10px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
+          <span className="text-[11px] font-semibold text-[var(--text-secondary)] w-9 text-right shrink-0">
             {videoMuted ? 'Muted' : `${Math.round(videoVolume * 100)}%`}
           </span>
         </div>
@@ -415,7 +415,7 @@ export function AudioInspector({ onNotify }) {
         </p>
 
         <label className="flex flex-col gap-1.5">
-          <span className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]">Sound profile</span>
+          <span className="text-[12px] font-medium text-[var(--text-secondary)]">Sound profile</span>
           <select className={SELECT} value={soundProfileId} onChange={(e) => audio.setSoundProfile(e.target.value)}>
             {listSoundProfiles().map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
@@ -428,11 +428,11 @@ export function AudioInspector({ onNotify }) {
             structure, and a list with half its items marked is worse than
             either extreme. */}
         <label className="flex flex-col gap-1.5">
-          <span className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]">
+          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
             How much emphasis
           </span>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-[var(--text-muted)] shrink-0">Rare</span>
+            <span className="text-[11px] text-[var(--text-muted)] shrink-0">Rare</span>
             <input
               id="sfx-sensitivity"
               type="range" min="0" max="100" step="5" className={SLIDER}
@@ -440,7 +440,7 @@ export function AudioInspector({ onNotify }) {
               onChange={(e) => audio.setSfxSensitivity(Number(e.target.value) / 100, { recordHistory: false })}
               onPointerUp={(e) => audio.setSfxSensitivity(Number(e.target.value) / 100)}
             />
-            <span className="text-[10px] text-[var(--text-muted)] shrink-0">More</span>
+            <span className="text-[11px] text-[var(--text-muted)] shrink-0">More</span>
           </div>
         </label>
 
@@ -461,7 +461,7 @@ export function AudioInspector({ onNotify }) {
         </div>
 
         {semanticEvents.length > 0 && (
-          <span className="text-[10px] text-[var(--text-muted)]">
+          <span className="text-[11px] text-[var(--text-muted)]">
             {semanticEvents.length} moment{semanticEvents.length === 1 ? '' : 's'} identified in the transcript.
           </span>
         )}
@@ -512,14 +512,14 @@ export function AudioInspector({ onNotify }) {
       <div className={CARD}>
         <div className="flex items-center justify-between">
           <span className={SECTION_TITLE}>Sound Effects</span>
-          <span className="text-[11px] font-semibold text-[var(--accent-color)]">{soundEvents.length}</span>
+          <span className="text-[12px] font-semibold text-[var(--accent-color)]">{soundEvents.length}</span>
         </div>
         {soundEvents.length === 0
           ? <p className={HINT}>None yet. Use the <strong>+</strong> on the timeline’s SFX strip to place one at the playhead.</p>
           : (
             <div className="flex flex-col gap-2">
               {pickedIds.size > 0 && (
-                <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] px-0.5">
+                <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] px-0.5">
                   <span>{pickedIds.size} selected — a volume change applies to these</span>
                   <button
                     type="button" id="sfx-pick-clear"
@@ -547,7 +547,7 @@ export function AudioInspector({ onNotify }) {
       <div className={CARD}>
         <div className="flex items-center justify-between">
           <span className={SECTION_TITLE}>Audio Tracks</span>
-          <span className="text-[11px] font-semibold text-[var(--accent-color)]">{audioTracks.length}</span>
+          <span className="text-[12px] font-semibold text-[var(--accent-color)]">{audioTracks.length}</span>
         </div>
         {audioTracks.length === 0 && (
           <p className={HINT}>Background music, ambience or a voiceover. Import a file to lay one under the video.</p>
@@ -580,7 +580,7 @@ export function AudioInspector({ onNotify }) {
           </p>
           <div className="flex flex-col gap-1.5">
             {visualSuggestions.map((suggestion, i) => (
-              <div key={`${suggestion.type}-${suggestion.timestamp}-${i}`} className="flex items-center gap-2 text-[11px]">
+              <div key={`${suggestion.type}-${suggestion.timestamp}-${i}`} className="flex items-center gap-2 text-[12px]">
                 <button
                   type="button"
                   className="text-[var(--accent-color)] font-semibold bg-transparent border-0 cursor-pointer p-0"

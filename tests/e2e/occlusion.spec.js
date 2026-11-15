@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { videoToComposition, compositionToScreen } from '../../shared/objects/coordinates.js';
 import { truth, visibleMask, W as FW, H as FH } from '../fixtures/objects/make-crossing.mjs';
 import { serveVideo } from './serveVideo.js';
+import { openTool } from './helpers/dock.js';
 
 // DYNAMIC OCCLUSION in the real editor (shared/objects/occlusion.js): track
 // and segment a person on segment.mp4 — real silhouettes, exact visible
@@ -41,7 +42,7 @@ async function seek(page, t) {
 
 async function trackAndSegment(page, name) {
   await seek(page, 0.5);
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await page.waitForFunction(() => window.__objects.getDetectionsAt(0.5)?.detections.length > 0, null, { timeout: 60000 });
   await page.evaluate((gt) => {
     const dets = window.__objects.getDetectionsAt(0.5).detections.filter((d) => d.class === 'person');
@@ -121,8 +122,18 @@ test('send a shape behind a tracked subject: he passes in front of it as he walk
   await page.waitForTimeout(250);
   expect(isBar(await previewPixelAt(page, onPerson(1.0))), 'to begin with the bar covers him').toBe(true);
 
+  // NO FLASH: record every layer canvas at the very moment it is shown. The
+  // subject's canvas used to size itself while still hidden (0×0), so its
+  // first frame went up as a 1×1 image stretched over the whole picture.
+  await page.evaluate(() => {
+    window.__shownCanvases = [];
+    new MutationObserver((records) => records.forEach(({ target: c }) => {
+      if (c.tagName === 'CANVAS' && c.classList.contains('active')) window.__shownCanvases.push({ id: c.id, w: c.width, h: c.height });
+    })).observe(document.querySelector('.phone-frame'), { subtree: true, attributes: true, attributeFilter: ['class'] });
+  });
+
   // The one control, in the layer card: put it behind him.
-  await page.getByRole('button', { name: 'Layers', exact: true }).click().catch(() => {});
+  await openTool(page, 'Layers').catch(() => {});
   const relation = await page.evaluate(([id, key]) => window.__occlusion.setLayerBehind(id, key), [barId, trackKey]);
   expect(relation.trackKey).toBe(trackKey);
   expect(relation.mode).toBe('behind');
@@ -138,6 +149,11 @@ test('send a shape behind a tracked subject: he passes in front of it as he walk
     expect(isBar(him), `${t}s: the bar is hidden where he is (${JSON.stringify(him)})`).toBe(false);
     expect(isBar(beside), `${t}s: and still there beside him`).toBe(true);
   }
+
+  const shown = await page.evaluate(() => window.__shownCanvases);
+  console.log('canvases as they were shown:', JSON.stringify(shown));
+  expect(shown.length, 'the subject layer was shown').toBeGreaterThan(0);
+  for (const c of shown) expect(c.w > 50 && c.h > 50, `${c.id || 'a layer canvas'} shown at full size, not ${c.w}×${c.h}`).toBe(true);
 
   // NO MASK, NO CLAIM: at 2s the other person crosses in front of him and the
   // segmentation hides that keyframe — the bar is simply visible again.
@@ -205,7 +221,7 @@ test('without a segmentation nothing is occluded, the panel says so, and the exp
   await open(page);
   // Track only — no segmentation.
   await seek(page, 0.5);
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await page.waitForFunction(() => window.__objects.getDetectionsAt(0.5)?.detections.length > 0, null, { timeout: 60000 });
   await page.evaluate((gt) => {
     const dets = window.__objects.getDetectionsAt(0.5).detections.filter((d) => d.class === 'person');
@@ -233,7 +249,7 @@ test('without a segmentation nothing is occluded, the panel says so, and the exp
 
   // Segment, and now it works and the masks ride with the export. (Adding
   // the shape selected it, which moved the sidebar off the Objects panel.)
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await expect(page.locator('#objects-segment-start')).toBeVisible();
   await page.locator('#objects-segment-start').click();
   await page.waitForFunction(() => !window.__segmentation.isSegmenting() && window.__segmentation.getSelectedSegmentation(), null, { timeout: 500000 });

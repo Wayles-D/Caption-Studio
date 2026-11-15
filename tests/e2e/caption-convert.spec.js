@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // Turning a transcript caption into cinematic text or a text overlay, from
 // the caption's own capsule on the Captions lane (textElements.js's
@@ -171,7 +172,7 @@ test('its length is set freely, and Back to caption restores the caption as it w
   // On desktop the Text & Cinematic panel opens itself for new cinematic
   // text; the toolbar button toggles, so press it only if it didn't.
   if (!(await page.locator('#textel-back-to-caption').isVisible())) {
-    await page.getByRole('button', { name: 'Overlay', exact: true }).click();
+    await openTool(page, 'Overlay');
   }
   await expect(page.locator('#textel-back-to-caption')).toBeVisible();
 

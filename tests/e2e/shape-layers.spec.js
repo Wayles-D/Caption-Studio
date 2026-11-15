@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { openTool } from './helpers/dock.js';
 
 // SHAPE LAYERS (shared/shapeLayer.js) and THE LAYER STACK
 // (shared/visualLayers.js), through the real UI, checked on the pixels the
@@ -184,7 +185,7 @@ test('one stack across types: a shape goes beneath the captions and back above t
   expect(c.rgb.every((v) => v > 230)).toBe(false);
 
   // In the Layers panel: bring the shape back up, one place at a time, past the picture.
-  await page.getByRole('button', { name: 'Layers', exact: true }).click();
+  await openTool(page, 'Layers');
   await page.locator(`[data-layer-up="${s.id}"]`).click();
   ids = await stackIds(page);
   expect(ids.indexOf(s.id)).toBeGreaterThan(ids.indexOf(img.id));

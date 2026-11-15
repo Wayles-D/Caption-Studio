@@ -22,6 +22,7 @@ import {
   moveCaptionEvent as moveEvent,
   trimCaptionEvent as trimEvent,
   splitCaptionEvent,
+  breakWordOutOfCaptionEvent,
   mergeCaptionEvents,
   MIN_CAPTION_EVENT_DURATION
 } from '../../../shared/captionEvent.js';
@@ -192,6 +193,32 @@ export function splitCaptionEventAtTime(id, time) {
   });
   if (position < 0 || position >= event.wordIndices.length - 1) return null;
   return splitCaptionEventAt(id, position);
+}
+
+/**
+ * Breaks one word out of whichever caption holds it, so it stands alone.
+ *
+ * A word in the MIDDLE needs two cuts. Doing them as two calls to
+ * splitCaptionEventAt would write state twice and so cost TWO presses of
+ * Ctrl+Z to undo — which reads as a half-undone edit. The replacement set is
+ * therefore built whole and written once: one history entry, one undo.
+ */
+export function breakWordOutOfCaption(wordIndex, options) {
+  const events = getCaptionEvents();
+  const index = events.findIndex((e) => (e.wordIndices || []).includes(wordIndex));
+  if (index === -1) return null;
+  const parts = breakWordOutOfCaptionEvent(events[index], wordIndex, appState.words || []);
+  if (!parts || parts.length < 2) return null;
+  const next = events.slice();
+  next.splice(index, 1, ...parts);
+  writeCaptionEvents(next, options);
+  return parts;
+}
+
+/** Whether this word could be broken out — false when it is already its own caption. */
+export function canBreakWordOutOfCaption(wordIndex) {
+  const event = getCaptionEvents().find((e) => (e.wordIndices || []).includes(wordIndex));
+  return !!event && (event.wordIndices || []).length > 1;
 }
 
 /** Joins a caption with the one after it. */

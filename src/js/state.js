@@ -13,6 +13,7 @@
  * useEditorStore/useTransformStore directly instead of this shim.
  */
 import { useEditorStore, STYLE_DEFAULTS, SESSION_DEFAULTS } from '../store/editorStore.js';
+import { phase } from './debug/hangWatch.js';
 import { useTransformStore, TRANSFORM_DEFAULTS } from '../store/transformStore.js';
 import { useAudioStore, AUDIO_DEFAULTS, AUDIO_DOCUMENT_KEYS } from '../store/audioStore.js';
 import { useTextElementStore, TEXT_ELEMENT_DEFAULTS, TEXT_ELEMENT_DOCUMENT_KEYS } from '../store/textElementStore.js';
@@ -226,22 +227,28 @@ function pushHistorySnapshot() {
  * Batch update state properties with automatic pub/sub notification and undo snapshot
  */
 export function updateState(updates, options = { recordHistory: true }) {
-  if (options.recordHistory) {
-    pushHistorySnapshot();
-  }
+  // Named for the watchdog (src/js/debug/hangWatch.js): every subscriber,
+  // including every React inspector panel, re-renders from here, so a hang
+  // caused by one of them is attributed to the key that triggered it rather
+  // than to "idle".
+  return phase('state:' + Object.keys(updates).join(','), () => {
+    if (options.recordHistory) {
+      pushHistorySnapshot();
+    }
 
-  let changed = false;
-  Object.entries(updates).forEach(([key, value]) => {
-    if (appState[key] !== value) {
-      storeFor(key).setState({ [key]: value });
-      changed = true;
-      notify(key, value);
+    let changed = false;
+    Object.entries(updates).forEach(([key, value]) => {
+      if (appState[key] !== value) {
+        storeFor(key).setState({ [key]: value });
+        changed = true;
+        notify(key, value);
+      }
+    });
+
+    if (changed) {
+      notify('stateChanged', appState);
     }
   });
-
-  if (changed) {
-    notify('stateChanged', appState);
-  }
 }
 
 /**

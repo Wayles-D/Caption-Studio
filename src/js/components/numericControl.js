@@ -21,7 +21,7 @@ function clamp(value, min, max) {
 // see SidebarInspector.jsx for the JSX that renders the initial badge with
 // these same base classes). Exported so this module and the JSX stay in
 // sync from one definition instead of two copies drifting apart.
-export const BADGE_BASE_CLASSES = 'text-[11px] font-bold text-[var(--accent-wash-text)] bg-[var(--accent-wash-bg)] px-1.5 py-px rounded cursor-text border border-transparent hover:border-[var(--accent-color)] focus-visible:border-[var(--accent-color)] focus-visible:outline-none';
+export const BADGE_BASE_CLASSES = 'text-[12px] font-bold text-[var(--accent-wash-text)] bg-[var(--accent-wash-bg)] px-1.5 py-px rounded cursor-text border border-transparent hover:border-[var(--accent-color)] focus-visible:border-[var(--accent-color)] focus-visible:outline-none';
 // Swapped in for the badge while it's being directly edited (see beginEdit
 // below) — same footprint/colors as the badge it replaces, just wider and
 // right-aligned so a typed value doesn't jump the layout.

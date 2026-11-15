@@ -16,7 +16,7 @@
  * is still the untouched appState + preview.js/canvasTransform.js pipeline
  * this state simply gates visibility for.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appState, updateState, subscribe, DEFAULT_DEMO_VIDEO_URL, getStyleParams } from './js/state.js';
 import { fetchJson, describeFetchError } from './js/utils/apiRequest.js';
 import { collectEditedWords } from './js/components/transcriptEditorState.js';
@@ -34,6 +34,9 @@ import { PreviewStage } from './components/PreviewStage.jsx';
 import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
 import { WordToolPanel } from './components/WordInspector.jsx';
+import { ToolDock } from './components/ToolDock.jsx';
+import { initFollowAlongLayers } from './js/components/tamSegmentation.js';
+import { useWorkspaceStore } from './store/workspaceStore.js';
 import { ImageInspector } from './components/ImageInspector.jsx';
 import { ShapeInspector } from './components/ShapeInspector.jsx';
 import { CanvasInspector } from './components/CanvasInspector.jsx';
@@ -52,10 +55,13 @@ import { prepareObjectEffectsForExport } from './js/components/objectEffects.js'
 import * as occlusionApi from './js/components/occlusion.js';
 import { prepareOcclusionsForExport } from './js/components/occlusion.js';
 import * as segmentationApi from './js/components/objectSegmentation.js';
+import * as tamSegmentationApi from './js/components/tamSegmentation.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
 import { TextInspector } from './components/TextInspector.jsx';
 import { setSelectionOptionsHost, selectionNeedsOptionsPanel, onSelectionChange } from './js/components/canvasTransform.js';
 import { initHoverPreview } from './js/hoverPreview.js';
+import { videoUploadProblem } from '../shared/uploadLimits.js';
+import { followProxy, swapVideoSourceKeepingPlace, cancelProxyWait } from './js/proxyPlayback.js';
 import { TimelinePanel, readStoredTimelineHeight } from './components/TimelinePanel.jsx';
 import { useClickOutside } from './hooks/useClickOutside.js';
 import { useMediaQuery } from './hooks/useMediaQuery.js';
@@ -76,73 +82,73 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 // RightInspector.RIGHT_INSPECTOR_SECTION_KEYS).
 const MOBILE_TOOLS = [
   {
-    key: 'typography', label: 'Text', group: 'caption',
+    key: 'typography', label: 'Text', group: 'caption', section: 'Captions', title: 'Caption text',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><polyline points="4 7 4 4 20 4 20 7" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" /></svg>
   },
   {
-    key: 'style-colors', label: 'Style', group: 'caption',
+    key: 'style-colors', label: 'Style', group: 'caption', section: 'Captions', title: 'Caption style',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><circle cx="12" cy="12" r="9" /><path d="M12 3a13 13 0 000 18 13 13 0 000-18" /></svg>
   },
   {
-    key: 'animation-mode', label: 'Animate', group: 'caption',
+    key: 'animation-mode', label: 'Animate', group: 'caption', section: 'Captions', title: 'Word animation',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" className="w-5 h-5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
   },
   {
-    key: 'caption-animation', label: 'Entrance', group: 'caption',
+    key: 'caption-animation', label: 'Entrance', group: 'caption', section: 'Captions', title: 'Caption entrance',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
   },
   {
-    key: 'position-spacing', label: 'Position', group: 'caption',
+    key: 'position-spacing', label: 'Position', group: 'caption', section: 'Captions', title: 'Position & spacing',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
   },
   {
-    key: 'ai-keywords', label: 'Keywords', group: 'caption',
+    key: 'ai-keywords', label: 'Keywords', group: 'caption', section: 'Words', title: 'Keywords',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" className="w-5 h-5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+  },
+  {
+    key: 'keyword-style', label: 'Highlight', group: 'caption', section: 'Words', title: 'Keyword highlight',
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /><circle cx="11" cy="11" r="2" /></svg>
   },
   {
     // Per-word styling — the one tool whose panel edits a single selected
     // word rather than the caption as a whole (see WordInspector.jsx).
-    key: 'word-style', label: 'Word', group: 'word',
+    key: 'word-style', label: 'Word', group: 'word', section: 'Words', title: 'Word',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M6 20h12" /><path d="M9 4h6" /><path d="M12 4v11" /><rect x="3" y="15" width="7" height="5" rx="1" /></svg>
-  },
-  {
-    key: 'keyword-style', label: 'Kw Style', group: 'caption',
-    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /><circle cx="11" cy="11" r="2" /></svg>
   },
   {
     // Independent text placed over the video — NOT captions/subtitles, and
     // not tied to the transcript. Its own tool because it is its own kind of
     // timeline object (see shared/textElement.js), even though it renders
     // through the very same engine captions do.
-    key: 'text-overlay', label: 'Overlay', group: 'textel',
+    key: 'text-overlay', label: 'Overlay', group: 'textel', section: 'Add', title: 'Text & Cinematic',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M8 10h8M8 14h5" /></svg>
   },
   {
     // Pictures over the video (shared/imageLayer.js) — their own tool,
     // because they are their own kind of timeline object.
-    key: 'image-layer', label: 'Image', group: 'image',
+    key: 'image-layer', label: 'Image', group: 'image', section: 'Add', title: 'Image',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-9 9" /></svg>
   },
   {
     // Generated shapes over the video (shared/shapeLayer.js).
-    key: 'shape-layer', label: 'Shape', group: 'shape',
+    key: 'shape-layer', label: 'Shape', group: 'shape', section: 'Add', title: 'Shape',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="3" width="10" height="10" rx="1" /><circle cx="16" cy="16" r="5" /></svg>
   },
   {
     // The one layer stack (shared/visualLayers.js): every visual object, top first.
-    key: 'layers', label: 'Layers', group: 'layers',
+    key: 'layers', label: 'Layers', group: 'layers', section: 'Scene', title: 'Layers',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="m12 3 9 5-9 5-9-5 9-5z" /><path d="m3 13 9 5 9-5" /></svg>
   },
   {
     // The composition (shared/composition.js): the canvas's shape and
     // background, and the video placed and styled inside it.
-    key: 'objects', label: 'Objects', group: 'objects',
+    key: 'objects', label: 'Objects', group: 'objects', section: 'Scene', title: 'Objects',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" /><circle cx="12" cy="10" r="2.5" /><path d="M8 17c.6-2.2 2.1-3.3 4-3.3s3.4 1.1 4 3.3" /></svg>
   },
   {
     // The composition (shared/composition.js): the canvas's shape and
     // background, and the video placed and styled inside it.
-    key: 'canvas', label: 'Canvas', group: 'canvas',
+    key: 'canvas', label: 'Canvas', group: 'canvas', section: 'Scene', title: 'Canvas',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="3" width="18" height="18" rx="2" /><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
   },
   {
@@ -150,18 +156,18 @@ const MOBILE_TOOLS = [
     // (see AudioInspector.jsx) — the two CONCEPTS stay separate everywhere it
     // matters: separate lanes on the timeline, separate lists here, separate
     // "+ Sound" / "+ Audio" actions.
-    key: 'audio', label: 'Audio', group: 'audio',
+    key: 'audio', label: 'Audio', group: 'audio', section: 'Add', title: 'Audio',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>
   },
   {
-    key: 'video-info', label: 'Video', group: 'video',
+    key: 'video-info', label: 'Video', group: 'video', section: 'Project', title: 'Project',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="6" width="12" height="12" rx="2" /><path d="m15 10 6-3v10l-6-3" /></svg>
   },
   {
     // On desktop (see isDesktop below) this specific tool's click routes to
     // the desktop side panel instead of the bottom sheet every other tool
     // uses — see DESKTOP_SIDE_PANEL_TOOL_KEYS.
-    key: 'transcript', label: 'Transcript', group: 'video',
+    key: 'transcript', label: 'Transcript', group: 'video', section: 'Project', title: 'Transcript',
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M4 6h16M4 12h10M4 18h7" /></svg>
   }
 ];
@@ -177,7 +183,28 @@ const MOBILE_TOOLS = [
 // is what a selected cinematic interlude or overlay is edited in, and as a
 // bottom sheet it covered the very timeline clip being edited.
 // 'image-layer' (the Image panel) too, for the same reason.
-const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas', 'objects']);
+// Since the redesign that is EVERY tool: on desktop there is one place
+// settings appear — the panel on the right — instead of some opening there
+// and others as a sheet over the timeline. Below the breakpoint every tool is
+// still a bottom sheet.
+const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(MOBILE_TOOLS.map((t) => t.key));
+
+// The dock's five sections — Captions, Words, Add, Scene, Project — each in
+// the order its first tool appears in MOBILE_TOOLS.
+const DOCK_SECTIONS = [...MOBILE_TOOLS.reduce((sections, tool) => {
+  if (!sections.has(tool.section)) sections.set(tool.section, { name: tool.section, tools: [] });
+  sections.get(tool.section).tools.push(tool);
+  return sections;
+}, new Map()).values()];
+
+const PANEL_TITLES = { advanced: 'Keyframes', ...Object.fromEntries(MOBILE_TOOLS.map((t) => [t.key, t.title])) };
+
+// Desktop panel views that stay mounted and are only shown/hidden (see the
+// panel JSX) — every other tool's body mounts while it is open.
+const PERMANENT_PANEL_KEYS = new Set(['video-info', 'transcript', 'advanced']);
+
+const PANEL_CLOSE_BTN = `h-8 w-8 grid place-items-center rounded-lg border-0 bg-transparent text-[var(--text-secondary)]
+  cursor-pointer transition-colors duration-[var(--dur-fast)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]`;
 
 // The desktop side panel's default/home content — always visible (an
 // anchored sidebar, like the app's original layout), showing Video
@@ -186,7 +213,10 @@ const DESKTOP_SIDE_PANEL_TOOL_KEYS = new Set(['video-info', 'transcript', 'text-
 // itself disappearing.
 const DESKTOP_SIDE_PANEL_DEFAULT = 'video-info';
 
-const MOBILE_TOOLBAR_HEIGHT = 80; // px — kept in sync with the `h-20` toolbar below
+// The dock's height is responsive (one row from tablet up, tools row + tab
+// bar on phones), so it lives in ONE place — the --dock-h custom property in
+// style.css — and everything that sits above the dock reads it from there.
+const DOCK_HEIGHT = 'var(--dock-h)';
 const DESKTOP_BREAKPOINT_QUERY = '(min-width: 1024px)'; // Tailwind's `lg`
 
 // Bottom-sheet resize: the sheet used to always render at `max-h-[65vh]`
@@ -311,6 +341,22 @@ export function App() {
   // video; see src/js/hoverPreview.js. Dropdowns do the same through
   // HoverSelect, which draws its own list because a native one cannot be hovered.
   useEffect(() => { initHoverPreview(); }, []);
+  // "Behind someone" effects live as long as their layers: stretched or moved
+  // on the timeline, the effect follows (see tamSegmentation.js).
+  useEffect(() => { initFollowAlongLayers(); }, []);
+
+  // While the video plays, the canvas frame's ring brightens (see
+  // .phone-frame.is-playing). Media events don't bubble, so this listens in
+  // the capture phase — one listener for whichever <video> is the preview.
+  useEffect(() => {
+    const sync = (e) => {
+      if (e.target?.id !== 'preview-video') return;
+      document.querySelector('.phone-frame')?.classList.toggle('is-playing', !e.target.paused && !e.target.ended);
+    };
+    const events = ['play', 'playing', 'pause', 'ended', 'emptied'];
+    events.forEach((t) => document.addEventListener(t, sync, true));
+    return () => events.forEach((t) => document.removeEventListener(t, sync, true));
+  }, []);
 
   const selectionOptionsHostRef = useRef(null);
   const [selectionOptionsActive, setSelectionOptionsActive] = useState(false);
@@ -327,6 +373,17 @@ export function App() {
     };
   }, [isDesktop]);
   const [desktopSidePanel, setDesktopSidePanel] = useState(DESKTOP_SIDE_PANEL_DEFAULT);
+  const dockSection = useWorkspaceStore((s) => s.dockSection);
+  const setDockSection = useWorkspaceStore((s) => s.setDockSection);
+  // When a tool's panel opens — from the dock, or because something was
+  // selected on the video/timeline — the dock shows that tool's section, so
+  // what is open is always in view. An effect because several of those opens
+  // come from non-React subscriptions (see the selection effects below).
+  const openToolKey = isDesktop ? desktopSidePanel : mobileActivePanel;
+  useEffect(() => {
+    const tool = MOBILE_TOOLS.find((t) => t.key === openToolKey);
+    if (tool && tool.key !== DESKTOP_SIDE_PANEL_DEFAULT) setDockSection(tool.section);
+  }, [openToolKey, setDockSection]);
 
   // The sound library (src/components/SoundLibraryPanel.jsx), opened from the
   // SFX lane's "+". Held here rather than inside timelinePanel.js because
@@ -497,7 +554,9 @@ export function App() {
   // either used to close the panel mid-edit. Read lazily: both mount later.
   const soundLibraryElRef = useMemo(() => ({ get current() { return document.getElementById('sound-library-panel'); } }), []);
   const previewElRef = useMemo(() => ({ get current() { return document.getElementById('state-video'); } }), []);
-  const sidePanelInsideRefs = useMemo(() => (['text-overlay', 'image-layer', 'shape-layer', 'layers', 'canvas', 'objects'].includes(desktopSidePanel)
+  // Every tool panel counts the video as inside too: picking a word or a
+  // caption on the video is how most of them are used.
+  const sidePanelInsideRefs = useMemo(() => (desktopSidePanel !== 'advanced' && desktopSidePanel !== 'transcript'
     ? [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, soundLibraryElRef, previewElRef]
     : [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef]), [desktopSidePanel, soundLibraryElRef, previewElRef]);
   useClickOutside(
@@ -562,6 +621,7 @@ export function App() {
       window.__objectEffects = objectEffectsApi;
       window.__occlusion = occlusionApi;
       window.__segmentation = segmentationApi;
+      window.__tamSegmentation = tamSegmentationApi;
       window.__captionEvents = captionEventsApi;
     }
   }, []);
@@ -580,11 +640,17 @@ export function App() {
       setVideoSrc(restored.videoUrl);
       setViewState('video');
       showToast(`Reopened your last project${restored.name ? ' — ' + restored.name : ''}.`);
+      // Reloaded before the editing proxy arrived: pick the wait back up, so
+      // the reload ends on a playable video instead of the original the
+      // browser may not decode (an iPhone's HEVC in Firefox).
+      if (restored.awaitingProxy && restored.baseName) followProxyFor(restored.baseName);
     });
     return () => { cancelled = true; };
   }, []);
   const [processingTitle, setProcessingTitle] = useState('Transcribing Audio...');
   const [videoSrc, setVideoSrc] = useState(undefined);
+  // The sentence over the video while the editing proxy is being prepared.
+  const [previewNotice, setPreviewNotice] = useState(null);
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
 
@@ -598,6 +664,32 @@ export function App() {
     setToastVisible(true);
     setTimeout(() => setToastVisible(false), 2500);
   }, []);
+
+  /**
+   * Waits for this upload's editing proxy (src/js/proxyPlayback.js) and moves
+   * the player onto it the moment it is saved — keeping the playhead where it
+   * was. Used straight after an upload and again after a reload that came
+   * before the proxy was ready. Editing never waits on it: captions, the
+   * transcript and every panel work the whole time.
+   */
+  const followProxyFor = useCallback((baseName) => {
+    setPreviewNotice('Preparing a smooth preview… you can keep editing meanwhile.');
+    followProxy(API_BASE_URL, baseName, {
+      onStatus: ({ status }) => {
+        if (status === 'downloading') setPreviewNotice('Almost ready — loading the preview…');
+        if (status === 'not-needed' || status === 'unavailable') setPreviewNotice(null);
+        if (status === 'failed') {
+          setPreviewNotice(null);
+          showToast("The smooth preview couldn't be prepared — the original keeps playing where your browser can.");
+        }
+      }
+    }).then((url) => {
+      if (!url) return;
+      swapVideoSourceKeepingPlace(document.getElementById('preview-video'), setVideoSrc, url);
+      setPreviewNotice(null);
+      showToast('Preview ready.');
+    });
+  }, [showToast]);
 
   // ...and selecting a SHAPE brings up the Shape panel, the same way.
   useEffect(() => {
@@ -643,10 +735,17 @@ export function App() {
   const [renderIssueCopied, setRenderIssueCopied] = useState(false);
 
   const handleFileSelected = useCallback(async (file) => {
-    if (!file.type.startsWith('video/')) {
-      showToast('Please select a valid video file.');
+    // Checked here, before a byte leaves the machine: the old flow uploaded
+    // the whole file and then relayed the server's 413 — with a big video,
+    // minutes of waiting to be told no (shared/uploadLimits.js).
+    const problem = videoUploadProblem(file);
+    if (problem) {
+      showToast(problem);
       return;
     }
+    // A new video: the previous one's proxy is no longer wanted.
+    cancelProxyWait();
+    setPreviewNotice(null);
 
     updateState({ uploadedFile: file, isProcessing: true }, { recordHistory: false });
     setViewState('processing');
@@ -687,9 +786,15 @@ export function App() {
       captionEventsApi.captureCaptionEventsFromPhrases(data.phrases || [], { force: true });
 
       // A new project: keep THIS video (for reopening later) in place of the last one's.
-      startProjectWithVideo(data.baseName, file);
+      // Awaited: it CLEARS the files store before saving this video, and the
+      // proxy saved shortly after must not land before that clear.
+      await startProjectWithVideo(data.baseName, file);
       setVideoSrc(URL.createObjectURL(file));
       setViewState('video');
+      // The browser-safe editing proxy, when this video needs one (an
+      // iPhone's HEVC, 4K): playing the original until it arrives, then
+      // switching to it in place.
+      if (data.proxy && data.proxy.status !== 'not-needed') followProxyFor(data.baseName);
 
       // The SAME analysis pass that tagged the keywords also reported what the
       // speech is structurally doing (lists, reveals, transitions) and where a
@@ -718,7 +823,7 @@ export function App() {
       updateState({ isProcessing: false }, { recordHistory: false });
       showToast(`Upload failed: ${describeFetchError(err)}`);
     }
-  }, [showToast]);
+  }, [showToast, followProxyFor]);
 
   const handleDemoVideo = useCallback(() => {
     updateState({
@@ -734,6 +839,8 @@ export function App() {
       ]
     }, { recordHistory: false });
 
+    cancelProxyWait();
+    setPreviewNotice(null);
     startProjectWithVideo('demo', null);
     setVideoSrc(DEFAULT_DEMO_VIDEO_URL);
     setViewState('video');
@@ -911,6 +1018,29 @@ export function App() {
       : `Download started — but without some caption effects (position/rotation/blend)${textElementsRendered ? '' : textLossNote()}; the advanced renderer couldn't run this time.${graphicsFailureReason ? ` Reason: ${graphicsFailureReason.stage} — ${graphicsFailureReason.message}` : ""}`);
   }, [renderCurrentEditsToServer, videoSrc, showToast]);
 
+  // One renderer for a tool's panel body, used by both the desktop panel and
+  // the phone sheet, so the two can never drift apart.
+  const renderToolBody = (tool) => {
+    switch (tool.group) {
+      case 'caption': return <SidebarInspector sectionFilter={tool.key} />;
+      case 'audio': return <div className="p-4"><AudioInspector onNotify={showToast} /></div>;
+      case 'textel': return <div className="p-4"><TextInspector onAddSoundAt={openSoundLibraryAt} /></div>;
+      case 'image': return <div className="p-4"><ImageInspector /></div>;
+      case 'shape': return <div className="p-4"><ShapeInspector /></div>;
+      case 'layers': return <div className="p-4"><LayersPanel /></div>;
+      case 'canvas': return <div className="p-4"><CanvasInspector /></div>;
+      case 'objects': return <div className="p-4"><ObjectsInspector /></div>;
+      case 'word': return <div className="p-4"><WordToolPanel /></div>;
+      default: return <div className="p-4"><RightInspector sectionFilter={tool.key} onRegenerateCaptions={() => triggerRegeneration()} /></div>;
+    }
+  };
+  const desktopTool = MOBILE_TOOLS.find((t) => t.key === desktopSidePanel) || null;
+  // Project info is the desktop panel's resting view, not something opened,
+  // so it never reads as an "open" tool.
+  const isToolOpen = (key) => (isDesktop
+    ? desktopSidePanel === key && key !== DESKTOP_SIDE_PANEL_DEFAULT
+    : mobileActivePanel === key);
+
   return (
     <>
       {/* Last in the tree by z-index, first in the file by importance: the
@@ -929,7 +1059,7 @@ export function App() {
         }}
       />
 
-      <header className="h-14 w-full bg-[var(--bg-toolbar)] backdrop-blur-lg border-b border-[var(--border-color)] flex items-center justify-between px-5 z-[100] relative">
+      <header className="h-14 w-full bg-[var(--bg-toolbar)] backdrop-blur-xl border-b border-[var(--border-color)] flex items-center justify-between gap-3 px-3 sm:px-4 z-[100] relative">
         <Toolbar onExportVideo={() => handleDownloadVideo()} />
       </header>
 
@@ -939,10 +1069,10 @@ export function App() {
           its own full-width row. Both former side columns are gone: the
           preview is the one permanent panel, full width, exactly like the
           canvas in other editing apps — everything else docks at the
-          bottom instead (see the sheet/toolbar below). `pb-20` reserves
-          room for the fixed bottom toolbar (h-20 below) so it never
-          overlaps the timeline. */}
-      <div className="flex flex-col h-[calc(100vh-56px)] w-screen overflow-hidden pb-20">
+          bottom instead (see the sheet/dock below). The bottom padding
+          reserves room for the fixed dock (--dock-h) so it never overlaps
+          the timeline. */}
+      <div className="flex flex-col h-[calc(100dvh-56px)] w-screen overflow-hidden pb-[var(--dock-h)]">
         {/* min-h-0 overrides the flex item's default min-height:auto, which
             otherwise refuses to shrink below the phone-frame's natural
             586px content size and silently overflows past the timeline
@@ -951,11 +1081,15 @@ export function App() {
             instead of the video). Paired with .phone-frame's own
             max-height:100% (see style.css), this lets the preview shrink
             to whatever vertical space is actually available. */}
-        <main className="flex-1 bg-[radial-gradient(circle_at_center,rgba(30,41,59,0.3)_0%,rgba(8,12,20,1)_100%)] flex flex-col items-center justify-center relative p-5 min-h-0 overflow-hidden">
+        {/* The stage: a quiet dotted ground the canvas floats on. On desktop it
+            leaves room for the panel on the right, so the video is centred
+            in what you can actually see rather than half under the panel. */}
+        <main className="bhynd-stage flex-1 flex flex-col items-center justify-center relative p-5 min-h-0 overflow-hidden lg:pr-[380px]">
           <PreviewStage
             viewState={viewState}
             processingTitle={processingTitle}
             videoSrc={videoSrc}
+            previewNotice={previewNotice}
             onSelectFileClick={() => videoFileInputRef.current?.click()}
             onUseDemo={() => handleDemoVideo()}
             onFilesDropped={(file) => handleFileSelected(file)}
@@ -1002,7 +1136,7 @@ export function App() {
         <div
           id="sound-library-panel"
           className="flex flex-col fixed top-14 left-0 z-40 w-[300px] bg-[var(--bg-sidebar)] border-r border-[var(--border-color)]"
-          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + timelineHeight }}
+          style={{ bottom: `calc(${DOCK_HEIGHT} + ${timelineHeight}px)` }}
         >
           <SoundLibraryPanel onClose={closeSoundLibrary} replaceTargetId={soundReplaceTargetId} attachToTextElementId={soundAttachTargetId} placeAt={soundPlaceAt} placeWord={soundPlaceWord} />
         </div>
@@ -1023,25 +1157,34 @@ export function App() {
           timelinePanel.js's Advanced fields have a stable container to
           relocate into and the transcript word-chips/video info don't get
           rebuilt every time the view switches. */}
+      {/* The panel on the right (desktop) — the ONE place settings appear.
+          Project info is its home view; a tool from the dock, or selecting
+          something on the video or timeline, takes it over until closed.
+          Spans only the preview's height, so it never covers the timeline's
+          own controls. Gated on `isDesktop` itself (not just CSS): the
+          phone sheet mounts the same inspectors with the same DOM ids, so
+          both must never be mounted at once. Project info, the transcript and
+          the keyframe fields stay permanently mounted (only `display`
+          changes) — timelinePanel.js relocates live inputs into the keyframe
+          body, and the word chips shouldn't be rebuilt on every switch. */}
       {isDesktop && (
-        <div
+        <aside
           ref={desktopSidePanelElRef}
           id="desktop-side-panel"
-          className="flex flex-col fixed top-14 right-0 z-40 w-[340px] bg-[var(--bg-sidebar)] border-l border-[var(--border-color)]"
-          style={{ bottom: MOBILE_TOOLBAR_HEIGHT + timelineHeight }}
+          aria-label={PANEL_TITLES[desktopSidePanel] || 'Project'}
+          className="flex flex-col fixed top-14 right-0 z-40 w-[360px] bg-[var(--bg-sidebar)] border-l border-[var(--border-color)]"
+          style={{ bottom: `calc(${DOCK_HEIGHT} + ${timelineHeight}px)` }}
         >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] shrink-0">
-            <span className="text-xs font-bold uppercase tracking-wide text-[var(--text-secondary)]">
-              {desktopSidePanel === 'advanced' ? 'Keyframe Advanced' : desktopSidePanel === 'transcript' ? 'Transcript Editor' : desktopSidePanel === 'text-overlay' ? 'Text & Cinematic' : desktopSidePanel === 'image-layer' ? 'Image' : desktopSidePanel === 'shape-layer' ? 'Shape' : desktopSidePanel === 'layers' ? 'Layers' : desktopSidePanel === 'canvas' ? 'Canvas' : desktopSidePanel === 'objects' ? 'Objects' : 'Video Inspector'}
+          <div className="flex items-center justify-between gap-2 h-12 pl-4 pr-2 border-b border-[var(--border-color)] shrink-0">
+            <span className="flex items-center gap-2 min-w-0 text-[13px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">
+              {desktopTool && (
+                <span className="text-[var(--accent-color)] shrink-0 [&_svg]:w-4 [&_svg]:h-4" aria-hidden="true">{desktopTool.icon}</span>
+              )}
+              <span className="truncate">{PANEL_TITLES[desktopSidePanel] || 'Project'}</span>
             </span>
             {desktopSidePanel !== DESKTOP_SIDE_PANEL_DEFAULT && (
-              <button
-                type="button"
-                onClick={closeDesktopSidePanel}
-                aria-label="Back to Video Inspector"
-                className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="w-4.5 h-4.5">
+              <button type="button" onClick={closeDesktopSidePanel} aria-label="Close panel" title="Close (back to Project)" className={PANEL_CLOSE_BTN}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="w-4 h-4">
                   <path d="M18 6 6 18M6 6l12 12" />
                 </svg>
               </button>
@@ -1058,42 +1201,16 @@ export function App() {
           >
             <div className="selection-options-title">Selection options</div>
           </div>
-          <div className="overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'video-info' ? 'block' : 'none' }}>
+          <div className="bhynd-panel-in overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'video-info' ? 'block' : 'none' }}>
             <RightInspector sectionFilter="video-info" onRegenerateCaptions={() => triggerRegeneration()} />
           </div>
-          <div className="overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'transcript' ? 'block' : 'none' }}>
-            <RightInspector sectionFilter="transcript" onRegenerateCaptions={() => triggerRegeneration()} />
+          <div className="bhynd-panel-in overflow-y-auto flex-1 p-4" style={{ display: desktopSidePanel === 'transcript' ? 'block' : 'none' }}>
+            <RightInspector sectionFilter="transcript" active={desktopSidePanel === 'transcript'} onRegenerateCaptions={() => triggerRegeneration()} />
           </div>
-          {/* Mounted only while shown: the bottom sheet mounts its own
-              TextInspector below the desktop breakpoint, with the same ids. */}
-          {desktopSidePanel === 'text-overlay' && (
-            <div className="overflow-y-auto flex-1 p-4">
-              <TextInspector onAddSoundAt={openSoundLibraryAt} />
-            </div>
-          )}
-          {desktopSidePanel === 'image-layer' && (
-            <div className="overflow-y-auto flex-1 p-4">
-              <ImageInspector />
-            </div>
-          )}
-          {desktopSidePanel === 'shape-layer' && (
-            <div className="overflow-y-auto flex-1 p-4">
-              <ShapeInspector />
-            </div>
-          )}
-          {desktopSidePanel === 'layers' && (
-            <div className="overflow-y-auto flex-1 p-4">
-              <LayersPanel />
-            </div>
-          )}
-          {desktopSidePanel === 'canvas' && (
-            <div className="overflow-y-auto flex-1 p-4">
-              <CanvasInspector />
-            </div>
-          )}
-          {desktopSidePanel === 'objects' && (
-            <div className="overflow-y-auto flex-1 p-4">
-              <ObjectsInspector />
+          {/* Every other tool: mounted only while shown. */}
+          {desktopTool && !PERMANENT_PANEL_KEYS.has(desktopSidePanel) && (
+            <div key={desktopSidePanel} className="bhynd-panel-in overflow-y-auto flex-1 min-h-0">
+              {renderToolBody(desktopTool)}
             </div>
           )}
           {/* Not conditionally rendered — see relocatePrecisionFields() in
@@ -1102,33 +1219,30 @@ export function App() {
               content. */}
           <div
             ref={advancedPanelBodyRef}
-            className="overflow-y-auto flex-1 p-4 flex flex-col gap-4"
+            className="bhynd-panel-in overflow-y-auto flex-1 p-4 flex flex-col gap-4"
             style={{ display: desktopSidePanel === 'advanced' ? 'flex' : 'none' }}
           />
-        </div>
+        </aside>
       )}
 
-      {/* Bottom sheet — slides up to sit directly above the fixed toolbar,
-          centered and width-capped on wide screens rather than stretching
-          edge to edge. Tapping the active tool's icon again (or the X here)
-          closes it. Height is user-resizable (see sheetHeight/the grip
-          handle below) rather than a fixed content-fit max-height, so a
-          content-heavy panel (e.g. Audio) defaults to leaving the preview
-          visible instead of burying it. */}
+      {/* Phone and tablet: a bottom sheet that rises above the dock, centred
+          and width-capped on wide screens. Tapping the active tool again (or
+          the X) closes it. Height is user-resizable (see sheetHeight/the
+          grip), so a long panel leaves the preview visible by default. */}
       {mobileActivePanel && (() => {
         const tool = MOBILE_TOOLS.find((t) => t.key === mobileActivePanel);
         if (!tool) return null;
         return (
           <div
             ref={mobileSheetRef}
-            className="flex flex-col fixed left-0 right-0 z-40 bg-[var(--bg-sidebar)]
-              border-t border-[var(--border-color)] rounded-t-2xl shadow-[0_-8px_24px_rgba(0,0,0,0.45)]
+            className="bhynd-sheet-in flex flex-col fixed left-0 right-0 z-40 bg-[var(--bg-raised)]
+              border-t border-[var(--border-color)] rounded-t-[20px] shadow-[var(--shadow-lg)]
               max-w-2xl mx-auto lg:border-x overflow-hidden"
-            style={{ bottom: MOBILE_TOOLBAR_HEIGHT, height: sheetHeight }}
+            style={{ bottom: DOCK_HEIGHT, height: sheetHeight }}
           >
             <div
               onPointerDown={handleSheetGripPointerDown}
-              className="flex items-center justify-center relative shrink-0 pt-2 pb-1.5 cursor-ns-resize touch-none"
+              className="flex items-center justify-center relative shrink-0 pt-2.5 pb-1 cursor-ns-resize touch-none"
               role="slider"
               aria-label="Resize panel"
               aria-orientation="vertical"
@@ -1136,122 +1250,60 @@ export function App() {
               aria-valuemin={SHEET_MIN_HEIGHT_PX}
               aria-valuemax={Math.round(window.innerHeight * (SHEET_MAX_HEIGHT_VH / 100))}
             >
-              <div className="w-9 h-1 rounded-full bg-[var(--border-color)]" />
+              <div className="w-10 h-1 rounded-full bg-[var(--border-color-hover)]" />
             </div>
-            <div className="flex items-center justify-between px-4 py-2.5 shrink-0">
-              <span className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-wide text-[var(--text-primary)]">
-                {tool.icon}
-                {tool.label}
+            <div className="flex items-center justify-between pl-4 pr-2 py-1.5 shrink-0">
+              <span className="flex items-center gap-2 text-[14px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">
+                <span className="text-[var(--accent-color)] [&_svg]:w-4 [&_svg]:h-4" aria-hidden="true">{tool.icon}</span>
+                {tool.title}
               </span>
-              <button
-                type="button"
-                onClick={closeMobilePanel}
-                aria-label="Close panel"
-                className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              >
+              <button type="button" onClick={closeMobilePanel} aria-label="Close panel" className={PANEL_CLOSE_BTN}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="w-4.5 h-4.5">
                   <path d="M18 6 6 18M6 6l12 12" />
                 </svg>
               </button>
             </div>
-            <div className="overflow-y-auto flex-1 min-h-0 border-t border-[var(--border-color)]">
-              {tool.group === 'caption' ? (
-                <SidebarInspector sectionFilter={tool.key} />
-              ) : tool.group === 'audio' ? (
-                <div className="p-4">
-                  <AudioInspector onNotify={showToast} />
-                </div>
-              ) : tool.group === 'textel' ? (
-                <div className="p-4">
-                  <TextInspector onAddSoundAt={openSoundLibraryAt} />
-                </div>
-              ) : tool.group === 'image' ? (
-                <div className="p-4">
-                  <ImageInspector />
-                </div>
-              ) : tool.group === 'shape' ? (
-                <div className="p-4">
-                  <ShapeInspector />
-                </div>
-              ) : tool.group === 'layers' ? (
-                <div className="p-4">
-                  <LayersPanel />
-                </div>
-              ) : tool.group === 'canvas' ? (
-                <div className="p-4">
-                  <CanvasInspector />
-                </div>
-              ) : tool.group === 'objects' ? (
-                <div className="p-4">
-                  <ObjectsInspector />
-                </div>
-              ) : tool.group === 'word' ? (
-                <div className="p-4">
-                  <WordToolPanel textPanelOpen={isDesktop && desktopSidePanel === 'text-overlay'} />
-                </div>
-              ) : (
-                <div className="p-4">
-                  <RightInspector sectionFilter={tool.key} onRegenerateCaptions={() => triggerRegeneration()} />
-                </div>
-              )}
+            <div className="overflow-y-auto flex-1 min-h-0 border-t border-[var(--border-subtle)]">
+              {renderToolBody(tool)}
             </div>
           </div>
         );
       })()}
 
-      {/* Fixed bottom toolbar — a slim, always-visible icon+label strip, one
-          per tool section, on every screen size. overflow-x-auto makes it
-          scrollable/swipeable instead of squeezing icons to fit; centered
-          via mx-auto once the strip is narrower than the viewport. */}
-      <nav
+      {/* The dock: five sections, and the chosen section's tools — see
+          ToolDock.jsx. On desktop every tool opens the right-hand panel;
+          below it, the bottom sheet. */}
+      <ToolDock
         ref={mobileToolbarRef}
-        className="flex fixed bottom-0 left-0 right-0 z-50 h-20 bg-[var(--bg-toolbar)]
-          border-t border-[var(--border-color)] overflow-x-auto justify-center items-center"
-      >
-        <div className="flex h-full items-center gap-2.5 min-w-max mx-auto px-4">
-          {MOBILE_TOOLS.map((tool) => {
-            // On desktop, a DESKTOP_SIDE_PANEL_TOOL_KEYS tool routes to the
-            // right side panel instead of the bottom sheet — see the panel
-            // JSX above and the isDesktop breakpoint-migration effect.
-            const usesDesktopPanel = isDesktop && DESKTOP_SIDE_PANEL_TOOL_KEYS.has(tool.key);
-            const isActive = usesDesktopPanel
-              ? desktopSidePanel === tool.key
-              : mobileActivePanel === tool.key;
-            return (
-              <button
-                key={tool.key}
-                type="button"
-                onClick={() => (usesDesktopPanel ? toggleDesktopSidePanel(tool.key) : toggleMobilePanel(tool.key))}
-                className={`flex flex-col items-center justify-center gap-1.5 min-w-[68px] px-3.5 py-2.5 rounded-xl
-                  bg-black border transition-colors duration-150 text-[10px] font-semibold cursor-pointer
-                  hover:border-[var(--accent-color)]
-                  [&_svg]:text-[var(--accent-color)]
-                  ${isActive
-                    ? 'border-[var(--accent-color)] text-[var(--accent-color)]'
-                    : 'border-[var(--accent-color)]/40 text-[var(--text-secondary)]'}`}
-              >
-                {tool.icon}
-                <span>{tool.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </nav>
+        sections={DOCK_SECTIONS}
+        activeSection={dockSection}
+        onSectionChange={setDockSection}
+        isToolOpen={isToolOpen}
+        onToolClick={(tool) => (isDesktop && DESKTOP_SIDE_PANEL_TOOL_KEYS.has(tool.key)
+          ? toggleDesktopSidePanel(tool.key)
+          : toggleMobilePanel(tool.key))}
+      />
 
       <div
         id="app-toast"
-        className={`fixed bottom-6 right-6 bg-[var(--bg-card)] border border-[var(--accent-color)] text-[var(--text-primary)]
-          px-[18px] py-2.5 rounded-[var(--radius-md)] text-[13px] font-semibold shadow-[var(--shadow-md)] pointer-events-none
-          transition-all duration-[250ms] [transition-timing-function:cubic-bezier(0.175,0.885,0.32,1.275)] z-[1000]
-          ${toastVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}
+        role="status"
+        aria-live="polite"
+        // Above the dock on desktop; at the top on phones, where the bottom
+        // is the sheet being worked in.
+        className={`fixed left-1/2 bottom-[calc(var(--dock-h)+16px)] max-lg:bottom-auto max-lg:top-[68px] -translate-x-1/2 flex items-center gap-2.5 max-w-[min(560px,calc(100vw-32px))]
+          bg-[var(--bg-raised)] border border-[var(--border-color)] text-[var(--text-primary)] pl-3.5 pr-4 py-2.5 rounded-xl
+          text-[13px] font-medium leading-snug shadow-[var(--shadow-lg)] pointer-events-none
+          transition-[opacity,translate] duration-[var(--dur-med)] ease-[var(--ease-out)] z-[1000]
+          ${toastVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}
       >
-        {toastMessage}
+        <span className="w-2 h-2 rounded-full bg-[var(--accent-color)] shadow-[0_0_10px_var(--accent-glow)] shrink-0" aria-hidden="true" />
+        <span>{toastMessage}</span>
       </div>
 
       {renderIssue && (
         <div
           id="render-issue-banner"
-          className="fixed bottom-6 right-6 max-w-[520px] bg-[var(--bg-card)] border border-[#ef4444]
+          className="fixed bottom-[calc(var(--dock-h)+16px)] right-6 max-w-[520px] bg-[var(--bg-card)] border border-[#ef4444]
             text-[var(--text-primary)] rounded-[var(--radius-md)] shadow-[var(--shadow-md)] z-[1001] p-4 flex flex-col gap-2"
         >
           <div className="flex items-start justify-between gap-3">

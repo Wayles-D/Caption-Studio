@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { videoToComposition, compositionToScreen } from '../../shared/objects/coordinates.js';
 import { truth } from '../fixtures/objects/make-crossing.mjs';
 import { serveVideo } from './serveVideo.js';
+import { openTool } from './helpers/dock.js';
 
 // OBJECT TRACKING in the real editor (src/js/components/objectTracking.js):
 // select a detected person, track them, scrub — on crossing.mp4, two real
@@ -50,7 +51,7 @@ async function seek(page, t) {
 /** Detect at 0.5s, select the person nearest `name`'s true position. */
 async function selectPerson(page, name) {
   await seek(page, 0.5);
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await page.waitForFunction(() => window.__objects.getDetectionsAt(0.5)?.detections.length > 0, null, { timeout: 60000 });
   await page.evaluate((gt) => {
     const dets = window.__objects.getDetectionsAt(0.5).detections.filter((d) => d.class === 'person');
@@ -209,7 +210,7 @@ test('hidden behind a wall for longer than it can coast, the person is found aga
   await page.getByText('Try Demo Video').click();
   await page.waitForFunction(() => document.getElementById('preview-video')?.videoWidth > 0);
   await seek(page, 0.5);
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await page.waitForFunction(() => window.__objects.getDetectionsAt(0.5)?.detections.length > 0, null, { timeout: 60000 });
   await page.evaluate((gt) => {
     const dets = window.__objects.getDetectionsAt(0.5).detections.filter((d) => d.class === 'person');

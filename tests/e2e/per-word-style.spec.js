@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // The dropdowns are custom lists (so hovering an item can preview it): open, then choose.
 async function pickOption(page, selector, value) {
@@ -70,7 +71,7 @@ async function selectWordZero(page) {
   await page.mouse.click(pt.x, pt.y);
   await page.mouse.click(pt.x, pt.y);
   expect((await page.evaluate(() => window.__debugGroupState())).selectedWordIndex).toBe(0);
-  await page.getByRole('button', { name: 'Word', exact: true }).click();
+  await openTool(page, 'Word');
   await page.waitForTimeout(300);
 }
 

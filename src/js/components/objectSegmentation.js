@@ -33,6 +33,11 @@ import { putAnalysisFile, getAnalysisFile, deleteAnalysisFile } from '../project
 let config = { ...DEFAULT_SEGMENTATION_CONFIG };
 
 /** Dev/test aid: a different keyframe step etc. (a different cache key — never mixes with the default). */
+/** The config every lookup recomputes its cache keys with — a record stored under any other is invisible. */
+export function getSegmentationConfig() {
+  return { ...config };
+}
+
 export function setSegmentationConfig(patch) {
   config = { ...DEFAULT_SEGMENTATION_CONFIG, ...(patch || {}) };
 }
@@ -260,12 +265,11 @@ export async function segmentSelectedObject({ force = false } = {}) {
       });
       if (getCacheKey() !== detectionCacheKey) return null; // the video changed meanwhile
       if (record.status === 'failed') throw new Error('nothing could be segmented');
-      const blob = await deflate(packMasks(record, masks));
-      await putAnalysisFile(record.key, blob);
-      const stored = normalizeSegmentation({ ...record, artifact: { key: record.key, bytes: blob.size }, seconds: +((performance.now() - t0) / 1000).toFixed(1), backend: appState.segmentationStatus?.backend || null });
-      readers.set(stored.key, createMaskReader(stored, masks.map(encodeRLE)));
-      updateState({ objectSegmentations: { ...(appState.objectSegmentations || {}), [stored.key]: stored } }, { recordHistory: false });
-      dropStaleSegmentations();
+      const stored = await storeSegmentationResult({
+        record, masks,
+        seconds: +((performance.now() - t0) / 1000).toFixed(1),
+        backend: appState.segmentationStatus?.backend || null
+      });
       if (record.keyframes.length) rememberSpeed((performance.now() - t0) / 1000 / (record.modelRuns || record.keyframes.length));
       setStatus({ state: 'done', message: null, secondsLeft: null });
       return stored;
@@ -278,6 +282,29 @@ export async function segmentSelectedObject({ force = false } = {}) {
   // The panel reads isSegmenting(): tell it once the job is really over.
   job.finally(() => { job = null; live = null; releaseWorker(); setStatus({}); });
   return job;
+}
+
+/**
+ * Stores a finished segmentation the one canonical way: artifact packed and
+ * deflated into the analysis store, record normalized into
+ * appState.objectSegmentations, reader primed so the first getMaskAt needs no
+ * file read. Both producers — the still-image keyframe job above and the
+ * video-propagation job (tamSegmentation.js) — come through here, so there is
+ * exactly one place a stored record can be wrong.
+ */
+export async function storeSegmentationResult({ record, masks, seconds = null, backend = null }) {
+  const blob = await deflate(packMasks(record, masks));
+  await putAnalysisFile(record.key, blob);
+  const stored = normalizeSegmentation({
+    ...record,
+    artifact: { key: record.key, bytes: blob.size },
+    ...(seconds != null ? { seconds } : {}),
+    ...(backend ? { backend } : {})
+  });
+  readers.set(stored.key, createMaskReader(stored, masks.map(encodeRLE)));
+  updateState({ objectSegmentations: { ...(appState.objectSegmentations || {}), [stored.key]: stored } }, { recordHistory: false });
+  dropStaleSegmentations();
+  return stored;
 }
 
 /** The segmentation in plain words, for the panel. */
@@ -344,6 +371,24 @@ export function segmentationPayloadFor(trackKeys) {
  * needs them does not go out without them (the files load from IndexedDB on
  * first need, which is usually a draw, and an export can be the first).
  */
+/**
+ * A track's stored follow, frame by frame — {keyframe, mask, sample} rows in
+ * time order — so a job can GROW it (tamSegmentation.js's extendFollow)
+ * rather than redo it. Null when there is nothing stored for it here.
+ */
+export async function loadMaskRows(trackKey) {
+  const track = appState.objectTracks?.[trackKey];
+  const record = track ? getSegmentationFor(trackKey, track) : null;
+  if (!record || record.status === 'failed') return null;
+  await awaitSegmentations([trackKey]);
+  const reader = readers.get(record.key);
+  if (!reader || typeof reader.then === 'function') return null;
+  const samples = track.samples || [];
+  const sampleAt = (time) => samples.reduce((best, s) => (!best || Math.abs(s.time - time) < Math.abs(best.time - time) ? s : best), null);
+  const rows = record.keyframes.map((keyframe, i) => ({ keyframe, mask: reader.mask(i), sample: sampleAt(keyframe.time) }));
+  return { record, track, rows };
+}
+
 export async function awaitSegmentations(trackKeys) {
   const pending = [];
   (trackKeys || []).forEach((trackKey) => {

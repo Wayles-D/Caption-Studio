@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { resolveCaptionTransformsAtTime } from '../../shared/captionTransform.js';
+import { openTool } from './helpers/dock.js';
 
 // "I can't find this" — the ◆ Change font here control, driven through the
 // REAL Word panel, as a user reaches it: click the caption, click the word,
@@ -41,7 +42,7 @@ async function selectWordZero(page) {
   await page.mouse.click(pt.x, pt.y);
   await page.mouse.click(pt.x, pt.y);
   expect((await page.evaluate(() => window.__debugGroupState())).selectedWordIndex).toBe(0);
-  await page.getByRole('button', { name: 'Word', exact: true }).click();
+  await openTool(page, 'Word');
   await page.waitForTimeout(300);
 }
 

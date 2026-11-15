@@ -41,6 +41,10 @@ export function PreviewStage({
   viewState,
   processingTitle,
   videoSrc,
+  // While the editing proxy is on its way (src/js/proxyPlayback.js): a plain
+  // sentence over the video, so a player that cannot show the original yet
+  // reads as "still preparing", never as "broken".
+  previewNotice = null,
   onSelectFileClick,
   onUseDemo,
   onFilesDropped
@@ -73,7 +77,7 @@ export function PreviewStage({
                 tracked but intentionally left with no styling, matching the
                 pre-existing (if odd) behavior exactly. */}
             <div className="flex flex-col items-center text-center p-6 gap-3">
-              <div className="w-14 h-14 rounded-full bg-[rgba(217,119,87,0.1)] text-[var(--accent-color)] flex items-center justify-center">
+              <div className="w-14 h-14 rounded-full bg-[var(--accent-wash-bg)] text-[var(--accent-color)] flex items-center justify-center">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 16V8M12 8L9 11M12 8L15 11" /><path d="M3 15v3c0 1.1.9 2 2 2h14a2 2 0 002-2v-3" /></svg>
               </div>
               <h3 className="text-lg font-bold">Upload Video</h3>
@@ -117,6 +121,12 @@ export function PreviewStage({
         {/* Video Preview View */}
         <div className={`view-state${viewState === 'video' ? ' active' : ''}`} id="state-video">
           <video id="preview-video" src={videoSrc} playsInline preload="metadata" loop />
+          {previewNotice && (
+            <div className="preview-notice" id="preview-notice" role="status" aria-live="polite">
+              <span className="preview-notice-spinner" aria-hidden="true" />
+              <span>{previewNotice}</span>
+            </div>
+          )}
           {/* Object-aware effects (shared/objects/effects.js): on the video,
               beneath every layer — where the export composites them. */}
           <canvas className="object-effects-canvas" id="object-effects-canvas" />

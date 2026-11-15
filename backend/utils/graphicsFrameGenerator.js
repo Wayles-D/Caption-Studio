@@ -22,12 +22,14 @@
 import fs from 'fs';
 import path from 'path';
 import { createCanvas } from '@napi-rs/canvas';
+import { writeScratchPng } from './pngFast.js';
+import { acquireFrameCanvas, releaseFrameCanvases } from './frameCanvas.js';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
 import { motionsFromParams, motionsFromWordOverride, motionActiveSpans } from '../../shared/motion/motion.js';
-import { getKeyframeTimeRange } from '../../shared/keyframes.js';
+import { getInterpolatedKeyframeTimeRange, getSteppedKeyframeTimes } from '../../shared/keyframes.js';
 import {
   normalizeTextElementList,
   getActiveTextElements,
@@ -153,6 +155,34 @@ function animationSampleTimes(from, to) {
  * @param {number} animEnd
  * @returns {{start:number,end:number}[]}
  */
+/**
+ * Cuts the slice containing `time` in two, so a frame boundary falls exactly
+ * there. That is all a STEPPED property needs: the value holds right up to the
+ * instant it changes, so one boundary expresses it and every frame either side
+ * is identical to its neighbours.
+ */
+function splitSlicesAt(slices, time) {
+  if (!Number.isFinite(time)) return slices;
+  const result = [];
+  for (const slice of slices) {
+    if (time - slice.start >= 0.001 && slice.end - time >= 0.001) {
+      result.push({ start: slice.start, end: time }, { start: time, end: slice.end });
+    } else {
+      result.push(slice);
+    }
+  }
+  return result;
+}
+
+/** Dense sampling for what moves, one cut for what merely changes. */
+function subdivideForKeyframes(slices, override) {
+  let result = slices;
+  const range = getInterpolatedKeyframeTimeRange(override);
+  if (range) result = subdivideSlicesForAnimation(result, range.min, range.max);
+  getSteppedKeyframeTimes(override).forEach((t) => { result = splitSlicesAt(result, t); });
+  return result;
+}
+
 function subdivideSlicesForAnimation(slices, animStart, animEnd) {
   if (!(animEnd > animStart)) return slices;
 
@@ -214,8 +244,7 @@ function subdivideForWordAnimations(slices, words, params, container) {
     // word's keyframed position/scale/rotation/opacity would render as a
     // single static frame in the exported video despite animating correctly
     // in live preview.
-    const kfRange = getKeyframeTimeRange(override);
-    if (kfRange) result = subdivideSlicesForAnimation(result, kfRange.min, kfRange.max);
+    result = subdivideForKeyframes(result, override);
   });
   return result;
 }
@@ -269,13 +298,10 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
   // above, over the union range of every keyframed property (see
   // shared/keyframes.js's getKeyframeTimeRange).
   const phraseOverride = params.captionTransforms?.[getPhraseTransformKey(transformKeyPhrase)];
-  const phraseKfRange = getKeyframeTimeRange(phraseOverride);
-  if (phraseKfRange) {
-    slices = subdivideSlicesForAnimation(slices, phraseKfRange.min, phraseKfRange.max);
-  }
+  slices = subdivideForKeyframes(slices, phraseOverride);
   slices = subdivideForWordAnimations(slices, phrase.words, staticPhraseParams, phrase);
 
-  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
   return slices.map((slice, idx) => {
@@ -304,7 +330,7 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
     // phrase's start time is unique across that video, so this can't collide
     // the way a phrase-local index would.
     const file = path.join(outDir, `slice-${Math.round(slice.start * 1000)}.png`);
-    fs.writeFileSync(file, canvas.toBuffer('image/png'));
+    writeScratchPng(canvas, file);
 
     return { start: slice.start, end: slice.end, file };
   });
@@ -339,12 +365,12 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
 
   const layerCount = staticPhraseParams.rollingStackLayerCount || 2;
   const windowSlices = buildRollingStackWindowSlices(phrase, layerCount);
-  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
 
   const motions = motionsFromParams(staticPhraseParams);
   const phraseOverride = params.captionTransforms?.[getPhraseTransformKey(phrase)];
-  const phraseKfRange = getKeyframeTimeRange(phraseOverride);
+  const phraseKfRange = getInterpolatedKeyframeTimeRange(phraseOverride);
 
   // Each window slice's own active (last) chunk is what entered the frame at
   // that slice's start — see shared/captionGraphics.js's
@@ -394,7 +420,7 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
     });
 
     const file = path.join(outDir, `slice-${Math.round(slice.start * 1000)}.png`);
-    fs.writeFileSync(file, canvas.toBuffer('image/png'));
+    writeScratchPng(canvas, file);
 
     return { start: slice.start, end: slice.end, file };
   });
@@ -439,9 +465,9 @@ export function generateWordModePhraseFrames(phrase, params, canvasWidth, canvas
  */
 function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
   fs.mkdirSync(outDir, { recursive: true });
-  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
   const file = path.join(outDir, 'blank.png');
-  fs.writeFileSync(file, canvas.toBuffer('image/png'));
+  writeScratchPng(canvas, file);
   return file;
 }
 
@@ -525,7 +551,7 @@ function buildSubjectMatteSegments(entry, params, readers, tracks, canvasWidth, 
   const cuts = new Set([0, videoDuration, from, to]);
   animationSampleTimes(from, to).forEach((t) => { if (t > 0 && t < videoDuration) cuts.add(t); });
   const boundaries = Array.from(cuts).filter((t) => t >= 0 && t <= videoDuration).sort((a, b) => a - b);
-  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
   const offscreen = (w, h) => createCanvas(w, h);
   const unit = effectUnit(canvasWidth, canvasHeight);
@@ -542,11 +568,11 @@ function buildSubjectMatteSegments(entry, params, readers, tracks, canvasWidth, 
     const a = videoToComposition({ x: mask.frame.x, y: mask.frame.y }, place);
     const b = videoToComposition({ x: mask.frame.x + mask.frame.width, y: mask.frame.y }, place);
     const frameCanvasWidth = Math.hypot((b.x - a.x) * canvasWidth, (b.y - a.y) * canvasHeight);
-    const alpha = maskWithEdges(mask, { expand: relation.grow ?? 4, feather: relation.feather || 0 }, unit, frameCanvasWidth);
+    const alpha = maskWithEdges(mask, { expand: relation.grow ?? 0, feather: relation.feather || 0 }, unit, frameCanvasWidth);
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     drawMaskAlpha(ctx, mask, alpha, place, canvasWidth, canvasHeight, offscreen);
     const file = path.join(outDir, `occ-${entry.relationId}-${Math.round(start * 1000)}.png`);
-    fs.writeFileSync(file, canvas.toBuffer('image/png'));
+    writeScratchPng(canvas, file);
     segments.push({ start, end, file });
   }
   return segments.some((x) => x.file !== blankFile) ? segments : [];
@@ -599,8 +625,14 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
       if (w.end > element.start && w.end < element.end) addCut(w.end);
     });
 
-    const kfRange = getKeyframeTimeRange({ keyframes: element.keyframes });
+    const kfRange = getInterpolatedKeyframeTimeRange({ keyframes: element.keyframes });
     if (kfRange) addSamples(Math.max(kfRange.min, element.start), Math.min(kfRange.max, element.end));
+    // A STEPPED property (a font, a weight, a casing) holds and then changes
+    // outright, so it needs the one boundary where it changes and nothing in
+    // between — sampling that span densely would render dozens of identical
+    // PNGs. Without the cut, though, the change would never appear at all.
+    getSteppedKeyframeTimes({ keyframes: element.keyframes })
+      .forEach((t) => { if (t > element.start && t < element.end) addCut(t); });
 
     // The element's params as its draw resolves them (resolveTextElementParams
     // — the style bag over the caption's params, its own words' map), so the
@@ -615,8 +647,10 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
       const override = resolveWordOverride(elementParams, w.wordIndex);
       if (!override) return;
       wordAnimationSpans(w, phrase, override).forEach((win) => addSamples(Math.max(win.start, element.start), Math.min(win.end, element.end)));
-      const wordKf = getKeyframeTimeRange(override);
+      const wordKf = getInterpolatedKeyframeTimeRange(override);
       if (wordKf) addSamples(Math.max(wordKf.min, element.start), Math.min(wordKf.max, element.end));
+      getSteppedKeyframeTimes(override)
+        .forEach((t) => { if (t > element.start && t < element.end) addCut(t); });
     });
   });
 
@@ -629,7 +663,7 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
   });
 
   const boundaries = Array.from(cuts).sort((a, b) => a - b);
-  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
   const segments = [];
 
@@ -706,7 +740,7 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
     });
 
     const file = path.join(outDir, `${filePrefix}-${Math.round(start * 1000)}.png`);
-    fs.writeFileSync(file, canvas.toBuffer('image/png'));
+    writeScratchPng(canvas, file);
     segments.push({ start, end, file });
   }
 
@@ -800,7 +834,7 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
   });
   const boundaries = Array.from(cuts).sort((a, b) => a - b);
 
-  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext('2d');
   const sigmas = blurSigmas(usable, canvasWidth, canvasHeight);
   const overlay = [];
@@ -834,7 +868,7 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
       drawObjectEffects(ctx, drawn, { canvasWidth, canvasHeight, createOffscreenCanvas: offscreen });
       const file = path.join(outDir, `ofx-${Math.round(start * 1000)}.png`);
-      fs.writeFileSync(file, canvas.toBuffer('image/png'));
+      writeScratchPng(canvas, file);
       overlay.push({ start, end, file });
     } else {
       overlay.push({ start, end, file: blankFile });
@@ -859,7 +893,7 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
       });
       const bgFile = path.join(outDir, `ofxbg-${Math.round(start * 1000)}.png`);
       if (drewBackground) {
-        fs.writeFileSync(bgFile, canvas.toBuffer('image/png'));
+        writeScratchPng(canvas, bgFile);
         background.push({ start, end, file: bgFile });
       } else {
         background.push({ start, end, file: blankFile });
@@ -867,7 +901,7 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
       subjects.forEach(({ mask, alpha }) => drawMaskAlpha(ctx, mask, alpha, place, canvasWidth, canvasHeight, offscreen));
       const mFile = path.join(outDir, `ofxsubj-${Math.round(start * 1000)}.png`);
-      fs.writeFileSync(mFile, canvas.toBuffer('image/png'));
+      writeScratchPng(canvas, mFile);
       subjectMask.push({ start, end, file: mFile });
     } else if (readers.size) {
       // No mask here: the video is left exactly as it is (an opaque
@@ -881,7 +915,7 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
       drawObjectEffectMasks(ctx, resolved, { canvasWidth, canvasHeight, sigma: m.sigma, createOffscreenCanvas: offscreen });
       const file = path.join(outDir, `ofxmask${mi}-${Math.round(start * 1000)}.png`);
-      fs.writeFileSync(file, canvas.toBuffer('image/png'));
+      writeScratchPng(canvas, file);
       m.segments.push({ start, end, file });
     });
   }
@@ -907,14 +941,20 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
 // object-aware effects place their tracked regions. Omitted: the video fills
 // the canvas.
 export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, { frameRate = null, imageSources = null, videoBox = null } = {}) {
-  // Everything below is synchronous, so the sampling grid set here is the
-  // one every animation in this build is sampled on (see animationSampleTimes).
-  const previousFps = sampleFps;
-  sampleFps = parseFrameRate(frameRate);
+  // The pooled frame canvases (frameCanvas.js) live exactly as long as one
+  // build: an idle server holds none, and a failed build cannot leak them.
   try {
-    return buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources, videoBox);
+    // Everything below is synchronous, so the sampling grid set here is the
+    // one every animation in this build is sampled on (see animationSampleTimes).
+    const previousFps = sampleFps;
+    sampleFps = parseFrameRate(frameRate);
+    try {
+      return buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources, videoBox);
+    } finally {
+      sampleFps = previousFps;
+    }
   } finally {
-    sampleFps = previousFps;
+    releaseFrameCanvases();
   }
 }
 

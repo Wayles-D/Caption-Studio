@@ -16,6 +16,7 @@
  */
 import { appState, updateState, getStyleParams } from '../state.js';
 import { resolveCaptionPhrases, normalizeCaptionEvent } from '../../../shared/captionEvent.js';
+import { breakWordOutOfCaption } from './captionEvents.js';
 import { createSoundEvent } from '../../../shared/audioTimeline.js';
 import { getPhraseTransformKey, getWordTransformKey } from '../../../shared/captionTransform.js';
 import {
@@ -176,7 +177,7 @@ export function addInterlude({ start = getPlayheadTime(), text = 'THIS CHANGED\n
  * along with it; the element keeps the caption as its source, so
  * restoreCaptionFromTextElement can turn it back.
  */
-export function convertCaptionToTextElement(captionEventId, kind = 'interlude') {
+export function convertCaptionToTextElement(captionEventId, kind = 'interlude', { recordHistory = true } = {}) {
   const events = appState.captionEvents || [];
   const event = events.find((e) => e.id === captionEventId);
   if (!event) return null;
@@ -210,9 +211,37 @@ export function convertCaptionToTextElement(captionEventId, kind = 'interlude') 
     captionTransforms: nextTransforms,
     textElements: [...getTextElements(), element].sort((a, b) => a.start - b.start),
     selectedCaptionEventId: null
-  }, { recordHistory: true });
+  }, { recordHistory });
   selectTextElement(element.id);
   return element;
+}
+
+/**
+ * ONE WORD OF A CAPTION, READY TO GO BEHIND SOMEONE — "This is behind": take
+ * "behind" out on its own, as a text overlay that keeps the caption's look,
+ * its timing and its words, free to drag anywhere (above a head, behind a
+ * shoulder) and with the "Behind a subject" control on its panel.
+ *
+ * It used to take a manual text typed in by hand, because a caption word
+ * belongs to the captions layer, which a subject cannot be put in front of.
+ * This does it in one action: break the word out of its caption (if it is not
+ * alone already), then turn that one-word caption into an overlay. ONE undo
+ * puts everything back — the overlay is written without a history step of its
+ * own, so it folds into the break's (state.js snapshots before a recorded
+ * write only).
+ */
+export function wordToOverlay(wordIndex) {
+  const holding = () => (appState.captionEvents || []).find((e) => (e.wordIndices || []).includes(wordIndex));
+  const event = holding();
+  if (!event) return null;
+  let recorded = false;
+  if (event.wordIndices.length > 1) {
+    if (!breakWordOutOfCaption(wordIndex)) return null;
+    recorded = true;
+  }
+  const alone = holding();
+  if (!alone) return null;
+  return convertCaptionToTextElement(alone.id, 'overlay', { recordHistory: !recorded });
 }
 
 /**

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // The dropdowns are custom lists (so hovering an item can preview it): open, then choose.
 async function pickOption(page, selector, value) {
@@ -56,7 +57,7 @@ async function setup(page) {
   // and the tool button toggles, so clicking it unconditionally would shut
   // the panel again and every control below would be absent.
   if (!(await page.locator('#textel-font').count())) {
-    await page.getByRole('button', { name: 'Overlay', exact: true }).click();
+    await openTool(page, 'Overlay');
   }
   await page.waitForTimeout(500);
   await page.locator('#textel-font').waitFor();

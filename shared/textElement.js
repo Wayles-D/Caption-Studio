@@ -359,6 +359,20 @@ export function isTextElementRenderable(el) {
  * In the export, manual captions are their own layer beneath this one (see
  * graphicsFrameGenerator.js), so the same order holds there structurally.
  */
+/**
+ * Whether the VIDEO is hidden behind an interlude at this instant.
+ *
+ * An interlude replaces the picture (see orderForCompositing): for as long as
+ * one is on screen, the video and the captions over it are not visible. So
+ * anything that describes the video — a tracked object's box, its confidence
+ * badge, its segmentation silhouette — is describing something nobody can
+ * see, and drawing it over the interlude shows a trace of a frame that has
+ * been covered.
+ */
+export function isVideoCoveredAt(elements, time) {
+  return getActiveTextElements(elements, time, 'interlude').length > 0;
+}
+
 export function orderForCompositing(active) {
   const list = Array.isArray(active) ? active : [];
   const interludes = list.filter((el) => el.kind === 'interlude');

@@ -5,6 +5,7 @@ import { videoToComposition, compositionToScreen } from '../../shared/objects/co
 import { rasterizeMask, coverageIoU } from '../../shared/objects/segmentation.js';
 import { truth, visibleMask, W, H } from '../fixtures/objects/make-crossing.mjs';
 import { serveVideo } from './serveVideo.js';
+import { openTool } from './helpers/dock.js';
 
 // OBJECT SEGMENTATION in the real editor (src/js/components/objectSegmentation.js,
 // shared/objects/segmentation.js): track a person on segment.mp4 — two real
@@ -54,7 +55,7 @@ async function seek(page, t) {
 
 async function trackPerson(page, name) {
   await seek(page, 0.5);
-  if (!(await page.locator('#objects-editor').count())) await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  if (!(await page.locator('#objects-editor').count())) await openTool(page, 'Objects');
   await page.waitForFunction(() => window.__objects.getDetectionsAt(0.5)?.detections.length > 0, null, { timeout: 60000 });
   await page.evaluate((gt) => {
     const dets = window.__objects.getDetectionsAt(0.5).detections.filter((d) => d.class === 'person');
@@ -206,7 +207,7 @@ test('reload: the mask is back from the saved file, not recomputed; asking again
   await page.reload();
   await page.waitForFunction(() => document.getElementById('preview-video')?.videoWidth > 0);
   await page.evaluate(() => window.__segmentation.setSegmentationConfig({ step: 1.0 }));
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await seek(page, 1.5);
   await page.waitForFunction(() => window.__segmentation.getSelectedMaskAt(1.5), null, { timeout: 20000 });
   expect(await page.evaluate(() => window.__segmentation.isSegmenting())).toBe(false);

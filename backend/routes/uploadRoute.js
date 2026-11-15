@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import path from 'path';
 import { uploadVideo, uploadAudio, uploadImage } from '../utils/multerConfig.js';
-import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent, sessionStatus, restoreVideo, restoreAudio, uploadImageAsset, restoreImage } from '../controllers/uploadController.js';
+import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent, sessionStatus, restoreVideo, restoreAudio, uploadImageAsset, restoreImage, proxyStatus } from '../controllers/uploadController.js';
 
 const router = Router();
 
 /**
  * @route   POST /api/upload
- * @desc    Upload video file (MP4, MOV, WebM; max 500MB) and extract its audio to WAV
+ * @desc    Upload video file (MP4, MOV, WebM; max 1.5GB — shared/uploadLimits.js) and extract its audio to WAV
  * @access  Public
  */
 router.post(
@@ -38,6 +38,9 @@ router.post(
  * @access  Public
  */
 router.post('/cleanup', workspaceCleanup);
+
+// The editing proxy's status (utils/proxyVideo.js) — polled by the editor after an upload.
+router.get('/proxy/:baseName', proxyStatus);
 
 /**
  * @route   POST /api/upload/regenerate

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // BHYND V1.1.0 — entrance animations and cinematic-text parity, driven
 // through the real UI and checked on the pixels the preview actually draws.
@@ -420,7 +421,7 @@ test('the Word panel styles one word of a card, and only that word', async ({ pa
   const before = [await pixels(words[0]), await pixels(words[1])];
 
   await selectCardWord(page, 0);
-  await page.getByRole('button', { name: 'Word', exact: true }).click();
+  await openTool(page, 'Word');
   await page.locator('#word-italic').click();
   const el = await page.evaluate((elId) => window.__appState.textElements.find((e) => e.id === elId), id);
   expect(el.wordTransforms?.w0?.style?.italic).toBe(true);

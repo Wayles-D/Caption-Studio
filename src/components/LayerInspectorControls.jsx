@@ -8,9 +8,9 @@ import { useRef, useState } from 'react';
 import { ColorPickerField } from './ColorPickerField.jsx';
 
 export const CARD = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 flex flex-col gap-3';
-export const SECTION_TITLE = 'text-xs font-bold uppercase tracking-[0.05em] text-[var(--text-secondary)]';
-export const HINT = 'text-[11px] text-[var(--text-muted)] m-0';
-export const GROUP_LABEL = 'text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-[0.04em]';
+export const SECTION_TITLE = 'text-[13px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]';
+export const HINT = 'text-[12px] text-[var(--text-muted)] m-0';
+export const GROUP_LABEL = 'text-[12px] font-medium text-[var(--text-secondary)]';
 export const INPUT = `h-9 w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-[var(--radius-sm)]
   text-[var(--text-primary)] text-[13px] px-2.5 outline-none transition-colors duration-200
   hover:border-[var(--accent-color)] focus:border-[var(--accent-color)]`;
@@ -19,7 +19,7 @@ export const SELECT = `h-8 w-full bg-[var(--bg-input)] border border-[var(--bord
 export const SLIDER = `appearance-none w-full h-1.5 rounded-[3px] bg-[var(--border-color-hover)] outline-none cursor-pointer
   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full
   [&::-webkit-slider-thumb]:bg-[var(--accent-color)] [&::-webkit-slider-thumb]:cursor-pointer`;
-export const VALUE_BADGE = 'text-[10px] font-semibold text-[var(--text-secondary)] w-12 text-right shrink-0';
+export const VALUE_BADGE = 'text-[11px] font-semibold text-[var(--text-secondary)] w-12 text-right shrink-0';
 export const PRIMARY_BTN = `h-9 bg-[var(--accent-gradient)] border-0 text-[var(--text-on-accent)] font-bold text-xs
   rounded-[var(--radius-sm)] cursor-pointer transition-colors duration-150 hover:bg-[var(--accent-hover)]`;
 export const SECONDARY_BTN = `h-9 bg-transparent border border-[var(--border-color)] text-[var(--text-secondary)] font-bold text-xs

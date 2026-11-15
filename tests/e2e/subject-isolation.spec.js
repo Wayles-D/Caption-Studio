@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { videoToComposition, compositionToScreen } from '../../shared/objects/coordinates.js';
 import { truth, visibleMask, W, H } from '../fixtures/objects/make-crossing.mjs';
 import { serveVideo } from './serveVideo.js';
+import { openTool } from './helpers/dock.js';
 
 // SUBJECT ISOLATION & BACKGROUND REPLACEMENT in the real editor
 // (shared/objects/subject.js): track and segment a person on segment.mp4 —
@@ -45,7 +46,7 @@ async function seek(page, t) {
 
 async function trackAndSegment(page, name) {
   await seek(page, 0.5);
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await page.waitForFunction(() => window.__objects.getDetectionsAt(0.5)?.detections.length > 0, null, { timeout: 60000 });
   await page.evaluate((gt) => {
     const dets = window.__objects.getDetectionsAt(0.5).detections.filter((d) => d.class === 'person');
@@ -207,7 +208,7 @@ test('without a segmentation nothing is isolated, and the panel says why; the ex
   await open(page);
   // Track only — no segmentation yet.
   await seek(page, 0.5);
-  await page.getByRole('button', { name: 'Objects', exact: true }).click();
+  await openTool(page, 'Objects');
   await page.waitForFunction(() => window.__objects.getDetectionsAt(0.5)?.detections.length > 0, null, { timeout: 60000 });
   await page.evaluate((gt) => {
     const dets = window.__objects.getDetectionsAt(0.5).detections.filter((d) => d.class === 'person');

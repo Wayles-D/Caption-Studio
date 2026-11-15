@@ -15,6 +15,11 @@ import { useEffect } from 'react';
 // future Radix popover/dropdown/select without each one needing its own
 // special case.
 const RADIX_PORTAL_SELECTOR = '[data-radix-popper-content-wrapper]';
+// The same problem for the app's own floating pieces built outside React's
+// tree (a transcript word's option bar and its case menu, appended to <body>
+// so they are never clipped): they mark themselves with this attribute and
+// count as inside the panel that opened them.
+const FLOATING_SELECTOR = '[data-panel-floating]';
 
 /**
  * Calls `handler` on any pointerdown outside every ref in `refs`. Accepts a
@@ -34,7 +39,8 @@ export function useClickOutside(refs, handler, enabled = true) {
 
     function handlePointerDown(event) {
       const isInside = refList.some((ref) => ref?.current && ref.current.contains(event.target))
-        || event.target.closest?.(RADIX_PORTAL_SELECTOR);
+        || event.target.closest?.(RADIX_PORTAL_SELECTOR)
+        || event.target.closest?.(FLOATING_SELECTOR);
       if (!isInside) handler(event);
     }
 

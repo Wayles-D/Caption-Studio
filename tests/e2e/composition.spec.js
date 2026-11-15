@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openTool } from './helpers/dock.js';
 
 // THE COMPOSITION (shared/composition.js) in the real editor: the canvas's
 // shape and background, the video placed and styled inside it — checked on
@@ -19,7 +20,7 @@ async function openDemo(page) {
 
 async function openCanvasPanel(page) {
   if (await page.locator('#canvas-editor').count()) return;
-  await page.getByRole('button', { name: 'Canvas', exact: true }).click();
+  await openTool(page, 'Canvas');
   await expect(page.locator('#canvas-editor')).toBeVisible();
 }
 
@@ -129,13 +130,22 @@ test('the video moves, scales, rotates, rounds, borders and shadows inside the c
   await settle(page);
   g = await geometry(page);
   const edgeY = (g.video.y + g.video.h / 2) / g.frame.h;
-  const justLeft = (g.video.x - 3) / g.frame.w;
-  expect(near(await colourAt(page, justLeft, edgeY), [0xe1, 0x1d, 0x48], 30), 'the border, outside the video\'s left edge').toBe(true);
+  // The border scales with the preview (about 2px at a 340px frame), so look
+  // for its colour in the first few pixels outside the edge rather than at
+  // one fixed offset that can land on the anti-aliased rim.
+  const outside = [];
+  for (const dx of [1, 2, 3]) outside.push(await colourAt(page, (g.video.x - dx) / g.frame.w, edgeY));
+  expect(outside.some((rgb) => near(rgb, [0xe1, 0x1d, 0x48], 30)), 'the border, outside the video\'s left edge').toBe(true);
   expect(await page.evaluate(() => document.getElementById('preview-video').style.borderRadius)).not.toBe('');
   await page.evaluate(() => window.__composition.patchVideoStyle('shadow', { enabled: true, blur: 10, offsetY: 20, opacity: 80 }));
   await settle(page);
-  const belowY = (g.video.y + g.video.h + 14) / g.frame.h;
-  const shade = await colourAt(page, 0.5, belowY);
+  // Like the border, the shadow scales with the preview, so take the darkest
+  // of the first few pixels under the video rather than one fixed offset.
+  let shade = [255, 255, 255];
+  for (const dy of [2, 4, 6, 9, 14]) {
+    const rgb = await colourAt(page, 0.5, (g.video.y + g.video.h + dy) / g.frame.h);
+    if (rgb[0] < shade[0]) shade = rgb;
+  }
   expect(shade[0], `the shadow below the video (${shade})`).toBeLessThan(200);
 
   // Rotation turns the video, not the canvas.
