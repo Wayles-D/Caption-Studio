@@ -150,7 +150,7 @@ assert.deepStrictEqual([comp.width, comp.height], [360, 360]);
 assert.ok(comp.files.mask && comp.files.under && comp.files.over, 'mask, shadow and border drawn');
 const W = comp.width;
 const H = comp.height;
-const built = buildFullTimelineSegments([], params, W, H, DURATION, framesDir, { frameRate: String(FPS) });
+const built = await buildFullTimelineSegments([], params, W, H, DURATION, framesDir, { frameRate: String(FPS) });
 const out = path.join(work, 'out.mp4');
 await compositeGraphicsCaptionTrack(src, built.captions, out, {
   videoTransform, duration: DURATION, canvasWidth: W, canvasHeight: H, frameRate: String(FPS),
@@ -295,7 +295,7 @@ for (const aspectRatio of Object.keys(ASPECT_RATIOS).filter((k) => k !== 'origin
   const dir = path.join(work, `ratio-${aspectRatio.replace(/[:.]/g, 'x')}`);
   fs.mkdirSync(dir, { recursive: true });
   const c = prepareVideoComposition({ composition: { aspectRatio, background: { color: '#FFFFFF' } }, videoStyle: { cornerRadius: 8 }, sourceWidth: SW, sourceHeight: SH, outDir: path.join(dir, 'c') });
-  const segs = buildFullTimelineSegments([], { shapeLayers: [shape] }, c.width, c.height, DURATION, dir, { frameRate: String(FPS) });
+  const segs = await buildFullTimelineSegments([], { shapeLayers: [shape] }, c.width, c.height, DURATION, dir, { frameRate: String(FPS) });
   const file = path.join(dir, 'out.mp4');
   await compositeGraphicsCaptionTrack(src, segs.captions, file, {
     duration: DURATION, canvasWidth: c.width, canvasHeight: c.height, frameRate: String(FPS), composition: c, layerRuns: segs.runs

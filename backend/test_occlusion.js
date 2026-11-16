@@ -199,7 +199,7 @@ async function render(name, occlusions, { segmentations = segPayload } = {}) {
     occlusionTracks: JSON.stringify({ kolive: track }),
     occlusionSegmentations: JSON.stringify(segmentations)
   };
-  const built = buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
+  const built = await buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
   const out = path.join(work, `${name}.mp4`);
   await compositeGraphicsCaptionTrack(SEGMENT, built.captions, out, {
     duration: DURATION, canvasWidth: comp.width, canvasHeight: comp.height, frameRate: String(FPS),
@@ -357,7 +357,7 @@ console.log('\n[Test 5] A TEXT layer and an IMAGE layer behind the same person')
       occlusionTracks: JSON.stringify({ kolive: track }),
       occlusionSegmentations: JSON.stringify(segPayload)
     };
-    const built = buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), imageSources, videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
+    const built = await buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), imageSources, videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
     const out = path.join(work, name + '.mp4');
     await compositeGraphicsCaptionTrack(SEGMENT, built.captions, out, {
       duration: DURATION, canvasWidth: comp.width, canvasHeight: comp.height, frameRate: String(FPS),

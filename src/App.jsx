@@ -35,6 +35,7 @@ import { RightInspector } from './components/RightInspector.jsx';
 import { AudioInspector } from './components/AudioInspector.jsx';
 import { WordToolPanel } from './components/WordInspector.jsx';
 import { ToolDock } from './components/ToolDock.jsx';
+import { ExportDialog } from './components/ExportDialog.jsx';
 import { initFollowAlongLayers } from './js/components/tamSegmentation.js';
 import { useWorkspaceStore } from './store/workspaceStore.js';
 import { ImageInspector } from './components/ImageInspector.jsx';
@@ -197,6 +198,9 @@ const DOCK_SECTIONS = [...MOBILE_TOOLS.reduce((sections, tool) => {
   return sections;
 }, new Map()).values()];
 
+// The Captions section's tools (Caption text, Style, Animate, Entrance, Position).
+const CAPTION_TOOL_KEYS = new Set(MOBILE_TOOLS.filter((t) => t.section === 'Captions').map((t) => t.key));
+
 const PANEL_TITLES = { advanced: 'Keyframes', ...Object.fromEntries(MOBILE_TOOLS.map((t) => [t.key, t.title])) };
 
 // Desktop panel views that stay mounted and are only shown/hidden (see the
@@ -263,6 +267,8 @@ export function App() {
   // then immediately reopening.
   const mobileSheetRef = useRef(null);
   const mobileToolbarRef = useRef(null);
+  // The top bar — "inside" for every panel's click-outside check (see below).
+  const headerRef = useRef(null);
 
   const toggleMobilePanel = useCallback((key) => {
     setMobileActivePanel((current) => (current === key ? null : key));
@@ -314,7 +320,7 @@ export function App() {
   }, [sheetHeight, handleSheetGripPointerMove, handleSheetGripPointerUp]);
 
   useClickOutside(
-    [mobileSheetRef, mobileToolbarRef],
+    [mobileSheetRef, mobileToolbarRef, headerRef],
     closeMobilePanel,
     mobileActivePanel !== null
   );
@@ -548,6 +554,33 @@ export function App() {
     });
   }, []);
 
+  // Selecting a SOUND EFFECT or an AUDIO clip (on its lane) brings up the
+  // Audio panel, where it is edited — no hunting for it in the dock.
+  useEffect(() => {
+    let lastId = appState.selectedAudioClipId;
+    return subscribe('selectedAudioClipId', () => {
+      const id = appState.selectedAudioClipId;
+      if (id === lastId) return;
+      lastId = id;
+      if (id && isDesktopRef.current && desktopSidePanelRef.current !== 'layers') setDesktopSidePanel('audio');
+    });
+  }, []);
+
+  // Selecting a CAPTION on its lane brings up the Captions tools. A Captions
+  // tool already open (Style, Animate...) stays — that is the one being used;
+  // otherwise the first, Caption text.
+  useEffect(() => {
+    let lastId = appState.selectedCaptionEventId;
+    return subscribe('selectedCaptionEventId', () => {
+      const id = appState.selectedCaptionEventId;
+      if (id === lastId) return;
+      lastId = id;
+      if (!id || !isDesktopRef.current || desktopSidePanelRef.current === 'layers') return;
+      if (CAPTION_TOOL_KEYS.has(desktopSidePanelRef.current)) return;
+      setDesktopSidePanel('typography');
+    });
+  }, []);
+
   // While the Text & Cinematic panel is open, two more surfaces count as
   // "inside": the sound library it opens itself ("+ Sound at start"), and the
   // video, where you drag and resize the very text you are editing. Pressing
@@ -556,9 +589,11 @@ export function App() {
   const previewElRef = useMemo(() => ({ get current() { return document.getElementById('state-video'); } }), []);
   // Every tool panel counts the video as inside too: picking a word or a
   // caption on the video is how most of them are used.
+  // The top bar always counts as inside too: switching light/dark mode (or
+  // anything else up there) changes nothing in the panel, so it must not close it.
   const sidePanelInsideRefs = useMemo(() => (desktopSidePanel !== 'advanced' && desktopSidePanel !== 'transcript'
-    ? [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, soundLibraryElRef, previewElRef]
-    : [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef]), [desktopSidePanel, soundLibraryElRef, previewElRef]);
+    ? [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, soundLibraryElRef, previewElRef, headerRef]
+    : [desktopSidePanelElRef, timelinePanelRef, mobileToolbarRef, headerRef]), [desktopSidePanel, soundLibraryElRef, previewElRef]);
   useClickOutside(
     sidePanelInsideRefs,
     closeDesktopSidePanel,
@@ -871,7 +906,7 @@ export function App() {
    * no queue, so a toast shown here would just get clobbered a moment later
    * by triggerRegeneration's/handleDownloadVideo's own follow-up toast.
    */
-  const renderCurrentEditsToServer = useCallback(async () => {
+  const renderCurrentEditsToServer = useCallback(async (exportSize = 'original') => {
     if (!appState.baseName || appState.isProcessing) {
       showToast("Please upload a video first.");
       return { ok: false, renderedWithEffects: true };
@@ -903,7 +938,9 @@ export function App() {
         body: JSON.stringify({
           baseName: appState.baseName,
           words: editedWords,
-          styles: getStyleParams()
+          styles: getStyleParams(),
+          // 'hd' = a 1080p file (fast), 'original' = the source's own size.
+          exportSize
         })
       });
       console.log('Regeneration result:', result);
@@ -972,7 +1009,7 @@ export function App() {
    * before serving the file, so there is no longer a path from clicking
    * Download to receiving anything other than what the preview shows.
    */
-  const handleDownloadVideo = useCallback(async () => {
+  const handleDownloadVideo = useCallback(async (exportSize = 'original') => {
     // The "Use Demo Video" shortcut never uploads anything to the backend
     // (see handleDemoVideo) — there is no server-side job to re-render, so
     // this is the one case where "download current edits" is genuinely not
@@ -993,7 +1030,7 @@ export function App() {
     }
 
     showToast("Rendering your latest edits before download...");
-    const { ok, renderedWithEffects, textElementsRendered, graphicsFailureReason } = await renderCurrentEditsToServer();
+    const { ok, renderedWithEffects, textElementsRendered, graphicsFailureReason } = await renderCurrentEditsToServer(exportSize);
     if (!ok || !appState.renderedVideoPath) return;
 
     // Cache-bust: the backend writes every regenerate to the SAME
@@ -1017,6 +1054,32 @@ export function App() {
       ? "Download started!"
       : `Download started — but without some caption effects (position/rotation/blend)${textElementsRendered ? '' : textLossNote()}; the advanced renderer couldn't run this time.${graphicsFailureReason ? ` Reason: ${graphicsFailureReason.stage} — ${graphicsFailureReason.message}` : ""}`);
   }, [renderCurrentEditsToServer, videoSrc, showToast]);
+
+  // EXPORT SIZE: asked at every export of a video bigger than 1080p (see
+  // ExportDialog). The preview may be the 1080p editing proxy, so "bigger"
+  // is read from what it is playing: a proxy means the original needed one.
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  // The original's {width, height, duration} for the dialog's sizes — null
+  // when the server could not say.
+  const [exportSource, setExportSource] = useState(null);
+  const closeExportDialog = useCallback(() => setExportDialogOpen(false), []);
+  const requestExport = useCallback(async () => {
+    if (appState.uploadedFile?.demo) { handleDownloadVideo(); return; }
+    // The ORIGINAL's size, measured by the server from the uploaded file. The
+    // preview cannot be trusted for this: it is often the 1080p proxy — and,
+    // in a reopened project, under a blob: address that says nothing about
+    // it — which is how a reopened 4K project skipped the question and
+    // exported at 4K without asking.
+    let info = null;
+    try {
+      const r = await fetchJson(`${API_BASE_URL}/api/upload/info/${encodeURIComponent(appState.baseName)}`);
+      if (r?.width > 0 && r?.height > 0) info = { width: r.width, height: r.height, duration: r.duration || appState.videoDuration || 0 };
+    } catch { /* unknown: the choice is offered anyway */ }
+    // Only a video KNOWN to be 1080p or smaller skips the question.
+    if (info && Math.max(info.width, info.height) <= 1920) { handleDownloadVideo('original'); return; }
+    setExportSource(info || { width: null, height: null, duration: appState.videoDuration || 0 });
+    setExportDialogOpen(true);
+  }, [handleDownloadVideo]);
 
   // One renderer for a tool's panel body, used by both the desktop panel and
   // the phone sheet, so the two can never drift apart.
@@ -1059,8 +1122,8 @@ export function App() {
         }}
       />
 
-      <header className="h-14 w-full bg-[var(--bg-toolbar)] backdrop-blur-xl border-b border-[var(--border-color)] flex items-center justify-between gap-3 px-3 sm:px-4 z-[100] relative">
-        <Toolbar onExportVideo={() => handleDownloadVideo()} />
+      <header ref={headerRef} className="h-14 w-full bg-[var(--bg-toolbar)] backdrop-blur-xl border-b border-[var(--border-color)] flex items-center justify-between gap-3 px-3 sm:px-4 z-[100] relative">
+        <Toolbar onExportVideo={requestExport} />
       </header>
 
       {/* Preview above, TIMELINE below — the timeline is a first-class
@@ -1282,6 +1345,13 @@ export function App() {
         onToolClick={(tool) => (isDesktop && DESKTOP_SIDE_PANEL_TOOL_KEYS.has(tool.key)
           ? toggleDesktopSidePanel(tool.key)
           : toggleMobilePanel(tool.key))}
+      />
+
+      <ExportDialog
+        open={exportDialogOpen}
+        source={exportSource}
+        onCancel={closeExportDialog}
+        onExport={(size) => { setExportDialogOpen(false); handleDownloadVideo(size); }}
       />
 
       <div

@@ -115,6 +115,42 @@ export function encodePngFast(canvas) {
   ]);
 }
 
+/**
+ * THE EXPORT'S PATH (frameCanvas.js's frame writer): the same encoding, split
+ * in two. snapshotPngRows reads the pixels NOW — so the canvas can be handed
+ * the next frame at once — and encodePngRowsAsync compresses them on libuv's
+ * thread pool, several frames side by side. Safe at any resolution because
+ * the writer's loop yields between frames (see the header on why that
+ * matters). Pixel-identical to toBuffer('image/png') — PNG is lossless.
+ */
+export function snapshotPngRows(canvas) {
+  const width = canvas.width;
+  const height = canvas.height;
+  const { data } = canvas.getContext('2d').getImageData(0, 0, width, height);
+  const stride = width * 4;
+  const raw = Buffer.allocUnsafe((stride + 1) * height);
+  for (let y = 0; y < height; y++) {
+    const at = y * (stride + 1);
+    raw[at] = 0;
+    Buffer.from(data.buffer, data.byteOffset + y * stride, stride).copy(raw, at + 1);
+  }
+  return { width, height, raw };
+}
+
+export function encodePngRowsAsync({ width, height, raw }) {
+  return new Promise((resolve, reject) => {
+    zlib.deflate(raw, { level: SCRATCH_COMPRESSION_LEVEL }, (err, idat) => {
+      if (err) return reject(err);
+      const ihdr = Buffer.alloc(13);
+      ihdr.writeUInt32BE(width, 0);
+      ihdr.writeUInt32BE(height, 4);
+      ihdr[8] = 8;
+      ihdr[9] = 6;
+      resolve(Buffer.concat([PNG_SIGNATURE, chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))]));
+    });
+  });
+}
+
 /** Encodes and writes in one step — the drop-in for writeFileSync(file, canvas.toBuffer('image/png')). */
 export function writePngFast(canvas, file) {
   fs.writeFileSync(file, encodePngFast(canvas));

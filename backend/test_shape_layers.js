@@ -124,7 +124,7 @@ const params = { preset: 'caps-white', fontFamily: 'Poppins', fontSize: '24', po
 
 const framesDir = path.join(work, 'frames');
 fs.mkdirSync(framesDir, { recursive: true });
-const built = buildFullTimelineSegments(phrases, params, W, H, DURATION, framesDir, { frameRate: '30', imageSources: sources });
+const built = await buildFullTimelineSegments(phrases, params, W, H, DURATION, framesDir, { frameRate: '30', imageSources: sources });
 assert.deepStrictEqual(built.runs.map((r) => [r.kind, r.beneathCaptions]), [['plain', true], ['plain', false]], 'one stream beneath the captions, one above');
 const out = path.join(work, 'out.mp4');
 await compositeGraphicsCaptionTrack(src, built.captions, out, {

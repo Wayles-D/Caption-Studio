@@ -22,8 +22,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createCanvas } from '@napi-rs/canvas';
-import { writeScratchPng } from './pngFast.js';
-import { acquireFrameCanvas, releaseFrameCanvases } from './frameCanvas.js';
+import { createFrameWriter } from './frameCanvas.js';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
 import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground } from '../../shared/captionGraphics.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
@@ -113,6 +112,11 @@ const ANIMATION_SAMPLE_STEP_SECONDS = 0.06;
 const MAX_SAMPLES_PER_SECOND = 40;
 // Set for the duration of one (synchronous) buildFullTimelineSegments call.
 let sampleFps = null;
+// The current build's frame writer (frameCanvas.js's createFrameWriter): hands
+// out a clean canvas per frame and saves frames in the background. Like
+// sampleFps it belongs to ONE build — builds are queued (see
+// buildFullTimelineSegments), so two can never share it.
+let frames = null;
 
 function parseFrameRate(rate) {
   if (!rate) return null;
@@ -263,7 +267,7 @@ function subdivideForWordAnimations(slices, words, params, container) {
  * @param {object} [transformKeyPhrase=phrase] - The phrase whose getPhraseTransformKey identifies this target's captionTransforms entry — defaults to `phrase` itself (the normal sentence/rolling-stack case). Word Mode (see generateWordModePhraseFrames) passes the REAL multi-word phrase here while `phrase` is a synthetic single-word stand-in used only for boundary-slicing, so a phrase-level keyframe/override still resolves under the SAME key the live preview uses (which always keys off the real phrase — see src/js/components/preview.js).
  * @returns {{start:number, end:number, file:string}[]} Slices with absolute PNG file paths, in time order.
  */
-export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasHeight, outDir, transformKeyPhrase = phrase) {
+export async function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasHeight, outDir, transformKeyPhrase = phrase) {
   registerBackendCanvasFonts();
 
   // Static (non-time-varying) phrase merge — used only for mode/preset
@@ -301,10 +305,10 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
   slices = subdivideForKeyframes(slices, phraseOverride);
   slices = subdivideForWordAnimations(slices, phrase.words, staticPhraseParams, phrase);
 
-  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
-  const ctx = canvas.getContext('2d');
-
-  return slices.map((slice, idx) => {
+  const out = [];
+  for (const slice of slices) {
+    const canvas = await frames.canvas(canvasWidth, canvasHeight);
+    const ctx = canvas.getContext('2d');
     // Per-slice phrase-params resolution — the one place a phrase-level
     // keyframe actually gets its correct, time-varying value baked into the
     // frame (see resolvePhraseParams's optional currentTime argument).
@@ -330,10 +334,10 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
     // phrase's start time is unique across that video, so this can't collide
     // the way a phrase-local index would.
     const file = path.join(outDir, `slice-${Math.round(slice.start * 1000)}.png`);
-    writeScratchPng(canvas, file);
-
-    return { start: slice.start, end: slice.end, file };
-  });
+    frames.write(canvas, file);
+    out.push({ start: slice.start, end: slice.end, file });
+  }
+  return out;
 }
 
 /**
@@ -352,7 +356,7 @@ export function generatePhraseCaptionFrames(phrase, params, canvasWidth, canvasH
  * @param {string} outDir - Directory to write per-slice PNGs into (created if missing).
  * @returns {{start:number, end:number, file:string}[]}
  */
-export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
+export async function generateRollingStackPhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
   registerBackendCanvasFonts();
 
   const staticPhraseParams = resolvePhraseParams(params, phrase);
@@ -365,8 +369,6 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
 
   const layerCount = staticPhraseParams.rollingStackLayerCount || 2;
   const windowSlices = buildRollingStackWindowSlices(phrase, layerCount);
-  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
-  const ctx = canvas.getContext('2d');
 
   const motions = motionsFromParams(staticPhraseParams);
   const phraseOverride = params.captionTransforms?.[getPhraseTransformKey(phrase)];
@@ -402,7 +404,10 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
     return subSlices.map((sub) => ({ ...sub, chunks: slice.chunks }));
   });
 
-  return slices.map((slice) => {
+  const out = [];
+  for (const slice of slices) {
+    const canvas = await frames.canvas(canvasWidth, canvasHeight);
+    const ctx = canvas.getContext('2d');
     // Per-slice phrase-params resolution — see the matching comment in
     // generatePhraseCaptionFrames for why this must happen per slice rather
     // than once for the whole phrase.
@@ -420,10 +425,10 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
     });
 
     const file = path.join(outDir, `slice-${Math.round(slice.start * 1000)}.png`);
-    writeScratchPng(canvas, file);
-
-    return { start: slice.start, end: slice.end, file };
-  });
+    frames.write(canvas, file);
+    out.push({ start: slice.start, end: slice.end, file });
+  }
+  return out;
 }
 
 /**
@@ -443,8 +448,9 @@ export function generateRollingStackPhraseFrames(phrase, params, canvasWidth, ca
  * @param {string} outDir
  * @returns {{start:number, end:number, file:string}[]}
  */
-export function generateWordModePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
-  return phrase.words.flatMap((w) => {
+export async function generateWordModePhraseFrames(phrase, params, canvasWidth, canvasHeight, outDir) {
+  const out = [];
+  for (const w of phrase.words) {
     const singleWordPhrase = { words: [w], breakAfterIndices: [], start: w.start, end: w.end };
     // Pass the REAL (multi-word) phrase as the transform-key phrase — a
     // phrase-level override/keyframe must resolve under the same
@@ -452,8 +458,9 @@ export function generateWordModePhraseFrames(phrase, params, canvasWidth, canvas
     // the real phrase in Word Mode too (see preview.js's syncVideoSubtitles,
     // which resolves phrase params from the real `activePhrase` BEFORE
     // branching into Word Mode's synthetic single-word rendering).
-    return generatePhraseCaptionFrames(singleWordPhrase, params, canvasWidth, canvasHeight, outDir, phrase);
-  });
+    out.push(...await generatePhraseCaptionFrames(singleWordPhrase, params, canvasWidth, canvasHeight, outDir, phrase));
+  }
+  return out;
 }
 
 /**
@@ -463,11 +470,11 @@ export function generateWordModePhraseFrames(phrase, params, canvasWidth, canvas
  * track (see buildFullTimelineSegments). A freshly created canvas is already
  * fully transparent, so this is just an unmodified toBuffer() — no drawing.
  */
-function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
+async function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
   fs.mkdirSync(outDir, { recursive: true });
-  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
+  const canvas = await frames.canvas(canvasWidth, canvasHeight);
   const file = path.join(outDir, 'blank.png');
-  writeScratchPng(canvas, file);
+  frames.write(canvas, file);
   return file;
 }
 
@@ -533,7 +540,7 @@ function generateBlankFrame(canvasWidth, canvasHeight, outDir) {
  * Blank wherever the relationship is off or the segmentation has no mask
  * there, which leaves those layers fully visible: the V2.1 rule, kept.
  */
-function buildSubjectMatteSegments(entry, params, readers, tracks, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox) {
+async function buildSubjectMatteSegments(entry, params, readers, tracks, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox) {
   const relation = normalizeOcclusionList(params.occlusions).find((r) => r.id === entry.relationId);
   const reader = readers.get(entry.trackKey);
   const track = tracks.get(entry.trackKey);
@@ -551,8 +558,6 @@ function buildSubjectMatteSegments(entry, params, readers, tracks, canvasWidth, 
   const cuts = new Set([0, videoDuration, from, to]);
   animationSampleTimes(from, to).forEach((t) => { if (t > 0 && t < videoDuration) cuts.add(t); });
   const boundaries = Array.from(cuts).filter((t) => t >= 0 && t <= videoDuration).sort((a, b) => a - b);
-  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
-  const ctx = canvas.getContext('2d');
   const offscreen = (w, h) => createCanvas(w, h);
   const unit = effectUnit(canvasWidth, canvasHeight);
   const segments = [];
@@ -569,16 +574,17 @@ function buildSubjectMatteSegments(entry, params, readers, tracks, canvasWidth, 
     const b = videoToComposition({ x: mask.frame.x + mask.frame.width, y: mask.frame.y }, place);
     const frameCanvasWidth = Math.hypot((b.x - a.x) * canvasWidth, (b.y - a.y) * canvasHeight);
     const alpha = maskWithEdges(mask, { expand: relation.grow ?? 0, feather: relation.feather || 0 }, unit, frameCanvasWidth);
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    const canvas = await frames.canvas(canvasWidth, canvasHeight);
+    const ctx = canvas.getContext('2d');
     drawMaskAlpha(ctx, mask, alpha, place, canvasWidth, canvasHeight, offscreen);
     const file = path.join(outDir, `occ-${entry.relationId}-${Math.round(start * 1000)}.png`);
-    writeScratchPng(canvas, file);
+    frames.write(canvas, file);
     segments.push({ start, end, file });
   }
   return segments.some((x) => x.file !== blankFile) ? segments : [];
 }
 
-function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources = null, filePrefix = 'run' } = {}) {
+async function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources = null, filePrefix = 'run' } = {}) {
   // What this run can actually draw: text elements by the preview's own "does
   // it draw anything" rule (an interlude with no words still draws its
   // background — isTextElementRenderable), images whose picture decoded,
@@ -663,8 +669,6 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
   });
 
   const boundaries = Array.from(cuts).sort((a, b) => a - b);
-  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
-  const ctx = canvas.getContext('2d');
   const segments = [];
 
   for (let i = 0; i < boundaries.length - 1; i++) {
@@ -700,7 +704,8 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
       continue;
     }
 
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    const canvas = await frames.canvas(canvasWidth, canvasHeight);
+    const ctx = canvas.getContext('2d');
     // Each object draws itself — the same shared functions the preview calls.
     visible.forEach(({ type, item: element }) => {
       if (type === 'image') {
@@ -740,7 +745,7 @@ function buildRunSegments(entries, params, canvasWidth, canvasHeight, videoDurat
     });
 
     const file = path.join(outDir, `${filePrefix}-${Math.round(start * 1000)}.png`);
-    writeScratchPng(canvas, file);
+    frames.write(canvas, file);
     segments.push({ start, end, file });
   }
 
@@ -801,7 +806,7 @@ function buildMaskReaders(params, field = 'objectSegmentations') {
   return out;
 }
 
-function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox, imageSources) {
+async function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox, imageSources) {
   const none = { overlay: [], masks: [], background: [], subjectMask: [] };
   const effects = normalizeObjectEffectList(params.objectEffects).filter((e) => e.enabled !== false && e.start < videoDuration);
   if (!effects.length) return none;
@@ -834,8 +839,6 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
   });
   const boundaries = Array.from(cuts).sort((a, b) => a - b);
 
-  const canvas = acquireFrameCanvas(canvasWidth, canvasHeight);
-  const ctx = canvas.getContext('2d');
   const sigmas = blurSigmas(usable, canvasWidth, canvasHeight);
   const overlay = [];
   const masks = sigmas.map((sigma) => ({ sigma, segments: [] }));
@@ -865,10 +868,11 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
     const resolved = resolveObjectEffects(usable, tracks, start, placementAt, canvasWidth, canvasHeight, undefined, maskAt);
     const drawn = resolved.filter((r) => r.effect.type !== 'blur');
     if (drawn.length) {
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      const canvas = await frames.canvas(canvasWidth, canvasHeight);
+      const ctx = canvas.getContext('2d');
       drawObjectEffects(ctx, drawn, { canvasWidth, canvasHeight, createOffscreenCanvas: offscreen });
       const file = path.join(outDir, `ofx-${Math.round(start * 1000)}.png`);
-      writeScratchPng(canvas, file);
+      frames.write(canvas, file);
       overlay.push({ start, end, file });
     } else {
       overlay.push({ start, end, file: blankFile });
@@ -879,29 +883,31 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
       : [];
     if (subjects.length) {
       const place = placementAt(start);
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      const bgCanvas = await frames.canvas(canvasWidth, canvasHeight);
+      const bgCtx = bgCanvas.getContext('2d');
       let drewBackground = false;
       subjects.forEach(({ effect, state }) => {
         const image = effect.appearance.mode === 'image' && effect.appearance.imageAssetId
           ? imageSources?.get(effect.appearance.imageAssetId) || null
           : null;
         if (effect.appearance.mode === 'image' && !image) return;
-        drewBackground = drawSubjectBackground(ctx, {
+        drewBackground = drawSubjectBackground(bgCtx, {
           appearance: effect.appearance, presence: state.presence, placement: place, canvasWidth, canvasHeight, image, canvasBackground,
           cornerRadiusPct: videoCornerRadius
         }) || drewBackground;
       });
       const bgFile = path.join(outDir, `ofxbg-${Math.round(start * 1000)}.png`);
       if (drewBackground) {
-        writeScratchPng(canvas, bgFile);
+        frames.write(bgCanvas, bgFile);
         background.push({ start, end, file: bgFile });
       } else {
         background.push({ start, end, file: blankFile });
       }
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-      subjects.forEach(({ mask, alpha }) => drawMaskAlpha(ctx, mask, alpha, place, canvasWidth, canvasHeight, offscreen));
+      const mCanvas = await frames.canvas(canvasWidth, canvasHeight);
+      const mCtx = mCanvas.getContext('2d');
+      subjects.forEach(({ mask, alpha }) => drawMaskAlpha(mCtx, mask, alpha, place, canvasWidth, canvasHeight, offscreen));
       const mFile = path.join(outDir, `ofxsubj-${Math.round(start * 1000)}.png`);
-      writeScratchPng(canvas, mFile);
+      frames.write(mCanvas, mFile);
       subjectMask.push({ start, end, file: mFile });
     } else if (readers.size) {
       // No mask here: the video is left exactly as it is (an opaque
@@ -910,14 +916,16 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
       background.push({ start, end, file: blankFile });
       subjectMask.push({ start, end, file: blankFile });
     }
-    masks.forEach((m, mi) => {
-      if (!resolved.some((r) => r.effect.type === 'blur')) { m.segments.push({ start, end, file: blankFile }); return; }
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    for (let mi = 0; mi < masks.length; mi++) {
+      const m = masks[mi];
+      if (!resolved.some((r) => r.effect.type === 'blur')) { m.segments.push({ start, end, file: blankFile }); continue; }
+      const canvas = await frames.canvas(canvasWidth, canvasHeight);
+      const ctx = canvas.getContext('2d');
       drawObjectEffectMasks(ctx, resolved, { canvasWidth, canvasHeight, sigma: m.sigma, createOffscreenCanvas: offscreen });
       const file = path.join(outDir, `ofxmask${mi}-${Math.round(start * 1000)}.png`);
-      writeScratchPng(canvas, file);
+      frames.write(canvas, file);
       m.segments.push({ start, end, file });
-    });
+    }
   }
   // A stream that never draws anything is no stream at all.
   const used = (list) => (list.some((x) => x.file !== blankFile) ? list : []);
@@ -940,26 +948,43 @@ function buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDurat
 // boxHeight}, videoDecoration.js's prepareVideoComposition) — where
 // object-aware effects place their tracked regions. Omitted: the video fills
 // the canvas.
-export function buildFullTimelineSegments(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, { frameRate = null, imageSources = null, videoBox = null } = {}) {
-  // The pooled frame canvases (frameCanvas.js) live exactly as long as one
-  // build: an idle server holds none, and a failed build cannot leak them.
-  try {
-    // Everything below is synchronous, so the sampling grid set here is the
-    // one every animation in this build is sampled on (see animationSampleTimes).
-    const previousFps = sampleFps;
-    sampleFps = parseFrameRate(frameRate);
-    try {
-      return buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources, videoBox);
-    } finally {
-      sampleFps = previousFps;
-    }
-  } finally {
-    releaseFrameCanvases();
-  }
+// Builds run ONE AT A TIME: a build sets the module's sampling grid (sampleFps)
+// and frame writer for its whole duration, and since a build now awaits its
+// frame saves, a second one starting meanwhile would otherwise share them.
+let buildQueue = Promise.resolve();
+
+export function buildFullTimelineSegments(...args) {
+  const run = buildQueue.then(() => buildOnce(...args));
+  buildQueue = run.catch(() => {});
+  return run;
 }
 
-function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources, videoBox) {
-  const blankFile = generateBlankFrame(canvasWidth, canvasHeight, outDir);
+async function buildOnce(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, { frameRate = null, imageSources = null, videoBox = null } = {}) {
+  sampleFps = parseFrameRate(frameRate);
+  frames = createFrameWriter();
+  let result;
+  let failed = null;
+  try {
+    result = await buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources, videoBox);
+  } catch (err) {
+    failed = err;
+  }
+  // Every frame on disk before anyone reads (or deletes) the folder — also
+  // after a failure, so no save is still writing into a removed directory.
+  try {
+    await frames.flush();
+  } catch (err) {
+    failed = failed || err;
+  } finally {
+    frames = null;
+    sampleFps = null;
+  }
+  if (failed) throw failed;
+  return result;
+}
+
+async function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHeight, videoDuration, outDir, imageSources, videoBox) {
+  const blankFile = await generateBlankFrame(canvasWidth, canvasHeight, outDir);
   const pushGap = (segments, start, end) => {
     if (end - start >= 0.001) segments.push({ start, end, file: blankFile });
   };
@@ -977,19 +1002,19 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
   // blend builds it twice over the SAME layout — normal words (plain) and
   // keywords (blended, a layer of its own) — each into its own folder so the
   // slice file names cannot collide.
-  const buildCaptionTrack = (trackParams, dir, blank) => {
+  const buildCaptionTrack = async (trackParams, dir, blank) => {
     const track = [];
     const gap = (start, end) => { if (end - start >= 0.001) track.push({ start, end, file: blank }); };
     let at = 0;
-    [...phrases].sort((a, b) => a.start - b.start).forEach((phrase) => {
+    for (const phrase of [...phrases].sort((a, b) => a.start - b.start)) {
       gap(at, phrase.start);
       // RAW params passed through unmerged — each generator resolves its own
       // phrase merge (once statically, once per slice) so phrase-level
       // keyframes can vary correctly across the phrase's own slices; see
       // generatePhraseCaptionFrames's doc comment for the full rationale.
-      track.push(...generatePhraseFrames(phrase, trackParams, canvasWidth, canvasHeight, dir));
+      track.push(...await generatePhraseFrames(phrase, trackParams, canvasWidth, canvasHeight, dir));
       at = phrase.end;
-    });
+    }
     gap(at, videoDuration);
     return track;
   };
@@ -998,10 +1023,10 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
   if (cssConfig.keywordOnlyBlend) {
     const keywordDir = path.join(outDir, 'keywords');
     fs.mkdirSync(keywordDir, { recursive: true });
-    segments = buildCaptionTrack({ ...params, captionWordLayer: 'normal' }, outDir, blankFile);
-    keywordCaptions = buildCaptionTrack({ ...params, captionWordLayer: 'keywords' }, keywordDir, generateBlankFrame(canvasWidth, canvasHeight, keywordDir));
+    segments = await buildCaptionTrack({ ...params, captionWordLayer: 'normal' }, outDir, blankFile);
+    keywordCaptions = await buildCaptionTrack({ ...params, captionWordLayer: 'keywords' }, keywordDir, await generateBlankFrame(canvasWidth, canvasHeight, keywordDir));
   } else {
-    segments = buildCaptionTrack(params, outDir, blankFile);
+    segments = await buildCaptionTrack(params, outDir, blankFile);
   }
 
   // Manually placed captions + text overlays are a SECOND layer, composited
@@ -1041,16 +1066,13 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
   const stackWithOcclusion = stackWithSubjects(stack, occludedLayersAt(
     normalizeOcclusionList(params.occlusions), null, (key) => occlusionReaders.has(key) && occlusionTracks.has(key)
   ));
-  const runs = layerRuns(stackWithOcclusion)
-    .filter((run) => run.kind !== 'captions')
-    .map((run) => ({
-      kind: run.kind,
-      beneathCaptions: run.beneathCaptions,
-      segments: run.kind === 'subject'
-        ? buildSubjectMatteSegments(run.entries[0], params, occlusionReaders, occlusionTracks, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox)
-        : buildRunSegments(run.entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources, filePrefix: `run${run.index}` })
-    }))
-    .filter((run) => run.segments.length);
+  const runs = [];
+  for (const run of layerRuns(stackWithOcclusion).filter((r) => r.kind !== 'captions')) {
+    const segments = run.kind === 'subject'
+      ? await buildSubjectMatteSegments(run.entries[0], params, occlusionReaders, occlusionTracks, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox)
+      : await buildRunSegments(run.entries, params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, { imageSources, filePrefix: `run${run.index}` });
+    if (segments.length) runs.push({ kind: run.kind, beneathCaptions: run.beneathCaptions, segments });
+  }
   // The V1.3 names, for the default stack's shape (one stream beneath the
   // captions, one blended manual-caption stream, one plain stream above):
   // kept so callers and tests that speak in them still work.
@@ -1060,7 +1082,7 @@ function buildFullTimelineSegmentsOnGrid(phrases, params, canvasWidth, canvasHei
   // buildObjectEffectSegments). Empty for a project without them.
   let objectEffects = { overlay: [], masks: [], background: [], subjectMask: [] };
   try {
-    objectEffects = buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox, imageSources);
+    objectEffects = await buildObjectEffectSegments(params, canvasWidth, canvasHeight, videoDuration, outDir, blankFile, videoBox, imageSources);
   } catch (err) {
     // An effect that cannot be drawn costs the effects, never the export.
     console.error(`[GraphicsExport] Object effects skipped: ${err.message}`, err.stack);

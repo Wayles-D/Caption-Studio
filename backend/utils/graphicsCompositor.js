@@ -268,6 +268,23 @@ function buildCaptionCompositeStages(baseVideoLabel, textBlendMode, opts = {}) {
   ];
 }
 
+// THE ENCODER. The export used to encode 4K on the CPU (libx264 ultrafast);
+// Intel Quick Sync (h264_qsv) does it on the GPU — the same encoder the
+// editing proxy already uses (proxyVideo.js). Measured on a 4K phone clip
+// against its source (SSIM): CPU ultrafast CRF 23 scored 0.980 at 26MB; the
+// GPU at quality 20 scores 0.988 at 20.5MB — better-looking AND smaller, at
+// the same encode time. If the GPU encoder cannot run on this machine, the export is
+// redone on the CPU, and the CPU is used from then on.
+// BHYND_EXPORT_GPU=0 starts on the CPU.
+const GPU_ENCODER_ARGS = ['-c:v', 'h264_qsv', '-global_quality', '20', '-preset', 'veryfast', '-pix_fmt', 'nv12'];
+const CPU_ENCODER_ARGS = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23'];
+let exportGpuUnavailable = process.env.BHYND_EXPORT_GPU === '0';
+
+/** For tests that compare two exports pixel for pixel: the CPU encoder gives the same output every time, the GPU's varies a little between runs. */
+export function setExportGpu(on) {
+  exportGpuUnavailable = !on;
+}
+
 /**
  * Composites a CONTIGUOUS, gap-filled sequence of timed PNG segments (see
  * graphicsFrameGenerator.js's buildFullTimelineSegments — every phrase's own
@@ -559,11 +576,14 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // timestamps to start at 0, eliminating the concat demuxer's "final
     // entry's duration is a no-op" ambiguity entirely rather than relying on
     // the repeated last-file line above to get it exactly right on its own.
-    const captionTrackStage = `[1:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${totalCaptionDuration.toFixed(3)},setpts=PTS-STARTPTS[captrack]`;
-    // Identical treatment for every extra layer.
-    const extraTrackStages = extraLayers.map((layer) => (
-      `[${layer.inputIndex}:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${layer.timeline.total.toFixed(3)},setpts=PTS-STARTPTS[${layer.label}]`
-    ));
+    //
+    // The format conversion comes BEFORE fps=, so it runs once per still
+    // image rather than once per output frame (fps= then repeats the already
+    // converted frame). Built further down, once the passes are known — see
+    // trackStage / overlayFormatFor.
+    const trackStage = (inputIndex, total, label, format) => (
+      `[${inputIndex}:v]format=${format},fps=${COMPOSITOR_FPS},trim=duration=${total.toFixed(3)},setpts=PTS-STARTPTS[${label}]`
+    );
 
     // The VIDEO's own keyframed transform (see videoTransformFilter.js) —
     // when present, produces a `[vt_out]` stage that REPLACES `[0:v]` as
@@ -659,6 +679,22 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       ...extraLayers.filter((layer) => !layer.beneathCaptions)
     ];
     const chainLabelFor = (i) => (i === passes.length - 1 ? '[outv]' : `[after_layer_${i}]`);
+    // THE FORMAT A STREAM ARRIVES IN. The top pass, when it is a plain
+    // alpha-over, composites in yuv420 (buildCaptionCompositeStages'
+    // finalFormat) — so its stream is made yuva420p up front, once per still
+    // image. Left rgba, overlay converted it again for EVERY output frame: at
+    // 4K that was most of the compositing time (600 conversions of a 33MB
+    // frame for 20 seconds of video, against ~90 unique images). Every other
+    // stream stays rgba — a blend, a subject matte, an intermediate rgb pass
+    // need exactly that.
+    const overlayFormatFor = (label) => {
+      const idx = passes.findIndex((pass) => pass.label === label);
+      if (idx !== passes.length - 1) return 'rgba';
+      const pass = passes[idx];
+      return !pass.isSubject && (!pass.blendMode || pass.blendMode === 'normal') ? 'yuva420p' : 'rgba';
+    };
+    const captionTrackStage = trackStage(1, totalCaptionDuration, 'captrack', overlayFormatFor('captrack'));
+    const extraTrackStages = extraLayers.map((layer) => trackStage(layer.inputIndex, layer.timeline.total, layer.label, overlayFormatFor(layer.label)));
     passes.forEach((pass, idx) => {
       const outLabel = chainLabelFor(idx);
       if (pass.isSubject) {
@@ -726,7 +762,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     const filterScriptPath = path.join(os.tmpdir(), `caption-studio-filter-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
     fs.writeFileSync(filterScriptPath, filterComplex, 'utf8');
 
-    const args = [
+    const argsFor = (encoderArgs) => [
       ...inputArgs,
       '-filter_complex_script', filterScriptPath,
       '-map', '[outv]',
@@ -737,13 +773,13 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       ...(audioMix
         ? ['-map', audioMix.outputLabel, '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
         : ['-map', '0:a?', '-c:a', 'copy']),
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
+      ...encoderArgs,
       outputPath
     ];
 
-    console.log(`Executing FFmpeg Graphics Composite command (${orderedSegments.length} of ${segments.length} segments displayable, via ${1 + extraLayers.length} concat-manifest input(s)): ${ffmpegPath} ${args.slice(0, 4).join(' ')} ... [concat list: ${concatListPath}] ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${args.slice(-8).join(' ')}`);
+    const useGpu = !exportGpuUnavailable;
+    const firstArgs = argsFor(useGpu ? GPU_ENCODER_ARGS : CPU_ENCODER_ARGS);
+    console.log(`Executing FFmpeg Graphics Composite command (${orderedSegments.length} of ${segments.length} segments displayable, via ${1 + extraLayers.length} concat-manifest input(s), ${useGpu ? 'GPU' : 'CPU'} encoder): ${ffmpegPath} ${firstArgs.slice(0, 4).join(' ')} ... [concat list: ${concatListPath}] ... [filter_complex_script: ${filterScriptPath}, ${filterComplex.length} chars] ... ${firstArgs.slice(-8).join(' ')}`);
 
     const cleanupScript = () => {
       try { fs.unlinkSync(filterScriptPath); } catch (cleanupErr) { /* best-effort; a leftover temp file is harmless */ }
@@ -753,25 +789,40 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       });
     };
 
-    const ffmpegProc = spawn(ffmpegPath, args);
-    const stderrLines = [];
-
-    ffmpegProc.stderr.on('data', (data) => {
-      const newLines = data.toString().split('\n');
-      stderrLines.push(...newLines);
-      if (stderrLines.length > 50) stderrLines.splice(0, stderrLines.length - 50);
-    });
-
-    ffmpegProc.on('error', (err) => { cleanupScript(); reject(err); });
-    ffmpegProc.on('close', (code) => {
-      cleanupScript();
-      if (code === 0) {
-        resolve(outputPath);
-      } else {
+    const runOnce = (args) => new Promise((done, fail) => {
+      const ffmpegProc = spawn(ffmpegPath, args);
+      const stderrLines = [];
+      ffmpegProc.stderr.on('data', (data) => {
+        const newLines = data.toString().split('\n');
+        stderrLines.push(...newLines);
+        if (stderrLines.length > 50) stderrLines.splice(0, stderrLines.length - 50);
+      });
+      ffmpegProc.on('error', fail);
+      ffmpegProc.on('close', (code) => {
+        if (code === 0) return done(outputPath);
         const errorSummary = stderrLines.join('\n');
-        console.error(`FFmpeg graphics composite failed. Details:\n${errorSummary}`);
-        reject(new Error(`FFmpeg graphics composite failed with exit code ${code}. Details: ${errorSummary.slice(-500)}`));
-      }
+        const err = new Error(`FFmpeg graphics composite failed with exit code ${code}. Details: ${errorSummary.slice(-500)}`);
+        err.details = errorSummary;
+        fail(err);
+      });
     });
+
+    // The GPU encoder first; if it cannot run here (no Quick Sync, a driver
+    // that refuses the size), the same graph again on the CPU — and the CPU
+    // from then on, so a machine without it pays for the failed try once.
+    runOnce(firstArgs)
+      .catch((err) => {
+        if (!useGpu) throw err;
+        exportGpuUnavailable = true;
+        console.warn(`[GraphicsExport] GPU encoder unavailable, encoding on the CPU from now on: ${String(err.details || err.message).split('\n').filter(Boolean).slice(-1)[0] || ''}`);
+        try { fs.unlinkSync(outputPath); } catch { /* nothing written */ }
+        return runOnce(argsFor(CPU_ENCODER_ARGS));
+      })
+      .then((out) => { cleanupScript(); resolve(out); })
+      .catch((err) => {
+        cleanupScript();
+        console.error(`FFmpeg graphics composite failed. Details:\n${err.details || err.message}`);
+        reject(err);
+      });
   });
 }

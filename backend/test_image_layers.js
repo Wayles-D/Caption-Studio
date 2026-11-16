@@ -110,7 +110,7 @@ const params = { preset: 'caps-white', fontFamily: 'Poppins', fontSize: '20', po
 
 const framesDir = path.join(work, 'frames');
 fs.mkdirSync(framesDir, { recursive: true });
-const built = buildFullTimelineSegments([], params, W, H, DURATION, framesDir, { frameRate: '30', imageSources: sources });
+const built = await buildFullTimelineSegments([], params, W, H, DURATION, framesDir, { frameRate: '30', imageSources: sources });
 assert.ok(built.imagesUnder.length > 0 && built.text.length > 0, 'one layer under the captions, one with the text');
 // Every motion sample sits on the frame grid.
 const offGrid = [...built.text, ...built.imagesUnder]
@@ -199,7 +199,7 @@ console.log('\n[Test 3] Stacking against the captions: under them, or above all 
     const dir = path.join(work, `stack-${layer}`);
     fs.mkdirSync(dir, { recursive: true });
     const p = capParams(layer);
-    const b = buildFullTimelineSegments(phrases, p, W, H, DURATION, dir, { frameRate: '30', imageSources: sources });
+    const b = await buildFullTimelineSegments(phrases, p, W, H, DURATION, dir, { frameRate: '30', imageSources: sources });
     const o = path.join(work, `stack-${layer}.mp4`);
     await compositeGraphicsCaptionTrack(src, b.captions, o, { duration: DURATION, canvasWidth: W, canvasHeight: H, frameRate: '30', textBlendMode: getASSStyleFromConfig(p).textBlendMode, imageUnderSegments: b.imagesUnder, manualCaptionSegments: b.manualCaptions, textElementSegments: b.text });
     const raw = path.join(work, `stack-${layer}.rgb`);

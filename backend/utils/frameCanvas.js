@@ -28,7 +28,10 @@
  * If generation ever becomes async, acquire/release must be scoped to a call
  * rather than shared at module level.
  */
+import fs from 'fs';
+import os from 'os';
 import { createCanvas } from '@napi-rs/canvas';
+import { snapshotPngRows, encodePngRowsAsync } from './pngFast.js';
 
 const pool = new Map();
 let pooling = process.env.BHYND_POOL_CANVAS !== '0';
@@ -56,4 +59,82 @@ export function releaseFrameCanvases() {
 export function setFrameCanvasPooling(on) {
   pooling = !!on;
   if (!pooling) pool.clear();
+}
+
+// --- The frame writer: drawing and saving frames side by side ----------------------
+//
+// Saving a frame was the export's real cost: drawing a 2160x3840 caption frame
+// takes ~7ms, compressing it to PNG ~600ms — measured on this library. And it
+// ran one frame at a time, in a loop that never let the event loop turn. The
+// writer saves frames in the BACKGROUND (canvas.encode runs on libuv's thread
+// pool), up to `concurrency` at once, while the next frame is already being
+// drawn. Each frame gets its own canvas (a frame still saving cannot be drawn
+// over), and canvases go back to a small pool once saved — so at most
+// concurrency + 1 full-size canvases exist at a time. When every slot is busy
+// the drawing WAITS, which is also what lets the event loop turn and release
+// native memory the old synchronous loop piled up.
+//
+// Scoped to ONE build (graphicsFrameGenerator.js creates one per export and
+// flushes it before returning), so nothing outlives the export.
+
+
+// Scratch-grade PNGs (zlib level 1 — pngFast.js): ~140ms a 4K frame against
+// ~1s for the library's own maximum-compression PNG, for files that live
+// seconds. BHYND_SCRATCH_PNG=native goes back to the library's encoder.
+const FAST = process.env.BHYND_SCRATCH_PNG !== 'native';
+const DEFAULT_CONCURRENCY = Math.max(2, Math.min(4, Number(process.env.BHYND_FRAME_CONCURRENCY) || (os.cpus().length - 1)));
+
+export function createFrameWriter({ concurrency = DEFAULT_CONCURRENCY } = {}) {
+  const free = new Map();
+  const pending = new Set();
+  const waiters = [];
+  let inFlight = 0;
+  let failure = null;
+  const keyOf = (w, h) => `${w}x${h}`;
+  return {
+    /** A clean, transparent canvas of this size — waits while every save slot is busy. */
+    async canvas(width, height) {
+      while (inFlight >= concurrency) await new Promise((resolve) => waiters.push(resolve));
+      if (failure) throw failure;
+      const reused = free.get(keyOf(width, height))?.pop();
+      if (reused) {
+        reused.getContext('2d').reset();
+        return reused;
+      }
+      return createCanvas(width, height);
+    },
+    /** Saves `canvas` to `file` as a PNG in the background; the canvas is the writer's again once saved. */
+    write(canvas, file) {
+      inFlight += 1;
+      const key = keyOf(canvas.width, canvas.height);
+      const giveBack = () => {
+        if (!free.has(key)) free.set(key, []);
+        free.get(key).push(canvas);
+      };
+      let encoded;
+      if (FAST) {
+        // The pixels are copied out now, so the canvas is free for the next
+        // frame at once; only the compression waits its turn.
+        encoded = encodePngRowsAsync(snapshotPngRows(canvas));
+        giveBack();
+      } else {
+        encoded = canvas.encode('png').finally(giveBack);
+      }
+      const job = encoded
+        .then((buffer) => fs.promises.writeFile(file, buffer))
+        .catch((err) => { failure = failure || err; })
+        .finally(() => {
+          inFlight -= 1;
+          pending.delete(job);
+          waiters.shift()?.();
+        });
+      pending.add(job);
+    },
+    /** Waits for every frame still saving; throws the first save that failed. Lets the pool go. */
+    async flush() {
+      while (pending.size) await Promise.all([...pending]);
+      free.clear();
+      if (failure) throw failure;
+    }
+  };
 }
