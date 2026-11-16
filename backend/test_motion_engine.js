@@ -98,7 +98,18 @@ console.log('\n[Test 4] The V1.1.0 presets, value for value');
   const legacy = getAnimationTransform({ captionAnimationType: 'slide-up' }, 1.05, 1, 3);
   const d = at('slide-up');
   assert.deepStrictEqual(legacy, { alpha: d.opacity, scale: d.scale, offsetXEm: d.offsetX, offsetYEm: d.offsetY });
-  assert.deepStrictEqual(ANIMATION_TYPES, ['none', 'fade', 'pop', 'scale', 'slide-up', 'slide-down', 'slide-left', 'slide-right']);
+  // The V1.1.0 set, in its order — then the V2.4.0 3D entrances after it.
+  assert.deepStrictEqual(ANIMATION_TYPES, ['none', 'fade', 'pop', 'scale', 'slide-up', 'slide-down', 'slide-left', 'slide-right', 'flip-up', 'flip-down', 'swing-in', 'tilt-in']);
+  // A 3D entrance tilts and fades in, and arrives at rest; it never moves or scales the 2D placement except Tilt In's slight scale.
+  const flip = (q) => getMotionPreset('flip-up').evaluate(q, 1);
+  assert.ok(flip(0).rotateX === 80 && flip(0).opacity === 0, 'flip up starts lying back, invisible');
+  assert.ok(flip(1).rotateX === 0 && flip(1).opacity === 1, 'and ends upright, at rest');
+  assert.ok(getMotionPreset('swing-in').evaluate(0, 1).rotateY === -75, 'swing in starts edge-on');
+  // Every older preset leaves the tilts at zero.
+  ['fade', 'pop', 'scale', 'slide-up'].forEach((id) => {
+    const dd = getMotionPreset(id).evaluate(0.3, 1);
+    assert.ok(dd.rotateX === 0 && dd.rotateY === 0, `${id} has no 3D part`);
+  });
   assert.deepStrictEqual(EASING_TYPES.slice(0, 4), ['linear', 'ease-in', 'ease-out', 'ease-in-out']);
 }
 console.log('✓ Fade, Pop, Scale and the four slides compute what V1.1.0 drew');
@@ -112,7 +123,7 @@ console.log('\n[Test 5] Base + motion = render; the base is never touched');
   assert.deepStrictEqual(out, { x: 120, y: 160, scale: 1.5 * 0.6, rotation: 15, opacity: 0.4 });
   assert.strictEqual(applyMotionToState(base, IDENTITY_DELTA), base, 'no motion: the base itself');
   const both = combineMotionDeltas({ ...IDENTITY_DELTA, scale: 0.5, offsetX: 1 }, { ...IDENTITY_DELTA, scale: 2, opacity: 0.5, offsetX: 2 });
-  assert.deepStrictEqual(both, { opacity: 0.5, scale: 1, offsetX: 3, offsetY: 0, rotation: 0 }, 'two motions compose');
+  assert.deepStrictEqual(both, { opacity: 0.5, scale: 1, offsetX: 3, offsetY: 0, rotation: 0, rotateX: 0, rotateY: 0 }, 'two motions compose');
   assert.strictEqual(combineMotionDeltas(IDENTITY_DELTA, d), d);
   assert.ok(isIdentityDelta({ opacity: 1, scale: 1, offsetX: 0, offsetY: 0, rotation: 0 }));
 }
@@ -145,7 +156,7 @@ console.log('\n[Test 6] Object-agnostic and extensible without touching the engi
   // A preset may return only what it changes; the rest is filled in.
   registerMotionPreset({ id: 'test-tilt', kind: 'entrance', evaluate: (q) => ({ rotation: 30 * (1 - q) }) });
   assert.deepStrictEqual(evaluateMotion(normalizeMotion({ preset: 'test-tilt', duration: 1, easing: 'linear' }), 0.5, { start: 0, end: 2 }),
-    { opacity: 1, scale: 1, offsetX: 0, offsetY: 0, rotation: 15 }, 'a partial preset result is completed');
+    { opacity: 1, scale: 1, offsetX: 0, offsetY: 0, rotation: 15, rotateX: 0, rotateY: 0 }, 'a partial preset result is completed');
 }
 console.log('✓ Same motion, same change, whatever the object; new curves and presets register in; untimed kinds are inert');
 

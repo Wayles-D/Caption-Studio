@@ -27,6 +27,8 @@ import { normalizeMotionList, evaluateMotions, motionActiveSpans } from './motio
 export const SHAPE_KINDS = ['rectangle', 'rounded', 'ellipse', 'line', 'arrow', 'pill', ...ANNOTATION_KINDS];
 export const SHAPE_LABELS = { rectangle: 'Rectangle', rounded: 'Rounded rectangle', ellipse: 'Ellipse', line: 'Line', arrow: 'Arrow', pill: 'Pill', ...ANNOTATION_LABELS };
 export const DEFAULT_SHAPE_DURATION = 3;
+import { resolveTransform3d, drawWithTransform3d, pivotFor, rotatedBounds, transform3dField } from './transform3d.js';
+
 const MIN_SHAPE_DURATION = 0.1;
 const AUTHORED_FRAME_WIDTH = 330;
 
@@ -102,7 +104,10 @@ export function normalizeShapeLayer(raw) {
         opacity: clamp(finite(shadow.opacity, 50), 0, 100)
       }
     },
-    motions: normalizeMotionList(raw.motions)
+    motions: normalizeMotionList(raw.motions),
+    // V2.4.0: its place in simulated 3D space (shared/transform3d.js) — absent
+    // on a shape that never used it, so older projects keep their shape.
+    ...transform3dField(raw.transform3d)
   };
 }
 
@@ -264,20 +269,36 @@ export function drawShapeLayer(ctx, shape, { canvasWidth, canvasHeight, time, cr
   }
 
   const unit = Math.max(Math.min(g.width, g.height), canvasWidth / 40) * SHAPE_MOTION_UNIT;
-  ctx.save();
-  ctx.translate(g.centerX + motion.offsetX * unit, g.centerY + motion.offsetY * unit);
   const rotation = g.rotationDeg + motion.rotation;
-  if (rotation) ctx.rotate((rotation * Math.PI) / 180);
-  if (motion.scale !== 1) ctx.scale(motion.scale, motion.scale);
-  ctx.globalAlpha *= alpha;
   const { shadow } = appearance;
-  if (shadow.enabled && shadow.opacity > 0) {
-    ctx.shadowColor = hexToRgba(shadow.color, shadow.opacity / 100);
-    ctx.shadowBlur = shadow.blur * g.pxScale;
-    ctx.shadowOffsetX = shadow.offsetX * g.pxScale;
-    ctx.shadowOffsetY = shadow.offsetY * g.pxScale;
+  const castsShadow = shadow.enabled && shadow.opacity > 0;
+  const place = (c) => {
+    c.save();
+    c.translate(g.centerX + motion.offsetX * unit, g.centerY + motion.offsetY * unit);
+    if (rotation) c.rotate((rotation * Math.PI) / 180);
+    if (motion.scale !== 1) c.scale(motion.scale, motion.scale);
+    c.globalAlpha *= alpha;
+    if (castsShadow) {
+      c.shadowColor = hexToRgba(shadow.color, shadow.opacity / 100);
+      c.shadowBlur = shadow.blur * g.pxScale;
+      c.shadowOffsetX = shadow.offsetX * g.pxScale;
+      c.shadowOffsetY = shadow.offsetY * g.pxScale;
+    }
+    c.drawImage(off, -g.width / 2, -g.height / 2);
+    c.restore();
+  };
+  // In 3D (V2.4.0): the same flat placement, projected about its pivot — as
+  // an image layer does (shared/transform3d.js). Without 3D, drawn as always.
+  const t3d = resolveTransform3d(shape.transform3d, { motion });
+  if (!t3d) {
+    place(ctx);
+    return g;
   }
-  ctx.drawImage(off, -g.width / 2, -g.height / 2);
-  ctx.restore();
-  return g;
+  const placed = { centerX: g.centerX + motion.offsetX * unit, centerY: g.centerY + motion.offsetY * unit, width: g.width * motion.scale, height: g.height * motion.scale, rotationDeg: rotation };
+  const reach = castsShadow ? (shadow.blur * 2 + Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY))) * g.pxScale : 0;
+  const homography = drawWithTransform3d(ctx, t3d, {
+    pivot: pivotFor(t3d, placed), bounds: rotatedBounds(placed, reach + 2), canvasWidth, canvasHeight, createOffscreenCanvas
+  }, place);
+  // The projection drawn with, for the editor's selection box to follow.
+  return { ...g, homography };
 }

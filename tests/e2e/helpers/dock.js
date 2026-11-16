@@ -23,3 +23,14 @@ export async function toolButton(page, name) {
 export async function openTool(page, name) {
   await (await toolButton(page, name)).click();
 }
+
+/**
+ * Makes sure a tool's panel is OPEN: clicks it only when it isn't already.
+ * (Since V2.3.1 selecting an audio clip or a caption opens its panel by
+ * itself, and a dock button toggles its panel, so a blind click could close
+ * the very panel a test wants to read.)
+ */
+export async function showTool(page, name) {
+  const button = await toolButton(page, name);
+  if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click();
+}

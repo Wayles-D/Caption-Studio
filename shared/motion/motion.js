@@ -239,12 +239,14 @@ export function combineMotionDeltas(a, b) {
     scale: a.scale * b.scale,
     offsetX: a.offsetX + b.offsetX,
     offsetY: a.offsetY + b.offsetY,
-    rotation: a.rotation + b.rotation
+    rotation: a.rotation + b.rotation,
+    rotateX: (a.rotateX || 0) + (b.rotateX || 0),
+    rotateY: (a.rotateY || 0) + (b.rotateY || 0)
   };
 }
 
 export function isIdentityDelta(d) {
-  return d === IDENTITY_DELTA || (d.opacity === 1 && d.scale === 1 && !d.offsetX && !d.offsetY && !d.rotation);
+  return d === IDENTITY_DELTA || (d.opacity === 1 && d.scale === 1 && !d.offsetX && !d.offsetY && !d.rotation && !d.rotateX && !d.rotateY);
 }
 
 /**

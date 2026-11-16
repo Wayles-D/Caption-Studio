@@ -556,7 +556,7 @@ body.light-theme .phone-frame.is-playing {
 }
 
 #video-transform-box .caption-transform-handle.rotate {
-  top: 14px;
+  top: 30px;
 }
 
 /* Same reasoning as the rotate handle above — the toolbar's default
@@ -585,7 +585,7 @@ body.light-theme .phone-frame.is-playing {
 .caption-transform-box.controls-below .caption-transform-toolbar {
   bottom: auto;
   top: 100%;
-  transform: translate(-50%, 8px);
+  transform: translate(-50%, 58px);
 }
 
 .caption-transform-box.controls-below .caption-transform-rotate-line {
@@ -593,15 +593,43 @@ body.light-theme .phone-frame.is-playing {
   bottom: auto;
 }
 
-.caption-transform-box.controls-below .caption-transform-handle.rotate {
-  top: calc(100% + 64px);
+/* THE ROTATE BUTTON, CapCut-style: a round button with a turning arrow,
+   just BELOW the box (where a thumb or a cursor reaches it without covering
+   what is being rotated), not a dot on a stick above it. Drag it round the
+   object to turn it — the turn is relative to where it was grabbed, snapping
+   at right angles (canvasTransform.js's rotationNow). Themed: it reads in
+   light and dark alike. */
+.caption-transform-rotate-line {
+  display: none;
 }
 
-.caption-transform-handle.rotate {
-  top: -64px;
+.caption-transform-handle.rotate,
+.caption-transform-box.controls-below .caption-transform-handle.rotate {
+  top: calc(100% + 34px);
   left: 50%;
+  width: 30px;
+  height: 30px;
+  margin: -15px;
+  display: grid;
+  place-items: center;
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-color-hover);
+  box-shadow: var(--shadow-md);
   cursor: grab;
-  background: var(--accent-color);
+  transition: border-color 120ms, color 120ms;
+}
+
+.caption-transform-handle.rotate:hover {
+  border-color: var(--accent-color);
+}
+
+.caption-transform-handle.rotate:active {
+  cursor: grabbing;
+}
+
+.caption-transform-handle.rotate svg {
+  pointer-events: none;
 }
 
 /* Disambiguates the Animation section's own scope buttons ("This Keyword"/
@@ -3327,6 +3355,15 @@ body.light-theme { color-scheme: light; }
 .timeline-audio-clip-handle.start { left: -6px; border-radius: 4px; }
 .timeline-text-clip-handle.end,
 .timeline-audio-clip-handle.end { right: -6px; border-radius: 4px; }
+
+/* A sound-effect capsule CLIPS its contents (its waveform is drawn edge to
+   edge), and its border covers the edge itself — so a handle straddling the
+   edge kept only a ~5px sliver you could grab, with its grip drawn on the
+   border, where a press landed on the capsule and dragged the sound instead
+   of trimming it. Inside these capsules the handles sit fully within the
+   edge. */
+.timeline-sfx-clip .timeline-audio-clip-handle.start { left: 0; }
+.timeline-sfx-clip .timeline-audio-clip-handle.end { right: 0; }
 
 /* The grip: a short bar of the clip's ink in the handle's middle. */
 .timeline-text-clip-handle::after,

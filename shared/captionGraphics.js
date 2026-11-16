@@ -1309,6 +1309,15 @@ export function drawCaptionFrameForExport(ctx, opts) {
   renderResolvedFrame(ctx, { canvasWidth, canvasHeight, activePhrase, currentTime, cssConfig, params, geometry, createOffscreenCanvas, clearCanvas });
 }
 
+/**
+ * Export counterpart of measureSentenceFrame — the same box, at the
+ * phone-frame reference width drawCaptionFrameForExport draws at (so a text
+ * element's 3D pivot, shared/transform3d.js, sits where the preview's does).
+ */
+export function measureSentenceFrameForExport(ctx, opts) {
+  return measureSentenceFrame(ctx, { ...opts, cssPixelWidth: PHONE_FRAME_CSS_WIDTH });
+}
+
 /* =========================================================================
  * ROLLING STACK
  *

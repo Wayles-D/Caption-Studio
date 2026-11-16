@@ -32,6 +32,10 @@
  * live preview and server export call into (see resolveAnimatableField).
  */
 import { applyEasing, EASING_TYPES } from './motion/easing.js';
+// The 3D tilts (V2.4.0) interpolate like rotation; they are captured into a
+// keyframe only for a target whose 3D is switched on (see the targets' own
+// "add keyframe" — textElements.js, videoTransform.js).
+import { TRANSFORM_3D_KEYFRAME_PROPERTIES } from './transform3d.js';
 
 export const KEYFRAME_PROPERTIES = ['positionX', 'positionY', 'scale', 'rotation', 'opacity'];
 
@@ -57,7 +61,7 @@ export const STYLE_KEYFRAME_PROPERTIES = ['fontFamily', 'fontWeight', 'textCase'
  * value with no in-between, so it holds.
  */
 export function isSteppedProperty(property) {
-  return !KEYFRAME_PROPERTIES.includes(property);
+  return !KEYFRAME_PROPERTIES.includes(property) && !TRANSFORM_3D_KEYFRAME_PROPERTIES.includes(property);
 }
 
 export const DEFAULT_KEYFRAME_EASING = 'ease-out';

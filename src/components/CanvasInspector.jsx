@@ -8,7 +8,9 @@
 import { useEffect, useState } from 'react';
 import { appState, subscribe, updateState } from '../js/state.js';
 import * as composition from '../js/components/composition.js';
-import { getCurrentVideoValue, setVideoValue } from '../js/components/videoTransform.js';
+import { getCurrentVideoValue, setVideoValue, setVideoTransform3d, getCurrentVideoTransform3d } from '../js/components/videoTransform.js';
+import { Transform3DCard } from './Transform3DCard.jsx';
+import { getPropertyTrack } from '../../shared/keyframes.js';
 import { ASPECT_RATIOS, ASPECT_RATIO_LABELS, ASPECT_RATIO_HINTS } from '../../shared/composition.js';
 import {
   CARD, SECTION_TITLE, HINT, GROUP_LABEL, SECONDARY_BTN, TOGGLE_BTN_BASE, TOGGLE_BTN_ON, TOGGLE_BTN_OFF,
@@ -108,6 +110,12 @@ export function CanvasInspector() {
         <Slider id="video-rotation" label="Rotation" value={v('rotation')} min={-180} max={180} step={1} unit="°" api={TRANSFORM_API}
           onLive={(val, opts) => setVideoValue('rotation', val, opts)} />
       </div>
+
+      <Transform3DCard
+        idPrefix="video" api={TRANSFORM_API} value={getCurrentVideoTransform3d()}
+        keyframed={['rotateX', 'rotateY'].some((p) => getPropertyTrack(appState.videoTransform?.keyframes, p).length > 0)}
+        onChange={(fields, o) => setVideoTransform3d(fields, o)}
+      />
 
       <div className={CARD}>
         <span className={SECTION_TITLE}>Video style</span>

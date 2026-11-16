@@ -161,8 +161,18 @@ function onPointerMove(e) {
     const { x: centerX, y: centerY } = videoCenter(rect);
     const angleDeg = (Math.atan2(e.clientY - centerY, e.clientX - centerX) * 180) / Math.PI;
     drag.moved = true;
-    const nextRotation = Math.round(drag.startRotation + (angleDeg - drag.startAngle));
-    setVideoValue('rotation', nextRotation, { recordHistory: false });
+    // CapCut-style, as the other objects turn (canvasTransform.js's
+    // rotationNow): the turn since the press, unwrapped across ±180, snapping
+    // to right angles within a few degrees (Shift: 15° steps).
+    let turn = angleDeg - drag.startAngle;
+    turn = ((((turn + 180) % 360) + 360) % 360) - 180;
+    let next = drag.startRotation + turn;
+    if (e.shiftKey) next = Math.round(next / 15) * 15;
+    else {
+      const right = Math.round(next / 90) * 90;
+      next = Math.abs(next - right) <= 4 ? right : Math.round(next);
+    }
+    setVideoValue('rotation', ((((next + 180) % 360) + 360) % 360) - 180, { recordHistory: false });
   }
 }
 

@@ -30,6 +30,12 @@ import { WordInspector } from './WordInspector.jsx';
 import { HoverSelect } from './HoverSelect.jsx';
 import { previewTextElement } from '../js/hoverPreview.js';
 import { LayerOrderControls } from './LayerControls.jsx';
+import { Transform3DCard } from './Transform3DCard.jsx';
+import { current3d } from '../js/components/transform3dEdit.js';
+import { getPropertyTrack } from '../../shared/keyframes.js';
+
+// One undo step per 3D slider drag, through the element itself.
+const TEXT_ELEMENT_API = { get: textElements.getTextElement, update: textElements.updateTextElement };
 import { getSelectedWordStyleTarget, onSelectionChange, clearTextWordSelection } from '../js/components/canvasTransform.js';
 
 // What "clear this override" means for the element being edited. An overlay
@@ -1009,6 +1015,18 @@ Text you place and time yourself. A <b>caption</b> sits on the Captions lane and
 
           {/* Its place in the one layer stack, alongside pictures and shapes. */}
           <LayerOrderControls id={selected.id} idPrefix="textel" />
+
+          {/* 3D (V2.4.0) — the WHOLE element's place in space, like its layer
+              order: always here while it is selected, including while one of
+              its words is being styled (the word view puts the whole-text
+              style away, and the card used to go with it). The same card an
+              image, a shape and the video have. */}
+          <Transform3DCard
+            idPrefix="textel" layerId={selected.id} api={TEXT_ELEMENT_API}
+            value={current3d(selected, textElements.getPlayheadTime())}
+            keyframed={getPropertyTrack(selected.keyframes, 'rotateX').length > 0 || getPropertyTrack(selected.keyframes, 'rotateY').length > 0}
+            onChange={(fields, o) => textElements.setTextElementTransform3d(selected.id, fields, o)}
+          />
 
           {selected.kind === 'interlude' && (
             <>

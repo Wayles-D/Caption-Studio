@@ -87,6 +87,7 @@ import {
   evaluatePropertyAtTime,
   routeFieldsThroughKeyframes as routeFieldsThroughKeyframesAtTime
 } from '../../../shared/keyframes.js';
+import { cssMatrix3d, invertHomography, projectPoint } from '../../../shared/transform3d.js';
 
 /** Current playhead position — the single source of "what time is it" every keyframe read/write in this module uses. */
 function getPlayheadTime() {
@@ -1255,7 +1256,8 @@ function getDisplayBox() {
     const entry = textElementBoxes.find((b) => b.id === selectedTextElementId);
     if (entry && selectedTextWordIndex != null) {
       const word = getWordCandidates(entry.box).find((w) => w.wordIndex === selectedTextWordIndex);
-      if (word) return ensureMinimumGrabBox(wordBoxFor(word, entry.box));
+      // A word of a text placed in 3D: its box is drawn through the text's projection too.
+      if (word) return { ...ensureMinimumGrabBox(wordBoxFor(word, entry.box)), homography: entry.box.homography || null };
     }
     return getTextElementDisplayBox();
   }
@@ -1337,7 +1339,10 @@ function positionBoxElement() {
   boxEl.style.top = `${cssY}px`;
   boxEl.style.width = `${cssW}px`;
   boxEl.style.height = `${cssH}px`;
-  boxEl.style.transform = box.rotationDeg ? `rotate(${box.rotationDeg}deg)` : '';
+  // A 3D object (V2.4.0): the box is drawn through the object's own
+  // projection (shared/transform3d.js), so it sits on the tilted object.
+  const tilt = box.homography ? cssMatrix3d(box.homography, box.x + box.width / 2, box.y + box.height / 2, scale) : '';
+  boxEl.style.transform = [tilt, box.rotationDeg ? `rotate(${box.rotationDeg}deg)` : ''].filter(Boolean).join(' ');
   boxEl.style.transformOrigin = 'center center';
   if (rotationLabelEl) rotationLabelEl.textContent = `${Math.round(box.rotationDeg || 0)}°`;
   // Counter-rotate the toolbar (scope/animation buttons, reset, the rotation
@@ -1354,7 +1359,8 @@ function positionBoxElement() {
   boxEl.classList.toggle('controls-below', controlsBelow);
   // Not when hosted in the panel: that placement has no box to counter-rotate against.
   if (toolbarEl && !toolbarHost) {
-    const baseTranslate = controlsBelow ? 'translate(-50%, 8px)' : 'translate(-50%, -8px)';
+    // Below the box it clears the rotate button, which sits just under the box.
+    const baseTranslate = controlsBelow ? 'translate(-50%, 58px)' : 'translate(-50%, -8px)';
     toolbarEl.style.transform = box.rotationDeg
       ? `${baseTranslate} rotate(${-box.rotationDeg}deg)`
       : '';
@@ -1820,10 +1826,25 @@ function clearGraphicSelection({ fromState = false } = {}) {
 }
 
 /** Whether a client point is inside one published (rotated) box. */
-function pointInPublishedBox(clientX, clientY, box) {
+/**
+ * The point under the pointer in a box's OWN flat layout, in canvas px. For
+ * an object placed in 3D (V2.4.0) that is the screen point taken back
+ * through its projection — so a click lands on what is SEEN, a tilted
+ * picture or a word on a wall, not on where it would sit flat.
+ */
+function boxPointAtClient(clientX, clientY, box) {
   const { x, y } = clientToCssPoint(clientX, clientY);
   const s = box.cssPxScale || 1;
-  return pointInRotatedBox(x, y, { centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s, rotationDeg: box.rotationDeg });
+  const p = { x: x * s, y: y * s };
+  if (!box.homography) return p;
+  const inv = invertHomography(box.homography);
+  return (inv && projectPoint(inv, p.x, p.y)) || p;
+}
+
+function pointInPublishedBox(clientX, clientY, box) {
+  const p = boxPointAtClient(clientX, clientY, box);
+  const s = box.cssPxScale || 1;
+  return pointInRotatedBox(p.x / s, p.y / s, { centerX: box.centerX / s, centerY: box.centerY / s, width: box.width / s, height: box.height / s, rotationDeg: box.rotationDeg });
 }
 
 /** Whether the point lands on the caption currently on screen. */
@@ -1882,10 +1903,10 @@ function textElementHitAt(entry, clientX, clientY) {
 
   // The point in the block's own (un-rotated) frame, in the canvas px the
   // word rects live in — the same space findWordAtPoint works in.
-  const { x: cssX, y: cssY } = clientToCssPoint(clientX, clientY);
+  const flat = boxPointAtClient(clientX, clientY, box);
   const rad = (-(box.rotationDeg || 0) * Math.PI) / 180;
-  const dx = cssX * scale - box.centerX;
-  const dy = cssY * scale - box.centerY;
+  const dx = flat.x - box.centerX;
+  const dy = flat.y - box.centerY;
   const localX = box.centerX + (dx * Math.cos(rad) - dy * Math.sin(rad));
   const localY = box.centerY + (dx * Math.sin(rad) + dy * Math.cos(rad));
 
@@ -2015,7 +2036,7 @@ function onGraphicPointerMove(e) {
     const ratio = (Math.hypot(x - box.centerX / s, y - box.centerY / s) || 1) / drag.startDist;
     fields = { scale: Math.max(0.05, Math.min(20, t.scale * ratio)) };
   } else {
-    fields = { rotation: Math.round((Math.atan2(y - box.centerY / s, x - box.centerX / s) * 180) / Math.PI + 90) };
+    fields = { rotation: rotationNow(drag, e) };
   }
   graphicApi(drag.graphicType).patchTransform(drag.graphicId, fields, { recordHistory: false });
 }
@@ -2309,7 +2330,7 @@ function onTextWordPointerMove(e) {
     const ratio = (Math.hypot(x - centerX, y - centerY) || 1) / drag.startDist;
     fields = { fontScale: Math.max(0.3, Math.min(4, drag.startScale * ratio)) };
   } else {
-    fields = { rotationDeg: Math.round((Math.atan2(y - centerY, x - centerX) * 180) / Math.PI + 90) };
+    fields = { rotationDeg: rotationNow(drag, e) };
   }
   writeTextWordEntries([drag.textWordIndex], (entry) => ({ ...entry, ...fields }), { recordHistory: false });
 }
@@ -2386,8 +2407,7 @@ function onTextPointerMove(e) {
       fontSize: Math.max(6, Math.min(150, Math.round(drag.startFontSize * ratio)))
     }, { recordHistory: false });
   } else if (drag.kind === 'rotate') {
-    const angleDeg = (Math.atan2(y - centerY, x - centerX) * 180) / Math.PI;
-    setTextElementValues({ rotation: Math.round(angleDeg + 90) }, { recordHistory: false });
+    setTextElementValues({ rotation: rotationNow(drag, e) }, { recordHistory: false });
   }
 }
 
@@ -2532,18 +2552,16 @@ function beginResize(e, corner) {
 function beginRotate(e) {
   if (!currentBox) return;
   const isGroupFanOut = isPartialGroupTransform();
-  let groupMembers = null, groupStart = null, startAngle = null;
+  let groupMembers = null, groupStart = null;
   if (isGroupFanOut) {
     groupMembers = getGroupMemberIndexes(selectedGroupId);
     groupStart = new Map(groupMembers.map((idx) => [idx, effectiveWordValue(idx, 'rotationDeg', 0)]));
-    const box = getDisplayBox();
-    const { x, y } = clientToCssPoint(e.clientX, e.clientY);
-    const scale = box.cssPxScale || 1;
-    startAngle = (Math.atan2(y - box.centerY / scale, x - box.centerX / scale) * 180) / Math.PI;
   }
+  // The turn itself is measured from the press (startRotation, set by the
+  // rotate handle's own press listener) — see rotationNow.
   drag = {
     kind: 'rotate', pointerId: e.pointerId, phrase: currentBox.phrase, wordIndex: selectedWordIndex,
-    groupId: isGroupFanOut ? selectedGroupId : null, groupMembers, groupStart, startAngle
+    groupId: isGroupFanOut ? selectedGroupId : null, groupMembers, groupStart
   };
   e.target.setPointerCapture(e.pointerId);
 }
@@ -2559,6 +2577,56 @@ let pressClient = null;
 // anchor, so it visibly jumped ~half a line), and detached a clicked word
 // from its group.
 const DRAG_DEAD_ZONE_PX = 3;
+
+/*
+ * ROTATING, the CapCut way. The object turns by however far the pointer has
+ * gone ROUND it since the press — never to the pointer's absolute angle.
+ * The absolute angle assumed the handle sat straight above the box, so
+ * grabbing it anywhere else snapped the object round: by 180° when the
+ * controls had flipped below a box near the top of the frame, and by some
+ * odd amount on an object tilted in 3D, whose handle is not where the flat
+ * geometry puts it. Measured round the box's centre AS DRAWN (the selection
+ * box's own on-screen rect), turns accumulate past ±180 without a jump, and
+ * the angle snaps to 0, 90, 180 and 270 when within a few degrees of them
+ * (Shift: 15° steps).
+ */
+const ROTATE_SNAP_DEG = 4;
+
+function pointerAngleOnScreen(clientX, clientY) {
+  const r = boxEl.getBoundingClientRect();
+  return (Math.atan2(clientY - (r.top + r.height / 2), clientX - (r.left + r.width / 2)) * 180) / Math.PI;
+}
+
+/** The rotation the gesture starts from: what the selected thing has now. */
+function rotationAtGrab(d) {
+  if (d.graphicId) return d.startLayer?.transform?.rotation || 0;
+  if (d.textWordIndex != null) return d.startEntry?.rotationDeg || 0;
+  if (d.textElementId) return getTextElementDisplayBox()?.rotationDeg || 0;
+  if (d.wordIndex != null) return effectiveWordValue(d.wordIndex, 'rotationDeg', 0);
+  return currentBox?.rotationDeg || 0;
+}
+
+function startRotation(d, e) {
+  d.rot = { start: rotationAtGrab(d), last: pointerAngleOnScreen(e.clientX, e.clientY), turned: 0 };
+}
+
+/** The rotation now: the start plus the turn so far, snapped, in −180…180. */
+function rotationNow(d, e) {
+  if (!d.rot) startRotation(d, e);
+  const a = pointerAngleOnScreen(e.clientX, e.clientY);
+  let step = a - d.rot.last;
+  if (step > 180) step -= 360;
+  if (step < -180) step += 360;
+  d.rot.last = a;
+  d.rot.turned += step;
+  let v = d.rot.start + d.rot.turned;
+  if (e.shiftKey) v = Math.round(v / 15) * 15;
+  else {
+    const right = Math.round(v / 90) * 90;
+    v = Math.abs(v - right) <= ROTATE_SNAP_DEG ? right : Math.round(v);
+  }
+  return ((((v + 180) % 360) + 360) % 360) - 180;
+}
 
 function onPointerMove(e) {
   if (drag && drag.graphicId) { onGraphicPointerMove(e); return; }
@@ -2659,10 +2727,9 @@ function onPointerMove(e) {
       applyTransformFields({ fontSize: nextFontSize }, { recordHistory: false, phrase: drag.phrase });
     }
   } else if (drag.kind === 'rotate') {
-    const angleDeg = (Math.atan2(y - centerY, x - centerX) * 180) / Math.PI;
+    const rotated = rotationNow(drag, e);
     if (wordIndex != null) {
-      const rotationDeg = Math.round(angleDeg + 90);
-      writeWordFields(wordIndex, { rotationDeg }, { recordHistory: false });
+      writeWordFields(wordIndex, { rotationDeg: rotated }, { recordHistory: false });
     } else if (drag.groupMembers) {
       // Each member's rotation increases by the SAME angle delta from its
       // own starting rotation — keeps members' relative rotation offsets
@@ -2671,14 +2738,13 @@ function onPointerMove(e) {
       // also need to reposition each member — out of scope here since the
       // requirement is only that the transform stays confined to current
       // members, not a specific rotation physics).
-      const angleDelta = angleDeg - drag.startAngle;
+      const angleDelta = rotated - drag.rot.start;
       drag.groupMembers.forEach((idx) => {
         const startRot = drag.groupStart.get(idx) || 0;
         applyWordTransformFields(idx, { rotationDeg: Math.round(startRot + angleDelta) }, { recordHistory: false });
       });
     } else {
-      const rotationDeg = Math.round(angleDeg + 90);
-      applyTransformFields({ rotation: rotationDeg }, { recordHistory: false, phrase: drag.phrase });
+      applyTransformFields({ rotation: rotated }, { recordHistory: false, phrase: drag.phrase });
     }
   }
 }
@@ -2997,9 +3063,8 @@ export function initCanvasTransform() {
       // still moves the element, as it always has.
       let pendingWord = null;
       if (wasSelected) {
-        const { x: cx, y: cy } = clientToCssPoint(e.clientX, e.clientY);
-        const s = textHit.box.cssPxScale || 1;
-        const hitWord = findWordAtPoint(cx * s, cy * s, textHit.box);
+        const at = boxPointAtClient(e.clientX, e.clientY, textHit.box);
+        const hitWord = findWordAtPoint(at.x, at.y, textHit.box);
         pendingWord = hitWord ? hitWord.wordIndex : null;
       }
       if (pendingWord == null && selectedTextWordIndex != null) selectTextWord(null);
@@ -3193,9 +3258,8 @@ export function initCanvasTransform() {
       const drillIn = textSelectedOnCanvas;
       textSelectedOnCanvas = true;
       if (entry && drillIn) {
-        const { x: cx, y: cy } = clientToCssPoint(e.clientX, e.clientY);
-        const s = entry.box.cssPxScale || 1;
-        pendingWord = findWordAtPoint(cx * s, cy * s, entry.box)?.wordIndex ?? null;
+        const at = boxPointAtClient(e.clientX, e.clientY, entry.box);
+        pendingWord = findWordAtPoint(at.x, at.y, entry.box)?.wordIndex ?? null;
       }
       if (selectedTextWordIndex != null && pendingWord === selectedTextWordIndex) {
         beginTextWordDrag(e, 'move');
@@ -3261,6 +3325,7 @@ export function initCanvasTransform() {
       if (selectedGraphicId) beginGraphicDrag(e, 'rotate');
       else if (selectedTextElementId) beginTextRotate(e);
       else beginRotate(e);
+      if (drag && drag.kind === 'rotate') startRotation(drag, e);
     });
   }
 

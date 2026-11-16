@@ -37,6 +37,16 @@ import { initPreviewWorkspace } from '../js/components/preview.js';
 import { BhyndIntro } from './BhyndIntro.jsx';
 import { INTRO_MORPH_SECONDS } from '../js/brand/bhyndIntro.js';
 
+/** The rotate button's icon: a turning arrow, in the button's own ink. */
+function RotateIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  );
+}
+
 export function PreviewStage({
   viewState,
   processingTitle,
@@ -250,7 +260,7 @@ export function PreviewStage({
                 <span className="caption-transform-rotation-label" id="caption-transform-rotation-label" />
               </div>
               <div className="caption-transform-rotate-line" />
-              <div className="caption-transform-handle rotate" id="caption-transform-handle-rotate" />
+              <div className="caption-transform-handle rotate" id="caption-transform-handle-rotate" title="Drag to rotate (Shift: 15° steps)"><RotateIcon /></div>
               <div className="caption-transform-handle tl" data-handle="tl" />
               <div className="caption-transform-handle tr" data-handle="tr" />
               <div className="caption-transform-handle bl" data-handle="bl" />
@@ -286,7 +296,7 @@ export function PreviewStage({
                 <button type="button" className="caption-transform-reset-btn" id="btn-video-transform-reset">Reset</button>
               </div>
               <div className="caption-transform-rotate-line" />
-              <div className="caption-transform-handle rotate" id="video-transform-handle-rotate" />
+              <div className="caption-transform-handle rotate" id="video-transform-handle-rotate" title="Drag to rotate (Shift: 15° steps)"><RotateIcon /></div>
               <div className="caption-transform-handle tl" data-handle="tl" />
               <div className="caption-transform-handle tr" data-handle="tr" />
               <div className="caption-transform-handle bl" data-handle="bl" />

@@ -23,6 +23,7 @@ import {
   evaluatePropertyAtTime
 } from '../../../shared/keyframes.js';
 import { applyVideoPlacement } from './compositionView.js';
+import { transform3dPatch, keyframeSnapshot3d, current3d } from './transform3dEdit.js';
 
 const STATIC_FIELD_BY_PROPERTY = { positionX: 'offsetXPct', positionY: 'offsetYPct', scale: 'scale', rotation: 'rotation', opacity: 'opacity' };
 const PROPERTY_DEFAULTS = { positionX: 0, positionY: 0, scale: 1, rotation: 0, opacity: 100 };
@@ -79,6 +80,8 @@ export function addOrUpdateVideoKeyframeAtPlayhead() {
   const time = getPlayheadTime();
   const valuesPatch = {};
   KEYFRAME_PROPERTIES.forEach((property) => { valuesPatch[property] = getCurrentVideoValue(property); });
+  // With 3D on, the snapshot holds its tilt too (V2.4.0).
+  Object.assign(valuesPatch, keyframeSnapshot3d(existing, time));
   const nextKeyframes = upsertKeyframeEntry(existing.keyframes, time, valuesPatch);
   updateState({ videoTransform: { ...existing, keyframes: nextKeyframes } }, { recordHistory: true });
 }
@@ -166,4 +169,15 @@ export function applyVideoTransformToElement(currentTime) {
   // The video is placed inside the COMPOSITION now (its resting box, then this
   // transform, then its corners/border/shadow) — see compositionView.js.
   applyVideoPlacement(currentTime);
+}
+
+/** The video's 3D settings (V2.4.0) — a keyframed tilt is edited at the playhead (transform3dEdit.js). */
+export function setVideoTransform3d(fields, { recordHistory = true } = {}) {
+  const existing = getOverride();
+  updateState({ videoTransform: { ...existing, ...transform3dPatch(existing, fields, getPlayheadTime()) } }, { recordHistory });
+}
+
+/** The video's 3D settings as they are at the playhead. */
+export function getCurrentVideoTransform3d() {
+  return current3d(getOverride(), getPlayheadTime());
 }
