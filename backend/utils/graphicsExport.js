@@ -148,8 +148,52 @@ function countPngs(dir) {
  *   already that small is exported as it is either way.
  */
 export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, outputVideoPath, framesDir, { exportSize = 'original' } = {}) {
-  const params = styles || {};
   lastGraphicsFailure = null;
+  try {
+    const job = await prepareGraphicsRender(videoPath, words, styles, framesDir, { exportSize });
+    if (!job) return false;
+    const compositeStart = Date.now();
+    await compositeGraphicsCaptionTrack(job.source, job.segments, outputVideoPath, job.compositeOpts);
+    console.log(`[GraphicsExport] ffmpeg compositing: ${Date.now() - compositeStart}ms`);
+    console.log(job.summary);
+    return true;
+  } catch (err) {
+    // The full stack (not just err.message) is the whole point of this log
+    // line — this catch is the ONLY place a graphics-render bug ever
+    // surfaces (see this function's own doc comment: failures here are
+    // swallowed and silently degrade to the ASS pipeline, which can't
+    // reproduce caption transform keyframes or text blend mode at all), so
+    // without it a real bug here is unfindable from logs alone.
+    console.error(`[GraphicsExport] Graphics render failed, falling back to ASS: ${err.message}`);
+    console.error(err.stack);
+    // Also reported back to the client — see recordFailure's doc comment on why
+    // console-only was not enough to diagnose this remotely.
+    return recordFailure('render', err.message, err.stack);
+  } finally {
+    try {
+      fs.rmSync(framesDir, { recursive: true, force: true });
+    } catch (cleanupErr) {
+      console.error(`[GraphicsExport] Failed to remove scratch frames dir ${framesDir}: ${cleanupErr.message}`);
+    }
+  }
+}
+
+/**
+ * Everything an export needs BEFORE ffmpeg composites it: the phrases, the
+ * source to read (the 1080p copy for an 'hd' export), and every layer's frames
+ * drawn into framesDir. Returns { source, segments, compositeOpts, summary } —
+ * compositeGraphicsCaptionTrack(source, segments, out, compositeOpts) is the
+ * export — or false (after recordFailure) when the graphics renderer cannot
+ * take this project. Shared by the one-pass export above and the background
+ * renderer (renderCache.js), which composites the same frames a window at a
+ * time. Throws on a real failure; the caller owns framesDir's cleanup.
+ *
+ * hdSourcePath: where the 1080p copy is kept, when it should outlive this
+ * render (the background renderer makes it once per video); inside framesDir
+ * otherwise.
+ */
+export async function prepareGraphicsRender(videoPath, words, styles, framesDir, { exportSize = 'original', hdSourcePath = null } = {}) {
+  const params = styles || {};
   if (!canGenerateGraphicsFrames(params)) {
     return recordFailure('unsupported-scope', `Preset/mode outside the graphics renderer's scope (captionMode='${params.captionMode}', preset='${params.preset || params.currentPreset}').`);
   }
@@ -185,17 +229,22 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   }
   if (!phrases.length && !hasTextElements) return recordFailure('no-phrases', 'Word list produced no renderable phrases.');
 
-  try {
+  {
     // A 1080p export works from a high-quality 1080p copy of the original —
-    // made here, inside the job's scratch folder (removed with it below).
+    // made here, inside the job's scratch folder (removed with it), unless
+    // the caller keeps one (hdSourcePath) — made once, reused after.
     let source = videoPath;
     if (exportSize === 'hd') {
       const info = await probeVideo(videoPath);
       if (Math.max(info.width, info.height) > PROXY_LONG_SIDE) {
         fs.mkdirSync(framesDir, { recursive: true });
-        source = path.join(framesDir, 'export-source-1080p.mp4');
-        const made = await makeExportSource(videoPath, source, info);
-        console.log(`[GraphicsExport] 1080p source made on the ${made.engine.toUpperCase()} in ${made.seconds}s`);
+        source = hdSourcePath || path.join(framesDir, 'export-source-1080p.mp4');
+        if (!hdSourcePath || !fs.existsSync(hdSourcePath)) {
+          const pending = `${source}.part.mp4`;
+          const made = await makeExportSource(videoPath, pending, info);
+          fs.renameSync(pending, source);
+          console.log(`[GraphicsExport] 1080p source made on the ${made.engine.toUpperCase()} in ${made.seconds}s`);
+        }
       }
     }
     const { width: sourceWidth, height: sourceHeight, duration, hasAudio, frameRate } = await getVideoInfo(source);
@@ -242,8 +291,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     const pngCount = countPngs(framesDir);
     console.log(`[GraphicsExport] Frame generation: ${pngCount} PNGs in ${frameMs}ms (${pngCount ? (frameMs / pngCount).toFixed(0) : 0}ms each)`);
 
-    const compositeStart = Date.now();
-    await compositeGraphicsCaptionTrack(source, segments, outputVideoPath, {
+    const compositeOpts = {
       videoTransform: params.videoTransform,
       // The text layers are laid onto the video's own frame grid (see
       // compositeGraphicsCaptionTrack), so an edge lands on the same frame
@@ -273,28 +321,9 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
       // data the live preview schedules its playback from.
       audio: params.audio,
       hasSourceAudio: hasAudio
-    });
-    console.log(`[GraphicsExport] ffmpeg compositing: ${Date.now() - compositeStart}ms`);
-    console.log(`[GraphicsExport] Rendered ${segments.length} caption segments${manualCaptionSegments.length ? ` + ${manualCaptionSegments.length} manual-caption segments` : ''}${textSegments.length ? ` + ${textSegments.length} text-overlay segments` : ''} via the graphics pipeline (preset: ${params.preset || 'default'}).`);
-    return true;
-  } catch (err) {
-    // The full stack (not just err.message) is the whole point of this log
-    // line — this catch is the ONLY place a graphics-render bug ever
-    // surfaces (see this function's own doc comment: failures here are
-    // swallowed and silently degrade to the ASS pipeline, which can't
-    // reproduce caption transform keyframes or text blend mode at all), so
-    // without it a real bug here is unfindable from logs alone.
-    console.error(`[GraphicsExport] Graphics render failed, falling back to ASS: ${err.message}`);
-    console.error(err.stack);
-    // Also reported back to the client — see recordFailure's doc comment on why
-    // console-only was not enough to diagnose this remotely.
-    return recordFailure('render', err.message, err.stack);
-  } finally {
-    try {
-      fs.rmSync(framesDir, { recursive: true, force: true });
-    } catch (cleanupErr) {
-      console.error(`[GraphicsExport] Failed to remove scratch frames dir ${framesDir}: ${cleanupErr.message}`);
-    }
+    };
+    const summary = (`[GraphicsExport] Rendered ${segments.length} caption segments${manualCaptionSegments.length ? ` + ${manualCaptionSegments.length} manual-caption segments` : ''}${textSegments.length ? ` + ${textSegments.length} text-overlay segments` : ''} via the graphics pipeline (preset: ${params.preset || 'default'}).`);
+    return { source, segments, compositeOpts, summary };
   }
 }
 

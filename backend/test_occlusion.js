@@ -409,5 +409,27 @@ console.log('\n[Test 5] A TEXT layer and an IMAGE layer behind the same person')
   console.log(`  ✓ a word and a picture behind the same person: ${((restored / onHim) * 100).toFixed(1)}% of him restored, ${((kept / besideHim) * 100).toFixed(1)}% of them kept beside him`);
 }
 
+// A WINDOW of the export (V2.3.2 background rendering — renderCache.js's
+// chunks) shows exactly what the whole export shows at the same moment: the
+// subject's matte stream is trimmed to the window like every other layer.
+{
+  const behind = createOcclusion({ trackKey: 'kolive', layerIds: [BAR_ID], start: 0, end: DURATION });
+  const { out: whole, comp, built } = await render('whole', [behind]);
+  const windowed = path.join(work, 'window.mp4');
+  const START = 1;
+  await compositeGraphicsCaptionTrack(SEGMENT, built.captions, windowed, {
+    duration: DURATION, canvasWidth: comp.width, canvasHeight: comp.height, frameRate: String(FPS),
+    composition: comp, layerRuns: built.runs, window: { start: START, frames: FPS }
+  });
+  for (const t of [1.2, 1.5, 1.9]) {
+    const [a, b] = await Promise.all([frameAt(whole, t, comp.width, comp.height), frameAt(windowed, t - START, comp.width, comp.height)]);
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+    const mean = diff / a.length;
+    assert.ok(mean < 4, `the window's frame at ${t}s matches the whole export's (mean difference ${mean.toFixed(2)})`);
+  }
+  console.log('  ✓ a window of the export (a background-render chunk) matches the whole export, occlusion included');
+}
+
 fs.rmSync(work, { recursive: true, force: true });
 console.log('\nAll dynamic occlusion checks passed.');
