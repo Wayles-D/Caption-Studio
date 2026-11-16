@@ -755,7 +755,11 @@ function buildDom(container, options) {
   filmstripRow.className = 'timeline-filmstrip-row';
   const filmstripGutter = document.createElement('div');
   filmstripGutter.className = 'timeline-filmstrip-gutter';
-  filmstripGutter.textContent = 'Video';
+  // The same label element (and so the same icon and spacing) as every lane.
+  const filmstripLabel = document.createElement('span');
+  filmstripLabel.className = 'timeline-lane-label';
+  filmstripLabel.textContent = 'Video';
+  filmstripGutter.appendChild(filmstripLabel);
   // The filmstrip track itself clips its tiles (overflow:hidden gives the
   // strip its rounded outer edge), so keyframe markers can't live INSIDE it —
   // one at t=0 or t=duration would be sliced in half by that clip. This
@@ -1158,9 +1162,29 @@ function refreshPlayhead(currentTime, duration) {
   // panel, it stopped one screen-height down and scrolled away with the
   // content. Measured off the lanes block (the last content child), never off
   // scrollHeight, which would include the line itself and could never shrink.
+  // ...and it ENDS where the last lane ends: it used to run on to the bottom
+  // of the panel, a line hanging below the audio clip in empty space.
   const lanes = document.getElementById('timeline-lanes');
   if (lanes) {
-    const height = Math.max(els.scroll.clientHeight, lanes.offsetTop + lanes.offsetHeight);
+    let lastVisible = null;
+    for (let i = lanes.children.length - 1; i >= 0 && !lastVisible; i--) {
+      if (lanes.children[i].offsetHeight > 0) lastVisible = lanes.children[i];
+    }
+    // The bottom of the last lane's CLIPS when it has any — a clip sits a
+    // little inside its lane, so the lane's own edge left the line poking a
+    // few pixels out below the clip — otherwise the lane's own edge.
+    const scrollTop = els.scroll.getBoundingClientRect().top - els.scroll.scrollTop;
+    let edge = null;
+    if (lastVisible) {
+      const clips = lastVisible.querySelectorAll('.timeline-audio-clip, .timeline-text-clip, .timeline-sfx-clip');
+      clips.forEach((c) => {
+        const r = c.getBoundingClientRect();
+        if (r.height > 0) edge = Math.max(edge ?? -Infinity, r.bottom);
+      });
+      if (edge == null) edge = lastVisible.getBoundingClientRect().bottom;
+    }
+    const bottom = edge != null ? edge - scrollTop : lanes.offsetTop + lanes.offsetHeight;
+    const height = Math.ceil(bottom);
     const value = `${height}px`;
     if (els.playhead.style.height !== value) {
       els.playhead.style.height = value;
@@ -1713,18 +1737,23 @@ function attachClipPointerHandlers(el, clip, kind, mode) {
 
   el.addEventListener('click', (e) => {
     e.stopPropagation();
-    // A plain click (no drag) selects and moves the playhead to the clip, so
-    // what you clicked is on the canvas, ready to edit. Matches what
-    // clicking a keyframe marker already does.
+    // A plain click (no drag) selects the clip and puts the playhead WHERE YOU
+    // CLICKED — inside it, so what you clicked is on the canvas, and a cut
+    // (S) lands exactly there. It used to jump to the clip's start, so a
+    // click in the middle of a long audio clip threw the playhead back to its
+    // beginning. The one exception: a point inside an ENTRANCE (still
+    // invisible) moves on to the first frame it is fully shown.
     if (dragClip?.moved) return;
     const video = getVideo();
     if (!video || mode !== 'move') return;
     const start = clip.startTime ?? clip.start ?? 0;
     const shown = clipShownTime(kind, clip, start);
-    // Already on the visible part of it: leave the playhead where it is.
+    const track = el.parentElement.getBoundingClientRect();
+    const clicked = xToTime(e.clientX - track.left, track.width, video.duration || 0);
     const end = clip.end ?? null;
-    if (shown > start && video.currentTime >= shown && end != null && video.currentTime < end) return;
-    video.currentTime = shown;
+    let target = Math.max(clicked, shown);
+    if (end != null && target >= end) target = Math.max(shown, end - 0.01);
+    video.currentTime = target;
   });
 }
 

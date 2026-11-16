@@ -16,7 +16,10 @@ export const useWorkspaceStore = create(persist(
   (set) => ({
     // Which section of the tool dock is showing its tools.
     dockSection: 'Captions',
-    setDockSection: (dockSection) => set({ dockSection })
+    setDockSection: (dockSection) => set({ dockSection }),
+    // The last export size chosen ('hd' = 1080p, 'original'), preselected next time.
+    exportSize: 'hd',
+    setExportSize: (exportSize) => set({ exportSize: exportSize === 'original' ? 'original' : 'hd' })
   }),
-  { name: 'bhynd-workspace', storage: safeStorage, partialize: (s) => ({ dockSection: s.dockSection }) }
+  { name: 'bhynd-workspace', storage: safeStorage, partialize: (s) => ({ dockSection: s.dockSection, exportSize: s.exportSize }) }
 ));

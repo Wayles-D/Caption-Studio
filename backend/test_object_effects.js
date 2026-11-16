@@ -33,7 +33,11 @@ import { videoBoxToComposition } from '../shared/objects/coordinates.js';
 import { resolveVideoTransformAtTime } from '../shared/videoTransform.js';
 import { prepareVideoComposition } from './utils/videoDecoration.js';
 import { buildFullTimelineSegments } from './utils/graphicsFrameGenerator.js';
-import { compositeGraphicsCaptionTrack } from './utils/graphicsCompositor.js';
+import { compositeGraphicsCaptionTrack, setExportGpu } from './utils/graphicsCompositor.js';
+
+// These checks compare two separate exports pixel for pixel (with and without
+// an effect), so they need an encoder that gives the same output every time.
+setExportGpu(false);
 import { truth } from '../tests/fixtures/objects/make-crossing.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -180,7 +184,7 @@ async function render(name, effects) {
   fs.mkdirSync(framesDir, { recursive: true });
   const comp = prepareVideoComposition({ composition, videoStyle: null, sourceWidth: SW, sourceHeight: SH, outDir: path.join(framesDir, 'composition') });
   const params = { preset: 'caps-white', captionMode: 'sentence', composition, videoTransform, objectEffects: JSON.stringify(effects), objectEffectTracks: JSON.stringify(tracks) };
-  const built = buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
+  const built = await buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
   const out = path.join(work, `${name}.mp4`);
   await compositeGraphicsCaptionTrack(CROSSING, built.captions, out, {
     videoTransform, duration: DURATION, canvasWidth: comp.width, canvasHeight: comp.height, frameRate: String(FPS),

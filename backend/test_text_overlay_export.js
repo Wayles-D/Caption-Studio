@@ -122,7 +122,7 @@ async function render(params, label) {
   fs.mkdirSync(frames, { recursive: true });
   await makeSourceVideo(src);
 
-  const { captions, manualCaptions, text } = buildFullTimelineSegments(phrases, params, WIDTH, HEIGHT, DURATION, frames);
+  const { captions, manualCaptions, text } = await buildFullTimelineSegments(phrases, params, WIDTH, HEIGHT, DURATION, frames);
   await compositeGraphicsCaptionTrack(src, captions, out, {
     duration: DURATION,
     canvasWidth: WIDTH,
@@ -179,7 +179,7 @@ console.log('✓ Overlay rendering is independent of the caption layer');
 console.log('\n[Test 3] A project with no text elements adds no second layer');
 const framesOnly = path.join(work, 'frames-none');
 fs.mkdirSync(framesOnly, { recursive: true });
-const noneLayers = buildFullTimelineSegments(phrases, baseParams(), WIDTH, HEIGHT, DURATION, framesOnly);
+const noneLayers = await buildFullTimelineSegments(phrases, baseParams(), WIDTH, HEIGHT, DURATION, framesOnly);
 assert.deepStrictEqual(noneLayers.text, [], 'text layer must be empty when the project has no text elements');
 assert.ok(noneLayers.captions.length > 0, 'caption segments must still be produced');
 console.log(`✓ ${noneLayers.captions.length} caption segments, 0 text segments — the single-track graph is unchanged`);
@@ -221,7 +221,7 @@ const words = [
 ];
 const wordFrames = path.join(work, 'frames-words');
 fs.mkdirSync(wordFrames, { recursive: true });
-const wordLayers = buildFullTimelineSegments(
+const wordLayers = await buildFullTimelineSegments(
   phrases, baseParams({ textElements: words }), WIDTH, HEIGHT, DURATION, wordFrames
 );
 

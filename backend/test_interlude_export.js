@@ -131,7 +131,7 @@ await makeSourceVideo(src);
 const frames = path.join(work, 'frames');
 fs.mkdirSync(frames, { recursive: true });
 const params = baseParams({ textElements: [A, B, C, D, overlay, manualCaption] });
-const layers = buildFullTimelineSegments(phrases, params, WIDTH, HEIGHT, DURATION, frames);
+const layers = await buildFullTimelineSegments(phrases, params, WIDTH, HEIGHT, DURATION, frames);
 const cutAt = (t) => layers.text.some((s) => Math.abs(s.start - t) < 1e-9);
 [1.0, 2.0, 2.6, 3.4, 3.5, 3.6].forEach((t) => assert.ok(cutAt(t), `a text-layer segment must start exactly at ${t}s`));
 console.log(`✓ ${layers.text.length} text segments, cut at every interlude edge`);
@@ -213,7 +213,7 @@ console.log('\n[Test 7] A caption turned into text keeps its karaoke in the expo
   const fromCaption = textElementFromCaption({ kind: 'overlay', event, words: spoken });
   const kDir = path.join(work, 'frames-karaoke');
   fs.mkdirSync(kDir, { recursive: true });
-  const { text } = buildFullTimelineSegments([], baseParams({ preset: 'bold-yellow', activeWordColor: '#FFFF00', inactiveWordColor: '#FFFFFF', textElements: [fromCaption] }), WIDTH, HEIGHT, DURATION, kDir);
+  const { text } = await buildFullTimelineSegments([], baseParams({ preset: 'bold-yellow', activeWordColor: '#FFFF00', inactiveWordColor: '#FFFFFF', textElements: [fromCaption] }), WIDTH, HEIGHT, DURATION, kDir);
   // Cut at every spoken word edge, exactly as the caption stream is.
   [1.45, 1.5, 1.95, 2.0].forEach((t) => assert.ok(text.some((s) => Math.abs(s.start - t) < 1e-9), `a segment must start at the word edge ${t}s`));
   const { createCanvas, loadImage } = await import('@napi-rs/canvas');
@@ -248,7 +248,7 @@ console.log('\n[Test 8] On a 29.97 fps video, every frame at an off-grid edge ma
   const els = spans.map(([s, e], i) => createInterlude({ id: `intl_n${i}`, start: s, end: e, text: '' }));
   const nDir = path.join(work, 'frames-ntsc');
   fs.mkdirSync(nDir, { recursive: true });
-  const layers2 = buildFullTimelineSegments(phrases, baseParams({ textElements: els }), WIDTH, HEIGHT, DURATION, nDir);
+  const layers2 = await buildFullTimelineSegments(phrases, baseParams({ textElements: els }), WIDTH, HEIGHT, DURATION, nDir);
   const nOut = path.join(work, 'out-ntsc.mp4');
   await compositeGraphicsCaptionTrack(ntscSrc, layers2.captions, nOut, {
     duration: DURATION, canvasWidth: WIDTH, canvasHeight: HEIGHT, frameRate: info.frameRate,

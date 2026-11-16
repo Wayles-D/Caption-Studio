@@ -91,7 +91,7 @@ async function render(label, values) {
     { t: 0.5, easing: 'linear', values: values(0) },
     { t: DURATION - 0.5, easing: 'linear', values: values(1) }
   ] };
-  const { captions, text } = buildFullTimelineSegments(phrases, { ...params, videoTransform }, W, H, DURATION, frames);
+  const { captions, text } = await buildFullTimelineSegments(phrases, { ...params, videoTransform }, W, H, DURATION, frames);
   await compositeGraphicsCaptionTrack(src, captions, out, {
     videoTransform, duration: DURATION, canvasWidth: W, canvasHeight: H, textElementSegments: text
   });
@@ -209,7 +209,7 @@ assert.ok(
 );
 
 const { captions: manyCaptions, text: manyText } =
-  buildFullTimelineSegments(phrases, { ...params, videoTransform: manyTransform }, W, H, DURATION, manyFrames);
+  await buildFullTimelineSegments(phrases, { ...params, videoTransform: manyTransform }, W, H, DURATION, manyFrames);
 await compositeGraphicsCaptionTrack(src, manyCaptions, manyOut, {
   videoTransform: manyTransform, duration: DURATION, canvasWidth: W, canvasHeight: H, textElementSegments: manyText
 });

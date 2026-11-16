@@ -49,8 +49,9 @@ test('dragging along a lane scrubs; pressing a clip does not jump the playhead t
   expect(Math.abs((await playhead(page)) - 5)).toBeLessThan(0.15);
   await page.mouse.up();
 
-  // A clip is not empty space: pressing its middle selects/moves IT, and the
-  // scrub doesn't take over.
+  // A clip is not empty space: pressing it SELECTS it (the scrub doesn't take
+  // over, and the clip doesn't move) — and a click puts the playhead where it
+  // landed on the clip, so a cut (S) can be made exactly there.
   const id = await page.evaluate(() => window.__textElements.addTextElement({ kind: 'overlay', start: 2, text: 'X' }).id);
   await page.evaluate(() => { document.getElementById('preview-video').currentTime = 0; });
   const clip = await page.locator(`[data-clip-id="${id}"]`).boundingBox();
@@ -60,5 +61,11 @@ test('dragging along a lane scrubs; pressing a clip does not jump the playhead t
     const r = document.getElementById('timeline-text-track').getBoundingClientRect();
     return ((x - r.left) / r.width) * document.getElementById('preview-video').duration;
   }, { x: clip.x + clip.width * 0.7 });
-  expect(Math.abs(t - pressedAt)).toBeGreaterThan(0.2);
+  expect(Math.abs(t - pressedAt)).toBeLessThan(0.1);
+  const after = await page.evaluate((i) => ({
+    selected: window.__appState.selectedTextElementId,
+    start: window.__appState.textElements.find((e) => e.id === i).start
+  }), id);
+  expect(after.selected).toBe(id);
+  expect(after.start).toBe(2);
 });

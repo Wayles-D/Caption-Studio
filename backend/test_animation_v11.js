@@ -109,7 +109,7 @@ const params = {
 
 const framesDir = path.join(work, 'frames');
 fs.mkdirSync(framesDir, { recursive: true });
-const layers = buildFullTimelineSegments([], params, WIDTH, HEIGHT, DURATION, framesDir, { frameRate: info.frameRate });
+const layers = await buildFullTimelineSegments([], params, WIDTH, HEIGHT, DURATION, framesDir, { frameRate: info.frameRate });
 
 // Inside each entrance, the export samples ON the 30 fps grid.
 const offGrid = layers.text.filter((s) => (s.start > 1.0 && s.start < 1.3) || (s.start > 0.5 && s.start < 0.75))

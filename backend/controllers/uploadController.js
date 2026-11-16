@@ -9,7 +9,7 @@ import { analyzeTranscript } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
 import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor, getLastGraphicsFailure, compositeTextElementsOnto } from '../utils/graphicsExport.js';
-import { startProxyJob, getProxyJob } from '../utils/proxyVideo.js';
+import { startProxyJob, getProxyJob, probeVideo } from '../utils/proxyVideo.js';
 
 /**
  * After an ASS fallback burn: puts the project's text elements (overlays,
@@ -431,6 +431,8 @@ export async function workspaceCleanup(req, res) {
  */
 export async function regenerateCaptions(req, res, next) {
   const { baseName, words, styles } = req.body;
+  // 'hd' = 1080p (fast, what TikTok/Reels play), anything else = the original's own size.
+  const exportSize = req.body.exportSize === 'hd' ? 'hd' : 'original';
 
   if (!baseName) {
     return res.status(400).json({ success: false, message: 'baseName is required.' });
@@ -534,7 +536,7 @@ export async function regenerateCaptions(req, res, next) {
     const renderStart = Date.now();
     const resolvedStyle = resolveASSStyle(styles || {});
     const usedGraphicsRenderer = await tryRenderCaptionsWithGraphics(
-      videoPath, words, styles, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName)
+      videoPath, words, styles, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName), { exportSize }
     );
     if (!usedGraphicsRenderer) {
       if (resolvedStyle.textBlendMode && resolvedStyle.textBlendMode !== 'normal') {
@@ -717,6 +719,36 @@ function proxyStatusPayload(baseName) {
     ...(job.status === 'ready' ? { url: `/output/${baseName}_proxy.mp4` } : {}),
     ...(job.status === 'failed' ? { error: job.error } : {})
   };
+}
+
+/**
+ * GET /api/upload/info/:baseName — the ORIGINAL video's size (as displayed,
+ * rotation applied) and length, measured from the uploaded file itself. The
+ * editor asks before an export: whether there is a 1080p/original choice to
+ * make at all, and how big each file will be. It cannot tell from its own
+ * preview — that is often the 1080p proxy, under a blob: address once the
+ * project has been reopened.
+ */
+export async function videoInfo(req, res) {
+  const { baseName } = req.params;
+  if (!isValidJobId(baseName)) {
+    return res.status(400).json({ success: false, message: 'Not a valid job ID.' });
+  }
+  const uploadsDir = path.join(__dirname, '../uploads');
+  const original = ['.mp4', '.mov', '.webm'].map((ext) => path.join(uploadsDir, baseName + ext)).find((f) => fs.existsSync(f));
+  if (!original) return res.status(404).json({ success: false, message: 'The original video is not on the server right now.' });
+  try {
+    const info = await probeVideo(original);
+    const sideways = info.rotation === 90 || info.rotation === 270;
+    return res.status(200).json({
+      success: true,
+      width: sideways ? info.height : info.width,
+      height: sideways ? info.width : info.height,
+      duration: info.duration
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'The video could not be read.' });
+  }
 }
 
 /** GET /api/upload/proxy/:baseName — polled by the editor until the proxy is ready. */

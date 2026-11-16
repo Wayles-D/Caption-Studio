@@ -1280,7 +1280,9 @@ body.light-theme .phone-frame.is-playing {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
-  padding-left: 10px;
+  /* Lined up with every other lane's chevron, icon and name. */
+  align-items: center;
+  gap: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1415,7 +1417,8 @@ body.light-theme .phone-frame.is-playing {
   min-height: 42px;
 }
 
-.timeline-audio-lane .timeline-lane-label {
+.timeline-audio-lane .timeline-lane-label,
+.timeline-filmstrip-row .timeline-lane-label {
   width: auto;
   min-width: 34px;
   color: var(--text-secondary);
@@ -3005,7 +3008,8 @@ body.light-theme .phone-frame.is-playing {
 }
 
 /* Lane names: an icon each, so a lane is recognisable at a glance. */
-.timeline-audio-lane .timeline-lane-label {
+.timeline-audio-lane .timeline-lane-label,
+.timeline-filmstrip-row .timeline-lane-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3014,7 +3018,8 @@ body.light-theme .phone-frame.is-playing {
   white-space: nowrap;
 }
 
-.timeline-audio-lane .timeline-lane-label::before {
+.timeline-audio-lane .timeline-lane-label::before,
+.timeline-filmstrip-row .timeline-lane-label::before {
   content: '';
   width: 13px;
   height: 13px;
@@ -3072,10 +3077,12 @@ body.light-theme .phone-frame.is-playing {
     margin: 0 -10px;
     padding: 6px 10px;
   }
-  .timeline-audio-lane .timeline-lane-label {
+  .timeline-audio-lane .timeline-lane-label,
+.timeline-filmstrip-row .timeline-lane-label {
     font-size: 11px;
   }
-  .timeline-audio-lane .timeline-lane-label::before {
+  .timeline-audio-lane .timeline-lane-label::before,
+.timeline-filmstrip-row .timeline-lane-label::before {
     display: none;
   }
 }
@@ -3134,7 +3141,8 @@ body.light-theme {
 .timeline-audio-lane[data-lane="effects"] { --clip: var(--lane-effects); }
 
 /* The lane's icon wears its colour. */
-.timeline-audio-lane .timeline-lane-label::before {
+.timeline-audio-lane .timeline-lane-label::before,
+.timeline-filmstrip-row .timeline-lane-label::before {
   background: var(--clip, currentColor);
   opacity: 1;
 }
@@ -3558,4 +3566,27 @@ body.light-theme { color-scheme: light; }
 
 @media (prefers-reduced-motion: reduce) {
   .word-actions { animation: none; }
+}
+
+/* The Video row's icon: neutral, not a lane colour — it is the footage
+   itself, not a kind of clip laid over it. */
+.timeline-filmstrip-row[data-lane="video"] {
+  --clip: var(--text-secondary);
+  --lane-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='6' width='12' height='12' rx='2'/%3E%3Cpath d='m15 10 6-3v10l-6-3'/%3E%3C/svg%3E");
+}
+
+/* STACKING ORDER on the timeline, bottom to top: clips (a selected or
+   hovered one lifts to 5 for its handles), then the PLAYHEAD, then the
+   sticky name column. The playhead was at 3, so a selected or hovered clip
+   drew over the line — it vanished behind the audio clip. It never takes a
+   click (pointer-events: none), so nothing under it changes. */
+.timeline-playhead {
+  z-index: 7;
+}
+
+.timeline-ruler-gutter,
+.timeline-filmstrip-gutter,
+.timeline-lane-gutter,
+.timeline-audio-lane .timeline-lane-gutter {
+  z-index: 8;
 }

@@ -17,6 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import { canGenerateGraphicsFrames, buildFullTimelineSegments } from './graphicsFrameGenerator.js';
 import { compositeGraphicsCaptionTrack, getVideoInfo } from './graphicsCompositor.js';
+import { probeVideo, makeExportSource, PROXY_LONG_SIDE } from './proxyVideo.js';
 import { normalizeImageLayerList } from '../../shared/imageLayer.js';
 import { normalizeShapeLayerList } from '../../shared/shapeLayer.js';
 import { loadImageSources } from './imageAssets.js';
@@ -95,7 +96,7 @@ export async function compositeTextElementsOnto(videoPath, styles, outputPath, f
   try {
     const { width, height, duration, frameRate } = await getVideoInfo(videoPath);
     const imageSources = await loadImageSources(imageAssetsNeeded(params));
-    const { captions, runs, objectEffects } = buildFullTimelineSegments([], params, width, height, duration, framesDir, { frameRate, imageSources });
+    const { captions, runs, objectEffects } = await buildFullTimelineSegments([], params, width, height, duration, framesDir, { frameRate, imageSources });
     await compositeGraphicsCaptionTrack(videoPath, captions, outputPath, {
       frameRate,
       duration,
@@ -139,7 +140,14 @@ function countPngs(dir) {
   return n;
 }
 
-export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, outputVideoPath, framesDir) {
+/**
+ * @param {object} [options]
+ * @param {'original'|'hd'} [options.exportSize='original'] - 'hd' renders at
+ *   1080p (long side 1920): the original is shrunk once, at high quality,
+ *   on the GPU, and everything after runs at a quarter of the pixels. A video
+ *   already that small is exported as it is either way.
+ */
+export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, outputVideoPath, framesDir, { exportSize = 'original' } = {}) {
   const params = styles || {};
   lastGraphicsFailure = null;
   if (!canGenerateGraphicsFrames(params)) {
@@ -178,7 +186,19 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
   if (!phrases.length && !hasTextElements) return recordFailure('no-phrases', 'Word list produced no renderable phrases.');
 
   try {
-    const { width: sourceWidth, height: sourceHeight, duration, hasAudio, frameRate } = await getVideoInfo(videoPath);
+    // A 1080p export works from a high-quality 1080p copy of the original —
+    // made here, inside the job's scratch folder (removed with it below).
+    let source = videoPath;
+    if (exportSize === 'hd') {
+      const info = await probeVideo(videoPath);
+      if (Math.max(info.width, info.height) > PROXY_LONG_SIDE) {
+        fs.mkdirSync(framesDir, { recursive: true });
+        source = path.join(framesDir, 'export-source-1080p.mp4');
+        const made = await makeExportSource(videoPath, source, info);
+        console.log(`[GraphicsExport] 1080p source made on the ${made.engine.toUpperCase()} in ${made.seconds}s`);
+      }
+    }
+    const { width: sourceWidth, height: sourceHeight, duration, hasAudio, frameRate } = await getVideoInfo(source);
     // THE COMPOSITION (shared/composition.js): everything below renders at the
     // CANVAS's size, which is the source's own unless the project reshaped it.
     // The video is placed into it, with its decoration, by the compositor's
@@ -204,7 +224,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     // cannot tell you which to fix, and they have opposite remedies.
     const frameStart = Date.now();
     const { captions: segments, keywordCaptions, runs: layerRuns, manualCaptions: manualCaptionSegments, text: textSegments, objectEffects } =
-      buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, {
+      await buildFullTimelineSegments(phrases, params, width, height, duration, framesDir, {
         frameRate,
         imageSources,
         // Where the video rests on the canvas: object effects place their
@@ -223,7 +243,7 @@ export async function tryRenderCaptionsWithGraphics(videoPath, words, styles, ou
     console.log(`[GraphicsExport] Frame generation: ${pngCount} PNGs in ${frameMs}ms (${pngCount ? (frameMs / pngCount).toFixed(0) : 0}ms each)`);
 
     const compositeStart = Date.now();
-    await compositeGraphicsCaptionTrack(videoPath, segments, outputVideoPath, {
+    await compositeGraphicsCaptionTrack(source, segments, outputVideoPath, {
       videoTransform: params.videoTransform,
       // The text layers are laid onto the video's own frame grid (see
       // compositeGraphicsCaptionTrack), so an edge lands on the same frame

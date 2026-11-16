@@ -15,7 +15,7 @@
  * involved — exactly the case where controlled React state is the simpler
  * choice rather than the riskier one.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAudioStore } from '../store/audioStore.js';
 import { useEditorStore } from '../store/editorStore.js';
 import * as audio from '../js/components/audioTimeline.js';
@@ -92,6 +92,38 @@ const ApplyAllIcon = () => (
   </svg>
 );
 
+/**
+ * A list row in its LANE's colour (style.css's --lane-sfx / --lane-audio), so
+ * a sound effect here is the same sky blue as on the timeline and an audio
+ * track the same green: a stripe down its side, a light tint, and the colour
+ * as its outline when selected. Selected from the timeline, it scrolls into
+ * view.
+ */
+// Written out in full — Tailwind only generates classes it can read whole.
+const LANE_ROW = {
+  sfx: {
+    base: 'border-l-[var(--lane-sfx)] bg-[color-mix(in_srgb,var(--lane-sfx)_7%,var(--bg-input))]',
+    selected: 'border-[var(--lane-sfx)] shadow-[0_0_0_1px_var(--lane-sfx)]'
+  },
+  audio: {
+    base: 'border-l-[var(--lane-audio)] bg-[color-mix(in_srgb,var(--lane-audio)_7%,var(--bg-input))]',
+    selected: 'border-[var(--lane-audio)] shadow-[0_0_0_1px_var(--lane-audio)]'
+  }
+};
+
+function laneRowClass(lane, isSelected) {
+  const c = LANE_ROW[lane];
+  return `flex flex-col gap-2 p-2.5 pl-3 rounded-[var(--radius-sm)] border border-l-[3px] cursor-pointer ${c.base} ${isSelected ? c.selected : 'border-[var(--border-color)]'}`;
+}
+
+function useScrollIntoViewWhen(on) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (on) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [on]);
+  return ref;
+}
+
 /** One row of the Sound Effects list. */
 function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVolume, pickedCount }) {
   const definition = getSoundDefinition(event.soundId);
@@ -105,11 +137,12 @@ function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVol
       ? findMomentForSoundKey(s.semanticEvents, event.eventKey)
       : null) || null
   );
+  const rowRef = useScrollIntoViewWhen(isSelected);
   return (
     <div
-      className={`flex flex-col gap-2 p-2.5 rounded-[var(--radius-sm)] border bg-[var(--bg-input)] cursor-pointer
-        ${isSelected ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}
-        ${event.enabled ? '' : 'opacity-50'}`}
+      ref={rowRef}
+      data-sfx-row={event.id}
+      className={`${laneRowClass('sfx', isSelected)} ${event.enabled ? '' : 'opacity-50'}`}
       onClick={() => audio.selectClip(event.id)}
     >
       <div className="flex items-center gap-2">
@@ -120,7 +153,7 @@ function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVol
             apply would hit. */}
         <input
           type="checkbox"
-          className="shrink-0 w-3.5 h-3.5 accent-[var(--accent-color)] cursor-pointer"
+          className="shrink-0 w-3.5 h-3.5 accent-[var(--lane-sfx)] cursor-pointer"
           checked={isPicked}
           data-sfx-pick={event.id}
           title="Include this effect when applying a change to several"
@@ -211,11 +244,12 @@ function SoundEventRow({ event, isSelected, isPicked, onTogglePicked, onApplyVol
 /** One row of the Audio Tracks list. */
 function AudioTrackRow({ track, isSelected }) {
   const duration = getAudioTrackDuration(track);
+  const rowRef = useScrollIntoViewWhen(isSelected);
   return (
     <div
-      className={`flex flex-col gap-2 p-2.5 rounded-[var(--radius-sm)] border bg-[var(--bg-input)] cursor-pointer
-        ${isSelected ? 'border-[var(--accent-color)]' : 'border-[var(--border-color)]'}
-        ${track.enabled ? '' : 'opacity-50'}`}
+      ref={rowRef}
+      data-audio-row={track.id}
+      className={`${laneRowClass('audio', isSelected)} ${track.enabled ? '' : 'opacity-50'}`}
       onClick={() => audio.selectClip(track.id)}
     >
       <div className="flex items-center gap-2">
@@ -511,8 +545,8 @@ export function AudioInspector({ onNotify }) {
       {/* --- Sound effects --- */}
       <div className={CARD}>
         <div className="flex items-center justify-between">
-          <span className={SECTION_TITLE}>Sound Effects</span>
-          <span className="text-[12px] font-semibold text-[var(--accent-color)]">{soundEvents.length}</span>
+          <span className={`${SECTION_TITLE} flex items-center gap-2`}><i className="w-2 h-2 rounded-full bg-[var(--lane-sfx)]" aria-hidden="true" />Sound Effects</span>
+          <span className="text-[12px] font-semibold text-[var(--lane-sfx)]">{soundEvents.length}</span>
         </div>
         {soundEvents.length === 0
           ? <p className={HINT}>None yet. Use the <strong>+</strong> on the timeline’s SFX strip to place one at the playhead.</p>
@@ -546,8 +580,8 @@ export function AudioInspector({ onNotify }) {
       {/* --- Audio tracks --- */}
       <div className={CARD}>
         <div className="flex items-center justify-between">
-          <span className={SECTION_TITLE}>Audio Tracks</span>
-          <span className="text-[12px] font-semibold text-[var(--accent-color)]">{audioTracks.length}</span>
+          <span className={`${SECTION_TITLE} flex items-center gap-2`}><i className="w-2 h-2 rounded-full bg-[var(--lane-audio)]" aria-hidden="true" />Audio Tracks</span>
+          <span className="text-[12px] font-semibold text-[var(--lane-audio)]">{audioTracks.length}</span>
         </div>
         {audioTracks.length === 0 && (
           <p className={HINT}>Background music, ambience or a voiceover. Import a file to lay one under the video.</p>

@@ -40,7 +40,11 @@ import { buildSegmentation, encodeRLE, createMaskReader, maskFrame, DEFAULT_SEGM
 import { videoToComposition } from '../shared/objects/coordinates.js';
 import { prepareVideoComposition } from './utils/videoDecoration.js';
 import { buildFullTimelineSegments } from './utils/graphicsFrameGenerator.js';
-import { compositeGraphicsCaptionTrack } from './utils/graphicsCompositor.js';
+import { compositeGraphicsCaptionTrack, setExportGpu } from './utils/graphicsCompositor.js';
+
+// These checks compare separate exports pixel for pixel (with and without an
+// effect), so they need an encoder that gives the same output every time.
+setExportGpu(false);
 import { truth, visibleMask, W as FW, H as FH } from '../tests/fixtures/objects/make-crossing.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -265,7 +269,7 @@ async function render(name, effects, { segmentations = payload } = {}) {
     objectEffectTracks: JSON.stringify({ kolive: track }),
     objectSegmentations: JSON.stringify(segmentations)
   };
-  const built = buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
+  const built = await buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
   const out = path.join(work, `${name}.mp4`);
   await compositeGraphicsCaptionTrack(SEGMENT, built.captions, out, {
     videoTransform, duration: DURATION, canvasWidth: comp.width, canvasHeight: comp.height, frameRate: String(FPS),
@@ -463,7 +467,7 @@ console.log('\n[Test 7] An IMAGE background, and TWO subjects isolated at once')
     objectEffectTracks: JSON.stringify({ kolive: track, kshirt: shirtTrack }),
     objectSegmentations: JSON.stringify(both)
   };
-  const built = buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
+  const built = await buildFullTimelineSegments([], params, comp.width, comp.height, DURATION, framesDir, { frameRate: String(FPS), videoBox: { boxWidth: comp.boxWidth, boxHeight: comp.boxHeight } });
   const out = path.join(work, 'two.mp4');
   await compositeGraphicsCaptionTrack(SEGMENT, built.captions, out, {
     videoTransform, duration: DURATION, canvasWidth: comp.width, canvasHeight: comp.height, frameRate: String(FPS),

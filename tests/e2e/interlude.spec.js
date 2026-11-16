@@ -389,7 +389,10 @@ test('clicking an interlude on the timeline shows its text, not just its backgro
   const settled = await sample(page);
   expect(settled.dark).toBeGreaterThan(500);
   expect(shown.dark).toBeGreaterThan(settled.dark * 0.95);
-  // The playhead already on the visible interlude: a click leaves it there.
+  // A click puts the playhead WHERE IT LANDS on the clip (here its middle) —
+  // past the entrance, so the text is showing.
   await page.locator(`[data-clip-id="${el.id}"]`).click();
-  expect(await page.evaluate(() => document.getElementById('preview-video').currentTime)).toBeCloseTo(3, 6);
+  const mid = (el.start + el.end) / 2;
+  const t2 = await page.evaluate(() => document.getElementById('preview-video').currentTime);
+  expect(Math.abs(t2 - mid)).toBeLessThan(0.15);
 });

@@ -139,6 +139,47 @@ function proxyOnCpu(input, output, info, onSpawn) {
   ], onSpawn);
 }
 
+/**
+ * THE 1080p EXPORT'S SOURCE — the original shrunk to 1080p once, at a HIGH
+ * quality (the proxy's own is tuned for editing, not for publishing): the
+ * export then runs on it at a quarter of the pixels. Same GPU route as the
+ * proxy (decode, rotate and scale never leave the GPU — measured at ~0.4x
+ * real time for 4K portrait HEVC), software if Quick Sync is unavailable.
+ */
+export async function makeExportSource(input, output, info) {
+  const t0 = Date.now();
+  const audio = info.hasAudio ? ['-c:a', 'aac', '-b:a', '192k'] : ['-an'];
+  const { w, h } = storedTargetSize(info);
+  if (!gpuUnavailable) {
+    try {
+      const transpose = qsvTranspose(info.rotation);
+      await run([
+        '-hide_banner', '-loglevel', 'error', '-y',
+        '-noautorotate', '-display_rotation:v:0', '0',
+        '-hwaccel', 'qsv', '-hwaccel_output_format', 'qsv',
+        '-i', input,
+        '-vf', `vpp_qsv=${transpose ? `transpose=${transpose}:` : ''}w=${w}:h=${h}`,
+        '-c:v', 'h264_qsv', '-global_quality', '16',
+        ...audio, ...CONTAINER, output
+      ]);
+      return { engine: 'gpu', seconds: +((Date.now() - t0) / 1000).toFixed(1) };
+    } catch (err) {
+      gpuUnavailable = true;
+      console.warn(`[Export] GPU unavailable for the 1080p source, using software: ${String(err.message).split('\n')[0]}`);
+      try { fs.unlinkSync(output); } catch { /* nothing written */ }
+    }
+  }
+  const long = PROXY_LONG_SIDE;
+  await run([
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-i', input,
+    '-vf', `scale='if(gt(iw,ih),min(${long},iw),-2)':'if(gt(iw,ih),-2,min(${long},ih))'`,
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-pix_fmt', 'yuv420p',
+    ...audio, ...CONTAINER, output
+  ]);
+  return { engine: 'cpu', seconds: +((Date.now() - t0) / 1000).toFixed(1) };
+}
+
 /** Whether the GPU path has failed on this server — remembered, so it is not retried on every upload. */
 let gpuUnavailable = process.env.BHYND_PROXY_GPU === '0';
 
