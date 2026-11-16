@@ -47,7 +47,7 @@ function toFrameRate(fps) {
   return Number.isInteger(fps) ? String(fps) : String(Math.round(fps * 1000)) + '/1000';
 }
 /** A rational string ("30000/1001", "25") as a number. */
-function frameRateValue(rate) {
+export function frameRateValue(rate) {
   if (!rate) return null;
   const [n, d = '1'] = String(rate).split('/');
   const v = Number(n) / Number(d);
@@ -285,6 +285,11 @@ export function setExportGpu(on) {
   exportGpuUnavailable = !on;
 }
 
+/** Which encoder an export would use now — chunks from different encoders are never joined (renderCache.js). */
+export function exportEncoderInUse() {
+  return exportGpuUnavailable ? 'cpu' : 'gpu';
+}
+
 /**
  * Composites a CONTIGUOUS, gap-filled sequence of timed PNG segments (see
  * graphicsFrameGenerator.js's buildFullTimelineSegments — every phrase's own
@@ -352,6 +357,18 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // to the original fixed 50 when the rate is unknown.
     const COMPOSITOR_FPS = frameRateValue(videoTransformOpts.frameRate) ? videoTransformOpts.frameRate : '50';
     const FRAME_QUANTUM = 1 / (frameRateValue(COMPOSITOR_FPS) || 50);
+
+    // A WINDOW of the export ({ start, frames } — renderCache.js's chunks):
+    // the video is read from `start`, every layer stream is trimmed to the
+    // same stretch of ITS timeline, and exactly `frames` frames come out at
+    // the fixed rate, with no audio — the chunks are joined end to end and
+    // the sound is mixed once, over the whole, afterwards. `start` sits on
+    // the frame grid, so a chunk's frames are the ones the whole export has.
+    const renderWindow = videoTransformOpts.window || null;
+    const windowSeconds = renderWindow ? renderWindow.frames * FRAME_QUANTUM : null;
+    const trimTo = (total) => (renderWindow
+      ? `trim=start=${renderWindow.start.toFixed(6)}:duration=${windowSeconds.toFixed(6)}`
+      : `trim=duration=${total.toFixed(3)}`);
 
     // Quantize each segment's BOUNDARY onto the frame grid, then take each
     // duration as the difference between consecutive boundaries — rather than
@@ -517,7 +534,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     }
 
     const concatListPath = writeConcatManifest(orderedSegments);
-    const inputArgs = ['-y', '-i', inputVideoPath, '-f', 'concat', '-safe', '0', '-i', concatListPath];
+    const inputArgs = ['-y', ...(renderWindow ? ['-ss', renderWindow.start.toFixed(6)] : []), '-i', inputVideoPath, '-f', 'concat', '-safe', '0', '-i', concatListPath];
     extraLayers.forEach((layer, idx) => {
       // Input 0 is the video, 1 the caption track, so extra layers start at 2.
       layer.inputIndex = idx + 2;
@@ -582,7 +599,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // converted frame). Built further down, once the passes are known — see
     // trackStage / overlayFormatFor.
     const trackStage = (inputIndex, total, label, format) => (
-      `[${inputIndex}:v]format=${format},fps=${COMPOSITOR_FPS},trim=duration=${total.toFixed(3)},setpts=PTS-STARTPTS[${label}]`
+      `[${inputIndex}:v]format=${format},fps=${COMPOSITOR_FPS},${trimTo(total)},setpts=PTS-STARTPTS[${label}]`
     );
 
     // The VIDEO's own keyframed transform (see videoTransformFilter.js) —
@@ -593,7 +610,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // zero change to every existing export.
     const { videoTransform, duration, canvasWidth, canvasHeight, textBlendMode } = videoTransformOpts;
     const videoTransformChain = (duration && canvasWidth && canvasHeight)
-      ? buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition ? { ...composition, inputs: decorationInputs } : null)
+      ? buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition ? { ...composition, inputs: decorationInputs } : null, { absoluteFrom: renderWindow ? renderWindow.start : null })
       : null;
     const baseVideoLabel = videoTransformChain ? videoTransformChain.outputLabel : '[0:v]';
 
@@ -631,7 +648,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     if (subjectStreams.background && subjectStreams.subjectMask) {
       const p = (name) => `[subj_${name}]`;
       const track = (stream, label, extra = '') => (
-        `[${stream.inputIndex}:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${stream.timeline.total.toFixed(3)},setpts=PTS-STARTPTS${extra}${label}`
+        `[${stream.inputIndex}:v]fps=${COMPOSITOR_FPS},format=rgba,${trimTo(stream.timeline.total)},setpts=PTS-STARTPTS${extra}${label}`
       );
       compositeStages.push(
         track(subjectStreams.background, p('bg')),
@@ -652,7 +669,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     blurMasks.forEach((mask, i) => {
       const p = (name) => `[fxb${i}_${name}]`;
       compositeStages.push(
-        `[${mask.inputIndex}:v]fps=${COMPOSITOR_FPS},format=rgba,trim=duration=${mask.timeline.total.toFixed(3)},setpts=PTS-STARTPTS,alphaextract${p('m')}`,
+        `[${mask.inputIndex}:v]fps=${COMPOSITOR_FPS},format=rgba,${trimTo(mask.timeline.total)},setpts=PTS-STARTPTS,alphaextract${p('m')}`,
         `${currentBase}split=2${p('base')}${p('src')}`,
         `${p('src')}format=gbrp,gblur=sigma=${mask.sigma},format=rgba${p('blur')}`,
         `${p('blur')}${p('m')}alphamerge${p('masked')}`,
@@ -728,7 +745,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // with no audio edits is byte-identical to one from before this feature
     // existed, including still being a stream copy rather than a re-encode.
     const { audio, hasSourceAudio } = videoTransformOpts;
-    const audioMix = (audio && duration)
+    const audioMix = (audio && duration && !renderWindow)
       ? buildAudioMixGraph(audio, { duration, hasSourceAudio: hasSourceAudio !== false, firstInputIndex: nextInputIndex })
       : null;
     if (audioMix) inputArgs.push(...audioMix.inputArgs);
@@ -738,7 +755,9 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
       captionTrackStage,
       ...extraTrackStages,
       ...compositeStages,
-      ...(audioMix ? audioMix.filterStages : [])
+      ...(audioMix ? audioMix.filterStages : []),
+      // A window comes out at exactly the fixed rate, frame for frame.
+      ...(renderWindow ? [`[outv]fps=${COMPOSITOR_FPS}[outwin]`] : [])
     ].join(';');
 
     // The filter graph is written to a FILE and passed via
@@ -765,12 +784,13 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     const argsFor = (encoderArgs) => [
       ...inputArgs,
       '-filter_complex_script', filterScriptPath,
-      '-map', '[outv]',
+      '-map', renderWindow ? '[outwin]' : '[outv]',
+      ...(renderWindow ? ['-frames:v', String(renderWindow.frames), '-an'] : []),
       // With an audio mix, the mixed stream replaces the source's own audio
       // map and must be encoded (it is raw filter output, so there is nothing
       // to copy). AAC 192k stereo is the safe, universally-playable choice for
       // an MP4 and is well above transparent for speech plus effects.
-      ...(audioMix
+      ...(renderWindow ? [] : audioMix
         ? ['-map', audioMix.outputLabel, '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
         : ['-map', '0:a?', '-c:a', 'copy']),
       ...encoderArgs,
@@ -791,6 +811,12 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
 
     const runOnce = (args) => new Promise((done, fail) => {
       const ffmpegProc = spawn(ffmpegPath, args);
+      // The background renderer runs its chunks below normal priority, so
+      // editing and playback stay smooth while it works (renderCache.js).
+      if (videoTransformOpts.lowPriority) {
+        try { os.setPriority(ffmpegProc.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* not allowed here: normal priority */ }
+      }
+      videoTransformOpts.onSpawn?.(ffmpegProc);
       const stderrLines = [];
       ffmpegProc.stderr.on('data', (data) => {
         const newLines = data.toString().split('\n');

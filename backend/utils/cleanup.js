@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { dropRenderCache } from './renderCache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +50,10 @@ export function cleanupJobAssets(baseName) {
       console.error(`[Pipeline] [${baseName}] Cleanup: Failed to remove graphics frames directory - ${err.message}`);
     }
   }
+
+  // The background render's chunks (renderCache.js): stop it, and remove them.
+  dropRenderCache(baseName);
+  fs.rm(path.join(outputDir, `${baseName}_render_cache`), { recursive: true, force: true }, () => {});
 
   // Try checking multiple extensions for the initial video video file.
   const videoExtensions = ['.mp4', '.mov', '.webm'];

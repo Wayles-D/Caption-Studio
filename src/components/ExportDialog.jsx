@@ -41,6 +41,14 @@ function resolutionName(width, height) {
   return `${Math.min(width, height)}p`;
 }
 
+/** The background render's line for the size it is preparing (backgroundRender.js). */
+function prerenderLine(prerender, value) {
+  if (!prerender || prerender.exportSize !== value || !(prerender.total > 0)) return null;
+  if (prerender.upToDate && prerender.ready === prerender.total) return { ready: true, text: 'Ready — exports in seconds' };
+  if (!prerender.ready) return prerender.rendering ? { ready: false, text: 'Preparing in the background — starting…' } : null;
+  return { ready: false, text: `Preparing in the background — ${prerender.ready} of ${prerender.total} parts done` };
+}
+
 function choicesFor(source) {
   const seconds = source?.duration || 0;
   const known = source?.width > 0 && source?.height > 0;
@@ -50,13 +58,15 @@ function choicesFor(source) {
       value: 'hd',
       title: '1080p — Fast',
       detail: 'What TikTok, Instagram Reels and YouTube Shorts play. Exports about 3× faster.',
-      size: formatMB(estimateMB(hdPixels, seconds))
+      size: formatMB(estimateMB(hdPixels, seconds)),
+      prepared: prerenderLine(source?.prerender, 'hd')
     },
     {
       value: 'original',
       title: known ? `Original quality (${resolutionName(source.width, source.height)})` : 'Original quality',
       detail: 'Full resolution — for YouTube, a master copy or your archive. Takes noticeably longer.',
-      size: known ? formatMB(estimateMB(source.width * source.height, seconds)) : null
+      size: known ? formatMB(estimateMB(source.width * source.height, seconds)) : null,
+      prepared: prerenderLine(source?.prerender, 'original')
     }
   ];
 }
@@ -132,6 +142,12 @@ export function ExportDialog({ open, source, onCancel, onExport }) {
                     )}
                   </span>
                   <span className="text-[12px] leading-snug text-[var(--text-secondary)]">{c.detail}</span>
+                  {c.prepared && (
+                    <span className="mt-1 flex items-center gap-1.5 text-[11.5px] font-medium text-[var(--text-primary)]" data-export-prepared={c.value}>
+                      <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.prepared.ready ? 'bg-[var(--text-primary)]' : 'border border-[var(--text-secondary)]'}`} />
+                      {c.prepared.text}
+                    </span>
+                  )}
                 </span>
               </button>
             );

@@ -9,7 +9,8 @@ import { analyzeTranscript } from '../services/keywordAnalysisService.js';
 import { groupWordsToPhrases } from '../utils/phraseGrouper.js';
 import { cleanupJobAssets } from '../utils/cleanup.js';
 import { tryRenderCaptionsWithGraphics, graphicsFramesDirFor, getLastGraphicsFailure, compositeTextElementsOnto } from '../utils/graphicsExport.js';
-import { startProxyJob, getProxyJob, probeVideo } from '../utils/proxyVideo.js';
+import { startProxyJob, getProxyJob, probeVideo, PROXY_LONG_SIDE } from '../utils/proxyVideo.js';
+import { requestPrerender, renderFromChunks, prerenderStatus, renderCacheDirFor } from '../utils/renderCache.js';
 
 /**
  * After an ASS fallback burn: puts the project's text elements (overlays,
@@ -535,9 +536,21 @@ export async function regenerateCaptions(req, res, next) {
     console.log(`[Regenerate] [${baseName}] Stage: Video Re-Rendering Started`);
     const renderStart = Date.now();
     const resolvedStyle = resolveASSStyle(styles || {});
-    const usedGraphicsRenderer = await tryRenderCaptionsWithGraphics(
-      videoPath, words, styles, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName), { exportSize }
-    );
+    // From the background render's chunks when it can (renderCache.js) —
+    // most of the work is usually done already — else in one pass, as before.
+    let usedGraphicsRenderer = false;
+    try {
+      usedGraphicsRenderer = await renderFromChunks(baseName, {
+        videoPath, words, styles, exportSize: await effectiveExportSize(videoPath, exportSize), dir: renderCacheDirFor(outputDir, baseName), outputPath: renderedVideoPath
+      });
+    } catch (err) {
+      console.warn(`[Regenerate] [${baseName}] Rendering from the background chunks failed, rendering in one pass: ${err.message}`);
+    }
+    if (!usedGraphicsRenderer) {
+      usedGraphicsRenderer = await tryRenderCaptionsWithGraphics(
+        videoPath, words, styles, renderedVideoPath, graphicsFramesDirFor(outputDir, baseName), { exportSize }
+      );
+    }
     if (!usedGraphicsRenderer) {
       if (resolvedStyle.textBlendMode && resolvedStyle.textBlendMode !== 'normal') {
         console.warn(`[Regenerate] [${baseName}] Text Blend Mode '${resolvedStyle.textBlendMode}' requested but falling back to the ASS/libass pipeline, which does not support it — captions will render opaque.`);
@@ -744,11 +757,52 @@ export async function videoInfo(req, res) {
       success: true,
       width: sideways ? info.height : info.width,
       height: sideways ? info.width : info.height,
-      duration: info.duration
+      duration: info.duration,
+      // How far the background render has got (null before it starts).
+      prerender: prerenderStatus(baseName)
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'The video could not be read.' });
   }
+}
+
+/**
+ * The export size that actually differs: 'hd' of a video that is already
+ * 1080p or smaller is the original — and must be named so, or the background
+ * render (rendered as one) and the export (asked as the other) would never
+ * match. The original's size is probed once per file.
+ */
+const longSides = new Map();
+async function effectiveExportSize(videoPath, exportSize) {
+  if (exportSize !== 'hd') return 'original';
+  let long = longSides.get(videoPath);
+  if (long === undefined) {
+    try { const info = await probeVideo(videoPath); long = Math.max(info.width, info.height); } catch { long = Infinity; }
+    longSides.set(videoPath, long);
+  }
+  return long > PROXY_LONG_SIDE ? 'hd' : 'original';
+}
+
+/**
+ * POST /api/upload/prerender — { baseName, words, styles, exportSize }: the
+ * project as it stands, sent by the editor when the edits settle. The export
+ * is rendered from it in the background (renderCache.js); this returns at once.
+ */
+export async function prerender(req, res) {
+  const { baseName, words, styles } = req.body || {};
+  const exportSize = req.body?.exportSize === 'hd' ? 'hd' : 'original';
+  if (!isValidJobId(baseName)) return res.status(400).json({ success: false, message: 'Not a valid job ID.' });
+  if (!Array.isArray(words) || !styles || typeof styles !== 'object') return res.status(400).json({ success: false, message: 'words and styles are required.' });
+  // An export is running for this job: it has the project already.
+  if (activeJobIds.has(baseName)) return res.status(202).json({ success: true, status: prerenderStatus(baseName) });
+  const videoPath = findUploadedVideo(baseName);
+  if (!videoPath) return res.status(404).json({ success: false, message: 'The original video is not on the server right now.' });
+  const size = await effectiveExportSize(videoPath, exportSize);
+  // Still being edited: keep the original past the 30-minute sweep (cleanup.js),
+  // which goes by the file's age — the background render and the export need it.
+  try { const now = new Date(); fs.utimesSync(videoPath, now, now); } catch { /* best effort */ }
+  requestPrerender(baseName, { videoPath, words, styles, exportSize: size, dir: renderCacheDirFor(outputDir, baseName) });
+  return res.status(202).json({ success: true, status: prerenderStatus(baseName) });
 }
 
 /** GET /api/upload/proxy/:baseName — polled by the editor until the proxy is ready. */

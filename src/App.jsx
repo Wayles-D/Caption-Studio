@@ -52,9 +52,8 @@ import * as rhythmApi from './js/components/rhythm.js';
 import * as objectsApi from './js/components/objectDetection.js';
 import * as trackingApi from './js/components/objectTracking.js';
 import * as objectEffectsApi from './js/components/objectEffects.js';
-import { prepareObjectEffectsForExport } from './js/components/objectEffects.js';
 import * as occlusionApi from './js/components/occlusion.js';
-import { prepareOcclusionsForExport } from './js/components/occlusion.js';
+import { exportPayload, startBackgroundRender, backgroundRenderSettled } from './js/backgroundRender.js';
 import * as segmentationApi from './js/components/objectSegmentation.js';
 import * as tamSegmentationApi from './js/components/tamSegmentation.js';
 import * as imageLayersApi from './js/components/imageLayers.js';
@@ -669,6 +668,8 @@ export function App() {
   // where it was. Uploading a new video starts a new project.
   useEffect(() => {
     startProjectAutosave();
+    // The export renders in the background as the edits settle (V2.3.2).
+    startBackgroundRender(API_BASE_URL);
     let cancelled = false;
     restoreSavedProject({ demoVideoUrl: DEFAULT_DEMO_VIDEO_URL }).then((restored) => {
       if (cancelled || !restored) return;
@@ -928,20 +929,12 @@ export function App() {
       // A reopened (or long-edited) project: the server may have purged its
       // copy of the video or of imported audio — send them back first.
       await ensureServerHasProjectFiles(API_BASE_URL);
-      // Subject isolation sends the object's MASKS with the style params —
-      // they live in IndexedDB and may not be in memory yet.
-      await prepareObjectEffectsForExport();
-      await prepareOcclusionsForExport();
+      // The same payload the background render was sent (backgroundRender.js):
+      // the server reuses its chunks only for the identical project.
       const result = await fetchJson(`${API_BASE_URL}/api/upload/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          baseName: appState.baseName,
-          words: editedWords,
-          styles: getStyleParams(),
-          // 'hd' = a 1080p file (fast), 'original' = the source's own size.
-          exportSize
-        })
+        body: JSON.stringify(await exportPayload(exportSize))
       });
       console.log('Regeneration result:', result);
 
@@ -1073,7 +1066,16 @@ export function App() {
     let info = null;
     try {
       const r = await fetchJson(`${API_BASE_URL}/api/upload/info/${encodeURIComponent(appState.baseName)}`);
-      if (r?.width > 0 && r?.height > 0) info = { width: r.width, height: r.height, duration: r.duration || appState.videoDuration || 0 };
+      if (r?.width > 0 && r?.height > 0) {
+        info = {
+          width: r.width,
+          height: r.height,
+          duration: r.duration || appState.videoDuration || 0,
+          // How far the background render has got — only meaningful when it
+          // has the project as it is now.
+          prerender: backgroundRenderSettled() ? r.prerender || null : null
+        };
+      }
     } catch { /* unknown: the choice is offered anyway */ }
     // Only a video KNOWN to be 1080p or smaller skips the question.
     if (info && Math.max(info.width, info.height) <= 1920) { handleDownloadVideo('original'); return; }

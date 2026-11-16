@@ -298,7 +298,7 @@ function buildCompositionLayerStages(inLabel, outLabel, comp) {
  * @returns {{filterComplex: string, outputLabel: string}|null} null when the transform is the plain identity
  *   and the composition adds nothing (no filter needed — `[0:v]` should be used as-is).
  */
-export function buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition = null) {
+export function buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition = null, { absoluteFrom = null } = {}) {
   // A composition that is just the source frame, undecorated, renders exactly
   // as before it existed — every pre-V1.5 project takes this path.
   const comp = composition && !composition.passthrough ? composition : null;
@@ -457,7 +457,23 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
   // inherits the source's exact frame rate, PTS and frame count, so no
   // resampling happens at all and there is no generator/video timing mismatch
   // to drift. It also removes the need to guess the generator's `duration`.
-  const activeStages = [`[0:v]trim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},setpts=PTS-STARTPTS,split=2[vt_active_src][vt_bg_src]`];
+  // A WINDOW of the export (renderCache.js's chunks, `absoluteFrom` = where
+  // the window starts): the video arrives seeked to that point, its first
+  // frame at 0. Its timestamps are put back to the source's own here, so this
+  // chain — built with the WHOLE duration and every keyframe — is exactly the
+  // one-pass export's, and the window's frames come out as that export's do.
+  // The animated part is then measured from trimStart itself rather than
+  // from its first frame (which, in a window starting after trimStart, is the
+  // window's start), and the result is re-based to start at 0 at the end.
+  const windowed = absoluteFrom != null;
+  const sourceUses = (trimStart > EPS ? 1 : 0) + 1 + (trimEnd < duration - EPS ? 1 : 0);
+  const sources = windowed ? Array.from({ length: sourceUses }, (_, i) => `[vt_in${i}]`) : Array(sourceUses).fill('[0:v]');
+  const windowStages = windowed ? [`[0:v]setpts=PTS+${formatNum(absoluteFrom)}/TB,split=${sourceUses}${sources.join('')}`] : [];
+  const preSource = trimStart > EPS ? sources[0] : null;
+  const activeSource = sources[trimStart > EPS ? 1 : 0];
+  const postSource = sources[sources.length - 1];
+  const activeRebase = windowed ? `setpts=PTS-${formatNum(trimStart)}/TB` : 'setpts=PTS-STARTPTS';
+  const activeStages = [`${activeSource}trim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},${activeRebase},split=2[vt_active_src][vt_bg_src]`];
   // drawbox with t=fill paints the whole frame black in place — the cheap way
   // to get "a black frame carrying this exact source frame's timing". The
   // explicit scale keeps the documented guarantee that the composite canvas is
@@ -598,25 +614,30 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
   // continuous animation, and losing keyframes/blend-mode/every other
   // graphics-only effect at once when it silently falls back to ASS.
   const preStages = trimStart > EPS
-    ? [`[0:v]trim=start=0:end=${trimStart.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p,setsar=1[vt_pre]`]
+    ? [`${preSource}trim=start=0:end=${trimStart.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p,setsar=1[vt_pre]`]
     : [];
   const postStages = trimEnd < duration - EPS
-    ? [`[0:v]trim=start=${trimEnd.toFixed(3)}:end=${duration.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p,setsar=1[vt_post]`]
+    ? [`${postSource}trim=start=${trimEnd.toFixed(3)}:end=${duration.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p,setsar=1[vt_post]`]
     : [];
 
   const segmentLabels = [...(preStages.length ? ['[vt_pre]'] : []), '[vt_active_out]', ...(postStages.length ? ['[vt_post]'] : [])];
 
+  // A window's output is re-based to start at 0 (the layers composited over
+  // it start there), through one more label.
+  const joined = windowed ? '[vt_joined]' : '[vt_out]';
   const filterComplex = [
+    ...windowStages,
     ...preStages,
     ...activeStages,
     ...postStages,
-    ...(segmentLabels.length > 1 ? [`${segmentLabels.join('')}concat=n=${segmentLabels.length}:v=1:a=0[vt_out]`] : [])
+    ...(segmentLabels.length > 1 ? [`${segmentLabels.join('')}concat=n=${segmentLabels.length}:v=1:a=0${joined}`] : []),
+    ...(windowed ? [`${segmentLabels.length > 1 ? joined : '[vt_active_out]'}setpts=PTS-STARTPTS[vt_out]`] : [])
   ].join(';');
 
   // With no pre/post segment at all (the animated window spans the whole
   // clip), there's nothing to concat — vt_active_out IS the final output,
   // just needs relabeling so the caller always gets a stable `[vt_out]`.
-  if (segmentLabels.length === 1) {
+  if (segmentLabels.length === 1 && !windowed) {
     return { filterComplex: filterComplex.replace('[vt_active_out]', '[vt_out]'), outputLabel: '[vt_out]' };
   }
 

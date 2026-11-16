@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'path';
 import { uploadVideo, uploadAudio, uploadImage } from '../utils/multerConfig.js';
-import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent, sessionStatus, restoreVideo, restoreAudio, uploadImageAsset, restoreImage, proxyStatus, videoInfo } from '../controllers/uploadController.js';
+import { uploadAndExtractAudio, workspaceCleanup, regenerateCaptions, uploadAudioAsset, analyzeContent, sessionStatus, restoreVideo, restoreAudio, uploadImageAsset, restoreImage, proxyStatus, videoInfo, prerender } from '../controllers/uploadController.js';
 
 const router = Router();
 
@@ -43,6 +43,8 @@ router.post('/cleanup', workspaceCleanup);
 router.get('/proxy/:baseName', proxyStatus);
 // The original's size and length, for the export's 1080p/original choice.
 router.get('/info/:baseName', videoInfo);
+// The project as it stands, rendered in the background so Export only joins.
+router.post('/prerender', prerender);
 
 /**
  * @route   POST /api/upload/regenerate
