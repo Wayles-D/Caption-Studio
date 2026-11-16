@@ -13,7 +13,8 @@ import { isShapeLayerActive, drawShapeLayer } from '../../../shared/shapeLayer.j
 import { resolveLayerStack, layerRuns } from '../../../shared/visualLayers.js';
 import { getImagePicture, setImagePictureListener } from './imageLayers.js';
 import { resolvePhraseParams } from '../../../shared/captionTransform.js';
-import { getActiveTextElements, textElementToPhrase, resolveTextElementParams, orderForCompositing, resolveInterludeBackground } from '../../../shared/textElement.js';
+import { getActiveTextElements, textElementToPhrase, resolveTextElementParams, orderForCompositing, resolveInterludeBackground, resolveTextElementTransform3d, textElement3dPlacement } from '../../../shared/textElement.js';
+import { drawWithTransform3d } from '../../../shared/transform3d.js';
 import { initVideoCanvasControls } from './videoCanvasControls.js';
 import { initCompositionView } from './compositionView.js';
 import { initRhythm } from './rhythm.js';
@@ -246,7 +247,8 @@ function paintImageLayer(ctx, layer, currentTime, prepped) {
     box: {
       x: g.centerX - g.width / 2, y: g.centerY - g.height / 2, width: g.width, height: g.height,
       centerX: g.centerX, centerY: g.centerY, rotationDeg: g.rotationDeg,
-      cssPxScale: prepped.targetW / prepped.cssPixelWidth
+      cssPxScale: prepped.targetW / prepped.cssPixelWidth,
+      homography: g.homography || null
     }
   };
 }
@@ -284,6 +286,19 @@ function paintTextElement(ctx, element, currentTime, baseStyleParams, prepped) {
     cssConfig,
     params
   };
+  // In 3D (V2.4.0): drawn flat as always, then projected about its pivot —
+  // the exporter's exact steps (graphicsFrameGenerator.js). The box stays the
+  // flat one (what the handles edit), with the projection for it to follow.
+  const t3d = resolveTextElementTransform3d(element, params, currentTime);
+  if (t3d) {
+    const flatBox = measureSentenceFrame(ctx, frame);
+    if (!flatBox) return null;
+    const { pivot, bounds } = textElement3dPlacement(t3d, flatBox, prepped.targetW);
+    const h = drawWithTransform3d(ctx, t3d, {
+      pivot, bounds, canvasWidth: prepped.targetW, canvasHeight: prepped.targetH, createOffscreenCanvas: makeOffscreenCanvas
+    }, (c) => drawCaptionFrame(c, { ...frame, createOffscreenCanvas: makeOffscreenCanvas, clearCanvas: false }));
+    return { id: element.id, box: { ...flatBox, homography: h } };
+  }
   drawCaptionFrame(ctx, { ...frame, createOffscreenCanvas: makeOffscreenCanvas, clearCanvas: false });
   // Measured with the SAME ctx it was just painted into, so the box matches the pixels.
   const box = measureSentenceFrame(ctx, frame);
@@ -304,7 +319,8 @@ function paintShapeLayer(ctx, shape, currentTime, prepped) {
     box: {
       x: g.centerX - g.width / 2, y: g.centerY - g.height / 2, width: g.width, height: g.height,
       centerX: g.centerX, centerY: g.centerY, rotationDeg: g.rotationDeg,
-      cssPxScale: prepped.targetW / prepped.cssPixelWidth
+      cssPxScale: prepped.targetW / prepped.cssPixelWidth,
+      homography: g.homography || null
     }
   };
 }

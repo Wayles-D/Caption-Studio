@@ -610,7 +610,7 @@ export function compositeGraphicsCaptionTrack(inputVideoPath, segments, outputPa
     // zero change to every existing export.
     const { videoTransform, duration, canvasWidth, canvasHeight, textBlendMode } = videoTransformOpts;
     const videoTransformChain = (duration && canvasWidth && canvasHeight)
-      ? buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition ? { ...composition, inputs: decorationInputs } : null, { absoluteFrom: renderWindow ? renderWindow.start : null })
+      ? buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition ? { ...composition, inputs: decorationInputs } : null, { absoluteFrom: renderWindow ? renderWindow.start : null, frameRate: frameRateValue(COMPOSITOR_FPS) })
       : null;
     const baseVideoLabel = videoTransformChain ? videoTransformChain.outputLabel : '[0:v]';
 

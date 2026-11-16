@@ -13,6 +13,8 @@ import { appState, subscribe } from '../js/state.js';
 import * as imageLayers from '../js/components/imageLayers.js';
 import { ANIMATION_TYPES, EASING_TYPES } from '../../shared/captionAnimation.js';
 import { LayerOrderControls } from './LayerControls.jsx';
+import { Transform3DCard } from './Transform3DCard.jsx';
+import { normalizeTransform3d } from '../../shared/transform3d.js';
 import { CARD, SECTION_TITLE, HINT, GROUP_LABEL, SELECT, PRIMARY_BTN, SECONDARY_BTN, ROW_BASE, titleCase, round, Slider as SharedSlider, Toggle, ColorRow, TimeField } from './LayerInspectorControls.jsx';
 
 // One undo step per slider drag, through this panel's own object.
@@ -65,6 +67,9 @@ function ImageEditor({ layer }) {
         <Slider id="img-rotation" layerId={id} label="Rotation" value={t.rotation} min={-180} max={180} step={1} unit="°" onLive={(v, o) => transform({ rotation: v }, o)} />
         <Slider id="img-opacity" layerId={id} label="Opacity" value={t.opacity} min={0} max={100} step={1} unit="%" onLive={(v, o) => transform({ opacity: v }, o)} />
       </div>
+
+      <Transform3DCard idPrefix="img" layerId={id} api={IMAGE_API} value={normalizeTransform3d(layer.transform3d)}
+        onChange={(fields, o) => imageLayers.patchImageLayer(id, 'transform3d', fields, o)} />
 
       <div className={CARD}>
         <span className={SECTION_TITLE}>Crop</span>

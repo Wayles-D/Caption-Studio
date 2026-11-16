@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { drums, toWav } from '../fixtures/rhythmSynth.js';
-import { openTool } from './helpers/dock.js';
+import { openTool, showTool } from './helpers/dock.js';
 
 // THE RHYTHM ENGINE in the real editor (src/js/components/rhythm.js): audio
 // imported through "+ Audio", analysed in the worker, its beats on the
@@ -87,7 +87,7 @@ test('imported music: tempo, beats on the ruler where they are, playhead jumps b
   expect(Math.abs((geo.x / geo.w) * geo.d - beats[3].t)).toBeLessThan(0.05);
 
   // The Rhythm card, in plain words.
-  await openTool(page, 'Audio');
+  await showTool(page, 'Audio');
   await expect(page.locator('#rhythm-status')).toContainText('Rhythm detected');
   await expect(page.locator('#rhythm-bpm')).toHaveText('120');
   await expect(page.locator('#rhythm-confidence')).toHaveText('High');
@@ -146,14 +146,18 @@ test('"add at next beat" creates at the beat after the playhead — and edits no
   await openDemo(page);
   await importAudio(page, DRUMS_120.file);
   await waitForRhythmOf(page, 'drums-120');
-  await openTool(page, 'Audio');
+  // The shape that must stay untouched comes first: adding it selects it, and a
+  // selected shape opens its own panel — then the Audio panel is opened.
   const existing = await page.evaluate(() => window.__shapeLayers.addShapeLayer('ellipse', { start: 5 }).id);
   const before = await page.evaluate((i) => JSON.stringify(window.__appState.shapeLayers.find((s) => s.id === i)), existing);
+  await showTool(page, 'Audio');
   await page.evaluate(() => { document.getElementById('preview-video').currentTime = 1.0; });
   const expected = await page.evaluate(() => window.__rhythm.nextBeatAfter(1.0).time);
   await page.locator('#rhythm-add-shape').click();
   const made = await page.evaluate(() => window.__appState.shapeLayers.at(-1));
   expect(Math.abs(made.start - expected)).toBeLessThan(1e-6);
+  // The new shape is selected, which brings up its own panel; back to Audio.
+  await showTool(page, 'Audio');
   await page.locator('#rhythm-add-text').click();
   const text = await page.evaluate(() => window.__appState.textElements.at(-1));
   expect(text.start).toBeGreaterThan(expected);

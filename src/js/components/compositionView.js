@@ -18,7 +18,8 @@ import {
   hasVideoDecoration,
   hexToRgba
 } from '../../../shared/composition.js';
-import { resolveVideoTransformAtTime } from '../../../shared/videoTransform.js';
+import { resolveVideoTransformAtTime, videoHomographyAt } from '../../../shared/videoTransform.js';
+import { cssMatrix3d } from '../../../shared/transform3d.js';
 
 function getVideo() {
   return document.getElementById('preview-video');
@@ -132,7 +133,14 @@ export function applyVideoPlacement(currentTime) {
 
   // CSS translate percentages are of the element's OWN box; the stored
   // offsets are of the canvas — converted by the box's share of the canvas.
-  const transform = identity ? '' : `translate(${(t.offsetXPct / fw).toFixed(4)}%, ${(t.offsetYPct / fh).toFixed(4)}%) scale(${t.scale}) rotate(${t.rotation}deg)`;
+  const flatTransform = identity ? '' : `translate(${(t.offsetXPct / fw).toFixed(4)}%, ${(t.offsetYPct / fh).toFixed(4)}%) scale(${t.scale}) rotate(${t.rotation}deg)`;
+  // V2.4.0: the video in 3D — the exporter's homography (shared/videoTransform.js),
+  // in the frame's CSS px, put in front of its flat placement. The element's
+  // transform origin is its centre, which is the frame's centre.
+  const frameW = surface.clientWidth || 1;
+  const frameH = surface.clientHeight || 1;
+  const tilt = videoHomographyAt(appState.videoTransform, currentTime, { canvasWidth: frameW, canvasHeight: frameH, boxWidth: fw * frameW, boxHeight: fh * frameH });
+  const transform = tilt ? `${cssMatrix3d(tilt, frameW / 2, frameH / 2, 1)} ${flatTransform || ''}`.trim() : flatTransform;
   let radius = '';
   let shadow = '';
   if (decorated) {

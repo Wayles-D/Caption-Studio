@@ -35,6 +35,8 @@
  */
 import { createClipId } from './audioTimeline.js';
 import { STYLE_KEYFRAME_PROPERTIES, resolveAnimatableField } from './keyframes.js';
+import { resolveTransform3d, pivotFor, rotatedBounds, transform3dField } from './transform3d.js';
+import { evaluateMotions, motionsFromParams } from './motion/motion.js';
 
 export const TEXT_ELEMENT_KINDS = ['caption', 'overlay', 'interlude'];
 
@@ -212,7 +214,43 @@ export function normalizeTextElement(raw) {
     // caption's (resolveTextElementParams hands them over as the params'
     // captionTransforms), so a word in a card can do whatever a caption word
     // can, through the same code.
-    ...(normalizeWordTransforms(raw.wordTransforms) ? { wordTransforms: normalizeWordTransforms(raw.wordTransforms) } : {})
+    ...(normalizeWordTransforms(raw.wordTransforms) ? { wordTransforms: normalizeWordTransforms(raw.wordTransforms) } : {}),
+    // V2.4.0: its place in simulated 3D space (shared/transform3d.js). Kept
+    // OUTSIDE `style` for the reason keyframes are; absent when never used.
+    ...transform3dField(raw.transform3d)
+  };
+}
+
+/**
+ * The 3D state of a text element at `time` (shared/transform3d.js), or null
+ * to draw it flat as always: its stored 3D settings, its keyframed tilt, and
+ * a 3D entrance's tilt on top. `params` is resolveTextElementParams' result
+ * (the entrance lives in its captionAnimation* fields). The preview and the
+ * exporter both call this, then drawTextElement3d's placement below.
+ */
+export function resolveTextElementTransform3d(element, params, time) {
+  const keyframes = element.keyframes;
+  const keyframed = Array.isArray(keyframes) && keyframes.length
+    ? {
+      rotateX: resolveAnimatableField({ keyframes }, 'rotateX', time, undefined),
+      rotateY: resolveAnimatableField({ keyframes }, 'rotateY', time, undefined)
+    }
+    : null;
+  const motion = evaluateMotions(motionsFromParams(params), time, { start: element.start, end: element.end });
+  return resolveTransform3d(element.transform3d, { keyframed, motion });
+}
+
+/**
+ * Where a tilted text element pivots and how far its flat drawing can reach,
+ * from its measured box (captionGraphics' measureSentenceFrame — the box
+ * before any 3D). Generous: outlines, shadows, a slide-in and per-word pops
+ * all draw outside the text's own box.
+ */
+export function textElement3dPlacement(t3d, box, canvasWidth) {
+  const placed = { centerX: box.centerX, centerY: box.centerY, width: box.width, height: box.height, rotationDeg: box.rotationDeg || 0 };
+  return {
+    pivot: pivotFor(t3d, placed),
+    bounds: rotatedBounds(placed, Math.max(box.height * 1.5, canvasWidth * 0.08))
   };
 }
 

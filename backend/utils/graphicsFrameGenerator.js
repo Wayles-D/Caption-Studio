@@ -24,7 +24,8 @@ import path from 'path';
 import { createCanvas } from '@napi-rs/canvas';
 import { createFrameWriter } from './frameCanvas.js';
 import { getCSSPreviewFromConfig } from '../../shared/captionConfig.js';
-import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground } from '../../shared/captionGraphics.js';
+import { canDrawCaptionFrame, isGraphicsRendererDefault, drawCaptionFrameForExport, drawRollingStackFrameForExport, paintFrameBackground, measureSentenceFrameForExport } from '../../shared/captionGraphics.js';
+import { drawWithTransform3d } from '../../shared/transform3d.js';
 import { buildRollingStackWindowSlices } from '../../shared/rollingStack.js';
 import { resolvePhraseParams, resolveWordOverride, getPhraseTransformKey } from '../../shared/captionTransform.js';
 import { motionsFromParams, motionsFromWordOverride, motionActiveSpans } from '../../shared/motion/motion.js';
@@ -37,8 +38,7 @@ import {
   resolveTextElementParams,
   isTextElementRenderable,
   orderForCompositing,
-  resolveInterludeBackground
-} from '../../shared/textElement.js';
+  resolveInterludeBackground, resolveTextElementTransform3d, textElement3dPlacement } from '../../shared/textElement.js';
 import { registerBackendCanvasFonts } from './graphicsFontLoader.js';
 import { normalizeImageLayerList, getImageLayerBoundaryTimes, imageLayerMotionSpans, drawImageLayer } from '../../shared/imageLayer.js';
 import { normalizeShapeLayerList, getShapeLayerBoundaryTimes, shapeLayerMotionSpans, drawShapeLayer } from '../../shared/shapeLayer.js';
@@ -729,7 +729,7 @@ async function buildRunSegments(entries, params, canvasWidth, canvasHeight, vide
       // syncTextElementsCanvas) so an overlay resolves identically on both
       // sides — see resolveTextElementParams.
       const elementParams = resolveTextElementParams(params, element, start);
-      drawCaptionFrameForExport(ctx, {
+      const frame = {
         canvasWidth,
         canvasHeight,
         activePhrase: textElementToPhrase(element),
@@ -741,7 +741,18 @@ async function buildRunSegments(entries, params, canvasWidth, canvasHeight, vide
         // and each element drawn onto it — the same compositing order the
         // preview's own text canvas uses.
         clearCanvas: false
-      });
+      };
+      // In 3D (V2.4.0): drawn flat, then projected about its pivot — the
+      // preview's exact steps (src/js/components/preview.js's paintTextElement).
+      const t3d = resolveTextElementTransform3d(element, elementParams, start);
+      const flatBox = t3d ? measureSentenceFrameForExport(ctx, frame) : null;
+      if (t3d && flatBox) {
+        const { pivot, bounds } = textElement3dPlacement(t3d, flatBox, canvasWidth);
+        drawWithTransform3d(ctx, t3d, { pivot, bounds, canvasWidth, canvasHeight, createOffscreenCanvas: frame.createOffscreenCanvas },
+          (c) => drawCaptionFrameForExport(c, frame));
+      } else if (!t3d) {
+        drawCaptionFrameForExport(ctx, frame);
+      }
     });
 
     const file = path.join(outDir, `${filePrefix}-${Math.round(start * 1000)}.png`);

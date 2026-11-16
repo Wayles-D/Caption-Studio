@@ -42,6 +42,7 @@ import {
   findKeyframeEntryNear,
   evaluatePropertyAtTime
 } from '../../../shared/keyframes.js';
+import { transform3dPatch, keyframeSnapshot3d } from './transform3dEdit.js';
 
 // Property -> the element style field holding its STATIC (un-keyframed)
 // value. Identical to a caption phrase's mapping, which is the point: an
@@ -579,9 +580,21 @@ export function addOrUpdateTextElementKeyframeAtPlayhead() {
   if (!element) return;
   const valuesPatch = {};
   KEYFRAME_PROPERTIES.forEach((property) => { valuesPatch[property] = getCurrentTextElementValue(property); });
+  // With 3D on, the snapshot holds its tilt too (V2.4.0).
+  Object.assign(valuesPatch, keyframeSnapshot3d(element, getPlayheadTime()));
   updateTextElement(id, {
     keyframes: upsertKeyframeEntry(element.keyframes, getPlayheadTime(), valuesPatch)
   }, { recordHistory: true });
+}
+
+/**
+ * Its 3D settings (V2.4.0, shared/transform3d.js) — a keyframed tilt is
+ * edited at the playhead (transform3dEdit.js).
+ */
+export function setTextElementTransform3d(id, fields, { recordHistory = true } = {}) {
+  const element = getTextElement(id);
+  if (!element) return null;
+  return updateTextElement(id, transform3dPatch(element, fields, getPlayheadTime()), { recordHistory });
 }
 
 /**

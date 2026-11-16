@@ -22,6 +22,7 @@
  * target's override (see shared/keyframes.js's own doc comment).
  */
 import { resolveAnimatableField } from './keyframes.js';
+import { resolveTransform3d, homographyFor, pivotFor } from './transform3d.js';
 
 export const VIDEO_TRANSFORM_DEFAULTS = {
   offsetXPct: 0, // % of frame width, translate from center (+right/-left)
@@ -58,6 +59,44 @@ export function hasAnyVideoKeyframes(videoTransform) {
 /** Whether the video's transform is the plain identity (no static override, no keyframes) — used to skip the CSS transform entirely in preview for the common case. */
 export function isIdentityVideoTransform(videoTransform) {
   if (hasAnyVideoKeyframes(videoTransform)) return false;
+  if (resolveTransform3d(videoTransform?.transform3d)) return false;
   const t = videoTransform || {};
   return (t.offsetXPct ?? 0) === 0 && (t.offsetYPct ?? 0) === 0 && (t.scale ?? 1) === 1 && (t.rotation ?? 0) === 0 && (t.opacity ?? 100) === 100;
+}
+
+/**
+ * The video's 3D state at `time` (V2.4.0, shared/transform3d.js) — its stored
+ * `transform3d` with any keyframed tilt — or null when it is flat.
+ */
+export function resolveVideoTransform3dAtTime(videoTransform, time) {
+  const vt = videoTransform || {};
+  return resolveTransform3d(vt.transform3d, {
+    keyframed: {
+      rotateX: resolveAnimatableField(vt, 'rotateX', time, undefined),
+      rotateY: resolveAnimatableField(vt, 'rotateY', time, undefined)
+    }
+  });
+}
+
+/**
+ * THE VIDEO'S HOMOGRAPHY at `time`, in canvas px — null when it is flat. The
+ * preview turns it into CSS (src/js/components/compositionView.js), the
+ * exporter into ffmpeg perspective corners (backend/utils/videoTransformFilter.js).
+ *
+ * The plane is the video as placed in 2D: its box (the composition's video
+ * box, `boxWidth` × `boxHeight` — the whole canvas when it fills it), at its
+ * offset, scale and spin; the pivot sits on that box.
+ */
+export function videoHomographyAt(videoTransform, time, { canvasWidth, canvasHeight, boxWidth, boxHeight }) {
+  const t3d = resolveVideoTransform3dAtTime(videoTransform, time);
+  if (!t3d) return null;
+  const t = resolveVideoTransformAtTime(videoTransform, time);
+  const placed = {
+    centerX: canvasWidth / 2 + (t.offsetXPct / 100) * canvasWidth,
+    centerY: canvasHeight / 2 + (t.offsetYPct / 100) * canvasHeight,
+    width: (boxWidth || canvasWidth) * t.scale,
+    height: (boxHeight || canvasHeight) * t.scale,
+    rotationDeg: t.rotation
+  };
+  return homographyFor(t3d, pivotFor(t3d, placed), canvasWidth);
 }

@@ -73,7 +73,11 @@ test('a sound clip shows its length, waveform, handles and Replace without being
   await expect(clip.locator('[data-sfx-handle="end"]')).toHaveCount(1);
   await expect(clip.locator('[data-replace-clip]'), 'Replace is still there').toHaveCount(1);
 
-  // Dragging the end handle shortens it, and the way back appears.
+  // Dragging the end handle shortens it, and the way back appears. A short
+  // capsule widens while hovered (so its name stays readable), which moves
+  // its end handle — so, like a person, hover the clip first, then aim.
+  await clip.hover();
+  await page.waitForTimeout(250);
   const box = await clip.locator('[data-sfx-handle="end"]').boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();

@@ -13,7 +13,13 @@
  *     offsetX:  added to the base position, in OBJECT UNITS
  *     offsetY:  added to the base position, in OBJECT UNITS
  *     rotation: degrees added to the base rotation      (0 = unchanged)
+ *     rotateX:  3D tilt added about the X axis, degrees (0 = unchanged; V2.4.0)
+ *     rotateY:  3D tilt added about the Y axis, degrees (0 = unchanged)
  *   }
+ *
+ * The 3D tilts are drawn by shared/transform3d.js; an object whose renderer
+ * has no 3D path simply ignores them (and a preset that only tilts then
+ * shows as its fade).
  *
  * Offsets are in object units — a length the object's renderer supplies
  * (for text, its font size) — so a slide travels a distance measured
@@ -28,10 +34,10 @@
  */
 
 /** No change at all. Frozen and shared: returned whenever nothing moves. */
-export const IDENTITY_DELTA = Object.freeze({ opacity: 1, scale: 1, offsetX: 0, offsetY: 0, rotation: 0 });
+export const IDENTITY_DELTA = Object.freeze({ opacity: 1, scale: 1, offsetX: 0, offsetY: 0, rotation: 0, rotateX: 0, rotateY: 0 });
 
 /** Not drawn: an entrance that has not begun yet. */
-export const HIDDEN_DELTA = Object.freeze({ opacity: 0, scale: 1, offsetX: 0, offsetY: 0, rotation: 0 });
+export const HIDDEN_DELTA = Object.freeze({ opacity: 0, scale: 1, offsetX: 0, offsetY: 0, rotation: 0, rotateX: 0, rotateY: 0 });
 
 /** How far a slide travels, in object units (font sizes, for text), at intensity 1. */
 export const SLIDE_DISTANCE = 1;
@@ -58,6 +64,7 @@ export function registerMotionPreset(preset) {
     evaluate: (progress, intensity) => {
       const d = evaluate(progress, intensity);
       return d && d.opacity !== undefined && d.scale !== undefined && d.offsetX !== undefined && d.offsetY !== undefined && d.rotation !== undefined
+        && d.rotateX !== undefined && d.rotateY !== undefined
         ? d
         : { ...IDENTITY_DELTA, ...d };
     }
@@ -122,3 +129,39 @@ SLIDES.forEach(([id, label, dirX, dirY]) => registerMotionPreset({
     return delta({ opacity: slideOpacity(p), offsetX: dirX ? dirX * remaining : 0, offsetY: dirY ? dirY * remaining : 0 });
   }
 }));
+
+// ---------------------------------------------------------------------------
+// 3D ENTRANCES (V2.4.0) — the object turns into place in depth, about its 3D
+// pivot (shared/transform3d.js), fading in over the first part of the turn.
+// On top of whatever 3D placement the object already has, so text laid on a
+// floor flips up FROM the floor into its resting tilt.
+// ---------------------------------------------------------------------------
+
+const turnOpacity = (p) => Math.min(1, p / 0.35);
+
+registerMotionPreset({
+  id: 'flip-up', kind: 'entrance', label: 'Flip Up',
+  // Lying flat back (top far away), standing up into place.
+  evaluate: (p, intensity) => delta({ opacity: turnOpacity(p), rotateX: 80 * Math.min(1, intensity) * (1 - p) })
+});
+
+registerMotionPreset({
+  id: 'flip-down', kind: 'entrance', label: 'Flip Down',
+  // Tipped towards the viewer (bottom far away), falling back into place.
+  evaluate: (p, intensity) => delta({ opacity: turnOpacity(p), rotateX: -80 * Math.min(1, intensity) * (1 - p) })
+});
+
+registerMotionPreset({
+  id: 'swing-in', kind: 'entrance', label: 'Swing In',
+  // Turned edge-on like a door, swinging round to face the viewer.
+  evaluate: (p, intensity) => delta({ opacity: turnOpacity(p), rotateY: -75 * Math.min(1, intensity) * (1 - p) })
+});
+
+registerMotionPreset({
+  id: 'tilt-in', kind: 'entrance', label: 'Tilt In',
+  // Leaning away at an angle, settling level — a softer 3D arrival.
+  evaluate: (p, intensity) => {
+    const k = Math.min(1, intensity) * (1 - p);
+    return delta({ opacity: turnOpacity(p), rotateX: 35 * k, rotateY: 25 * k, scale: 1 + 0.08 * k });
+  }
+});

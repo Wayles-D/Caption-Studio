@@ -44,7 +44,8 @@
  * measurements — that one stage was ~87% of filter cost and pushed a real 35s
  * export to 31.3 minutes, past the client's own abort timeout.
  */
-import { resolveVideoTransformAtTime, isIdentityVideoTransform } from '../../shared/videoTransform.js';
+import { resolveVideoTransformAtTime, isIdentityVideoTransform, videoHomographyAt, resolveVideoTransform3dAtTime } from '../../shared/videoTransform.js';
+import { projectPoint } from '../../shared/transform3d.js';
 
 // Per real keyframe-to-keyframe segment, not per second of export duration —
 // a fixed step across the WHOLE animated window produced a filter expression
@@ -298,7 +299,7 @@ function buildCompositionLayerStages(inLabel, outLabel, comp) {
  * @returns {{filterComplex: string, outputLabel: string}|null} null when the transform is the plain identity
  *   and the composition adds nothing (no filter needed — `[0:v]` should be used as-is).
  */
-export function buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition = null, { absoluteFrom = null } = {}) {
+export function buildVideoTransformFilterChain(videoTransform, duration, canvasWidth, canvasHeight, composition = null, { absoluteFrom = null, frameRate = null } = {}) {
   // A composition that is just the source frame, undecorated, renders exactly
   // as before it existed — every pre-V1.5 project takes this path.
   const comp = composition && !composition.passthrough ? composition : null;
@@ -337,8 +338,10 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
   // to render, and only when actually needed).
   // Never in a composition: there, even an untransformed frame is a fitted,
   // decorated video on a background — not the raw source.
-  const preIsIdentity = !comp && (!rawTimes.length || isIdentitySample(samples[0]));
-  const postIsIdentity = !comp && (!rawTimes.length || isIdentitySample(samples[samples.length - 1]));
+  // In 3D the video is never "untouched" before or after its keyframes.
+  const in3d = samples.some((s) => resolveVideoTransform3dAtTime(videoTransform, s.t));
+  const preIsIdentity = !comp && !in3d && (!rawTimes.length || isIdentitySample(samples[0]));
+  const postIsIdentity = !comp && !in3d && (!rawTimes.length || isIdentitySample(samples[samples.length - 1]));
   const trimStart = preIsIdentity ? windowStart : 0;
   const trimEnd = postIsIdentity ? windowEnd : duration;
 
@@ -473,7 +476,7 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
   const activeSource = sources[trimStart > EPS ? 1 : 0];
   const postSource = sources[sources.length - 1];
   const activeRebase = windowed ? `setpts=PTS-${formatNum(trimStart)}/TB` : 'setpts=PTS-STARTPTS';
-  const activeStages = [`${activeSource}trim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},${activeRebase},split=2[vt_active_src][vt_bg_src]`];
+  const activeStages = [`${activeSource}trim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},${activeRebase},split=${in3d ? 3 : 2}[vt_active_src][vt_bg_src]${in3d ? '[vt_clear_src]' : ''}`];
   // drawbox with t=fill paints the whole frame black in place — the cheap way
   // to get "a black frame carrying this exact source frame's timing". The
   // explicit scale keeps the documented guarantee that the composite canvas is
@@ -593,7 +596,68 @@ export function buildVideoTransformFilterChain(videoTransform, duration, canvasW
   // to it) so this segment's SAR is guaranteed to match the pre/post
   // segments' own explicit `setsar=1` below regardless of ffmpeg version —
   // `concat` fails outright the moment any segment disagrees.
-  activeStages.push(`[vt_bg][${afterAlpha}]overlay=x='(W-w)/2+(${xExpr})/100*W':y='(H-h)/2+(${yExpr})/100*H',format=yuv420p,setsar=1[vt_active_out]`);
+  const placeAt = `x='(W-w)/2+(${xExpr})/100*W':y='(H-h)/2+(${yExpr})/100*H'`;
+  if (!in3d) {
+    activeStages.push(`[vt_bg][${afterAlpha}]overlay=${placeAt},format=yuv420p,setsar=1[vt_active_out]`);
+  } else {
+    // V2.4.0 — THE VIDEO IN 3D: placed flat on a TRANSPARENT canvas, that
+    // canvas warped through the video's homography (shared/videoTransform.js's
+    // videoHomographyAt — the same matrix the preview's CSS uses) by ffmpeg's
+    // perspective filter, its corners sent to where the homography puts the
+    // canvas corners, then laid on the background. Outside the warped video
+    // the canvas stays transparent, so the background shows there.
+    const box = { canvasWidth, canvasHeight, boxWidth: comp ? comp.boxWidth : canvasWidth, boxHeight: comp ? comp.boxHeight : canvasHeight };
+    // THE FLAT FRAME is bigger than the canvas, by MARGINS on each side:
+    //  - wide enough to hold the whole placed video. A corner pushed past the
+    //    canvas edge in 2D can come back into view once tilted (a wall swung
+    //    away shrinks towards its hinge); the preview's browser keeps it, so
+    //    the export must too. Capped at one canvas per side.
+    //  - and at least BORDER of transparency all round: ffmpeg's perspective
+    //    CLAMPS where the warp reaches past its source, so a video filling the
+    //    canvas would otherwise smear its opaque edge outwards.
+    // The warp maps the flat frame's corners (in canvas px, shifted by the
+    // margins) and the canvas is cropped back out of it afterwards.
+    const BORDER = 2;
+    let minX = 0, minY = 0, maxX = canvasWidth, maxY = canvasHeight;
+    samples.forEach((s) => {
+      const r = (s.rotation * Math.PI) / 180;
+      const hw = (Math.abs(layerW * s.scale * Math.cos(r)) + Math.abs(layerH * s.scale * Math.sin(r))) / 2;
+      const hh = (Math.abs(layerW * s.scale * Math.sin(r)) + Math.abs(layerH * s.scale * Math.cos(r))) / 2;
+      const cx = canvasWidth / 2 + (s.offsetXPct / 100) * canvasWidth;
+      const cy = canvasHeight / 2 + (s.offsetYPct / 100) * canvasHeight;
+      minX = Math.min(minX, cx - hw); maxX = Math.max(maxX, cx + hw);
+      minY = Math.min(minY, cy - hh); maxY = Math.max(maxY, cy + hh);
+    });
+    const margin = (over, limit) => 2 * Math.ceil((Math.min(limit, Math.max(0, over)) + BORDER) / 2); // even: yuv420
+    const padL = margin(-minX, canvasWidth), padR = margin(maxX - canvasWidth, canvasWidth);
+    const padT = margin(-minY, canvasHeight), padB = margin(maxY - canvasHeight, canvasHeight);
+    const flatW = canvasWidth + padL + padR, flatH = canvasHeight + padT + padB;
+    const cornersAt = (time) => {
+      const h = videoHomographyAt(videoTransform, time, box);
+      return [[-padL, -padT], [canvasWidth + padR, -padT], [-padL, canvasHeight + padB], [canvasWidth + padR, canvasHeight + padB]]
+        .map(([x, y]) => (h && projectPoint(h, x, y)) || { x, y })
+        .map((p) => ({ x: p.x + padL, y: p.y + padT }));
+    };
+    // perspective's expressions know the frame count `in`, not the time: the
+    // active stretch starts at trimStart (or, in a window, where the window
+    // starts) and runs at the composite's fixed rate.
+    const fps = Number(frameRate) > 0 ? Number(frameRate) : 30;
+    const startsAt = windowed ? Math.max(trimStart, absoluteFrom) : trimStart;
+    // (`in` is already 1 on the first frame: ffmpeg counts the frame taken.)
+    const frameTime = `(${formatNum(startsAt)}+(in-1)/${formatNum(fps)})`;
+    const animated = rawTimes.length > 0;
+    const corner = (i, axis) => (animated
+      ? buildPiecewiseExpr(samples.map((s) => ({ t: s.t, value: cornersAt(s.t)[i][axis] })), frameTime)
+      : formatNum(cornersAt(samples[0].t)[i][axis]));
+    const corners = [0, 1, 2, 3].map((i) => `x${i}='${corner(i, 'x')}':y${i}='${corner(i, 'y')}'`).join(':');
+    activeStages.push(
+      `[vt_clear_src]format=yuva420p,drawbox=x=0:y=0:w=iw:h=ih:color=black@0:t=fill:replace=1,scale=${flatW}:${flatH},setsar=1[vt_clear]`,
+      // Placed exactly as the flat chain places it on the canvas, moved by the margins.
+      `[vt_clear][${afterAlpha}]overlay=x='${padL}+(${canvasWidth}-w)/2+(${xExpr})/100*${canvasWidth}':y='${padT}+(${canvasHeight}-h)/2+(${yExpr})/100*${canvasHeight}':format=yuv420[vt_flat]`,
+      `[vt_flat]perspective=${corners}:sense=destination${animated ? ':eval=frame' : ''},crop=${canvasWidth}:${canvasHeight}:${padL}:${padT}[vt_tilted]`,
+      `[vt_bg][vt_tilted]overlay=x=0:y=0,format=yuv420p,setsar=1[vt_active_out]`
+    );
+  }
 
   // Segments outside the animated window: a plain trim, no per-pixel
   // filtering of any kind — just format-normalized so `concat` can stitch

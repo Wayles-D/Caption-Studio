@@ -13,6 +13,8 @@ import { SHAPE_KINDS, SHAPE_LABELS } from '../../shared/shapeLayer.js';
 import { isAnnotationKind, DRAW_DIRECTIONS, DRAW_DIRECTION_LABELS } from '../../shared/annotationStrokes.js';
 import { ANIMATION_TYPES, EASING_TYPES } from '../../shared/captionAnimation.js';
 import { LayerOrderControls } from './LayerControls.jsx';
+import { Transform3DCard } from './Transform3DCard.jsx';
+import { normalizeTransform3d } from '../../shared/transform3d.js';
 import { CARD, SECTION_TITLE, HINT, GROUP_LABEL, SELECT, SECONDARY_BTN, ROW_BASE, titleCase, Slider as SharedSlider, Toggle, ColorRow, TimeField } from './LayerInspectorControls.jsx';
 
 const SHAPE_API = { get: shapeLayers.getShapeLayer, update: shapeLayers.updateShapeLayer };
@@ -66,6 +68,9 @@ function ShapeEditor({ shape }) {
         <Slider id="shape-opacity" layerId={id} label="Opacity" value={t.opacity} min={0} max={100} step={1} unit="%" onLive={(v, o) => transform({ opacity: v }, o)} />
         <p className={HINT}>Drag it on the video to move it; the corners resize it and the top handle rotates it.</p>
       </div>
+
+      <Transform3DCard idPrefix="shape" layerId={id} api={SHAPE_API} value={normalizeTransform3d(shape.transform3d)}
+        onChange={(fields, o) => shapeLayers.patchShapeLayer(id, 'transform3d', fields, o)} />
 
       <div className={CARD}>
         <span className={SECTION_TITLE}>Fill</span>
